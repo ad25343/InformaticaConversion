@@ -1,0 +1,17 @@
+### List all jobs
+GET http://localhost:8000/api/jobs
+
+### Get a specific job (replace the ID)
+GET http://localhost:8000/api/jobs/YOUR_JOB_ID_HERE
+
+### Submit sign-off — Approve
+POST http://localhost:8000/api/jobs/YOUR_JOB_ID_HERE/sign-off
+Content-Type: application/json
+
+{
+  "reviewer_name": "Adoma",
+  "reviewer_role": "Senior Data Engineer",
+  "decision": "APPROVED",
+  "flag_resolutions": [],
+  "notes": "Looks good"
+}

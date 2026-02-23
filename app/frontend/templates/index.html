@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Informatica Conversion Tool</title>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --surface2: #252836;
+      --border: #2e3145; --accent: #6c63ff; --accent2: #4ade80;
+      --warn: #fb923c; --danger: #f87171; --text: #e2e8f0;
+      --muted: #94a3b8; --radius: 10px;
+      --sev-critical: #f87171; --sev-high: #fb923c;
+      --sev-medium: #fbbf24; --sev-low: #60a5fa; --sev-info: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+
+    /* ── Layout ── */
+    .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+    .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 24px 16px; display: flex; flex-direction: column; gap: 20px; }
+    .main { padding: 32px; overflow-y: auto; }
+
+    /* ── Header ── */
+    .logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 4px; }
+    .logo-sub { font-size: 11px; color: var(--muted); }
+    hr { border: none; border-top: 1px solid var(--border); }
+
+    /* ── Upload zone ── */
+    .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 24px 16px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; }
+    .upload-zone:hover, .upload-zone.drag { border-color: var(--accent); background: rgba(108,99,255,.06); }
+    .upload-zone input { display: none; }
+    .upload-icon { font-size: 28px; margin-bottom: 8px; }
+    .upload-label { font-size: 13px; color: var(--muted); }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: opacity .15s, transform .1s; }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: var(--accent); color: #fff; width: 100%; justify-content: center; margin-top: 10px; }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-success { background: var(--accent2); color: #000; }
+    .btn-danger  { background: var(--danger);  color: #fff; }
+    .btn-warn    { background: var(--warn);     color: #000; }
+    .btn-ghost   { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* ── Job list ── */
+    .section-title { font-size: 11px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
+    .job-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1; }
+    .job-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; transition: background .15s, border-color .15s; }
+    .job-item:hover { background: var(--surface2); }
+    .job-item.active { background: var(--surface2); border-color: var(--accent); }
+    .job-item.status-complete { border-left: 3px solid #22c55e; background: rgba(34,197,94,.05); }
+    .job-item.status-complete.active { border-color: #22c55e; border-left-width: 3px; }
+    .job-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+    .badge-pending   { background: #334155; color: #94a3b8; }
+    .badge-complete  { background: #166534; color: #86efac; border: 1px solid #22c55e; font-weight: 700; }
+    .badge-running   { background: #1e3a5f; color: #60a5fa; }
+    .badge-waiting   { background: #3b2f00; color: #fbbf24; }
+
+    .badge-failed    { background: #450a0a; color: #f87171; }
+    .badge-blocked   { background: #450a0a; color: #f87171; }
+    .badge-rejected  { background: #450a0a; color: #f87171; }
+
+    /* ── Main panel ── */
+    .panel-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .panel-sub { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+
+    /* ── Pipeline stepper ── */
+    .stepper { display: flex; gap: 0; margin-bottom: 32px; }
+    .step { flex: 1; position: relative; }
+    .step-inner { display: flex; flex-direction: column; align-items: center; }
+    .step-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--muted); position: relative; z-index: 1; transition: all .3s; }
+    .step-dot.done    { background: var(--accent2); border-color: var(--accent2); color: #000; }
+    .step-dot.active  { background: var(--accent); border-color: var(--accent); color: #fff; animation: pulse 1.5s infinite; }
+    .step-dot.blocked { background: var(--danger); border-color: var(--danger); color: #fff; }
+    .step-dot.waiting { background: #fbbf24; border-color: #fbbf24; color: #000; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(108,99,255,.5); } 50% { box-shadow: 0 0 0 8px rgba(108,99,255,0); } }
+    .step-label { font-size: 9px; color: var(--muted); margin-top: 5px; text-align: center; max-width: 52px; line-height: 1.3; }
+    .step-connector { position: absolute; top: 13px; left: 50%; right: -50%; height: 2px; background: var(--border); z-index: 0; }
+    .step-connector.done { background: var(--accent2); }
+    .step:last-child .step-connector { display: none; }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+    .card-title:hover { opacity: 0.85; }
+    .card-title .icon { font-size: 16px; }
+    .card-chevron { margin-left: auto; font-size: 11px; color: var(--muted); transition: transform 0.2s ease; flex-shrink: 0; padding-left: 4px; }
+    .card-collapsed .card-chevron { transform: rotate(-90deg); }
+    .card-body { padding-top: 2px; }
+    .card-collapsed .card-body { display: none; }
+    .card-collapsed > .card-title { margin-bottom: 0 !important; }
+
+    /* ── Error card ── */
+    .error-card { background: rgba(248,113,113,.06); border: 1px solid var(--danger); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .error-card .card-title { color: var(--danger); }
+    .error-msg { font-size: 14px; font-weight: 600; color: var(--danger); margin-bottom: 10px; word-break: break-word; }
+    .error-trace { background: #0a0a0a; border: 1px solid #450a0a; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; color: #fca5a5; max-height: 280px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; display: none; }
+    .error-trace.visible { display: block; }
+    .error-toggle { font-size: 12px; color: var(--muted); cursor: pointer; text-decoration: underline; margin-top: 8px; display: inline-block; }
+    .error-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+
+    /* ── Rejected card ── */
+    .rejected-card { background: rgba(248,113,113,.04); border: 1px solid #7f1d1d; border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+    .rejected-card h3 { font-size: 16px; color: var(--danger); margin-bottom: 8px; }
+    .next-steps { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .next-step { display: flex; gap: 12px; padding: 12px; background: var(--surface2); border-radius: 8px; border-left: 3px solid var(--warn); }
+    .next-step-num { font-size: 18px; font-weight: 800; color: var(--warn); flex-shrink: 0; width: 24px; }
+    .next-step-content { font-size: 13px; }
+    .next-step-content strong { display: block; margin-bottom: 3px; }
+    .next-step-content span { color: var(--muted); font-size: 12px; }
+
+    /* ── Complexity badge ── */
+    .tier-low      { color: #4ade80; }
+    .tier-medium   { color: #fbbf24; }
+    .tier-high     { color: #fb923c; }
+    .tier-veryhigh { color: #f87171; }
+
+    /* ── Verification flags (enhanced) ── */
+    .flag-list { display: flex; flex-direction: column; gap: 10px; }
+    .flag { padding: 12px 14px; border-radius: 8px; border-left: 3px solid; font-size: 13px; }
+    .flag.blocking     { background: rgba(248,113,113,.07); border-color: var(--sev-critical); }
+    .flag.sev-critical { background: rgba(248,113,113,.07); border-color: var(--sev-critical); }
+    .flag.sev-high     { background: rgba(251,146,60,.07);  border-color: var(--sev-high); }
+    .flag.sev-medium   { background: rgba(251,191,36,.07);  border-color: var(--sev-medium); }
+    .flag.sev-low      { background: rgba(96,165,250,.07);  border-color: var(--sev-low); }
+    .flag.sev-info     { background: rgba(148,163,184,.07); border-color: var(--sev-info); }
+    .flag-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .flag-type { font-weight: 700; font-size: 11px; letter-spacing: .4px; }
+    .sev-badge { padding: 1px 7px; border-radius: 99px; font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+    .sev-badge.CRITICAL { background: rgba(248,113,113,.2); color: var(--sev-critical); }
+    .sev-badge.HIGH     { background: rgba(251,146,60,.2);  color: var(--sev-high); }
+    .sev-badge.MEDIUM   { background: rgba(251,191,36,.2);  color: var(--sev-medium); }
+    .sev-badge.LOW      { background: rgba(96,165,250,.2);  color: var(--sev-low); }
+    .sev-badge.INFO     { background: rgba(148,163,184,.2); color: var(--sev-info); }
+    .flag-blocking-pill { background: rgba(248,113,113,.2); color: var(--danger); padding: 1px 7px; border-radius: 99px; font-size: 10px; font-weight: 700; }
+    .flag-loc  { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+    .flag-desc { font-size: 12px; color: var(--text); margin-bottom: 0; }
+    .flag-rec  { margin-top: 8px; padding: 8px 10px; background: rgba(108,99,255,.07); border-radius: 6px; font-size: 12px; color: #a5b4fc; border-left: 2px solid var(--accent); }
+    .flag-rec::before { content: "💡 Recommendation: "; font-weight: 700; }
+
+    /* ── Check list ── */
+    .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .check { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 6px; background: var(--surface2); font-size: 12px; }
+    .check.pass { border-left: 2px solid var(--accent2); }
+    .check.fail { border-left: 2px solid var(--danger); }
+    .check-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+
+    /* ── Sign-off form ── */
+    .signoff-form { display: flex; flex-direction: column; gap: 14px; }
+    .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%; padding: 9px 12px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 13px; outline: none;
+      transition: border-color .2s;
+    }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); }
+    .form-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    /* ── Code viewer ── */
+    .code-tabs { display: flex; gap: 4px; margin-bottom: 0; flex-wrap: wrap; }
+    .code-tab { padding: 6px 14px; border-radius: 6px 6px 0 0; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-bottom: none; transition: all .15s; }
+    .code-tab.active { background: var(--surface); color: var(--text); border-color: var(--border); border-bottom: 1px solid var(--surface); }
+    .code-block { background: var(--surface2); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; padding: 16px; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; max-height: 600px; overflow-y: auto; white-space: pre; }
+
+    /* ── Doc viewer ── */
+    .doc-content { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; max-height: 600px; overflow-y: auto; font-size: 13px; line-height: 1.7; }
+    .doc-content h1 { font-size: 18px; margin-bottom: 12px; color: var(--accent); }
+    .doc-content h2 { font-size: 15px; margin: 16px 0 8px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    .doc-content h3 { font-size: 13px; margin: 12px 0 6px; color: var(--accent2); }
+    .doc-content code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; }
+    .doc-content pre { background: var(--bg); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 11px; margin: 8px 0; }
+    .doc-content table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+    .doc-content th { background: var(--border); padding: 6px 10px; text-align: left; font-size: 11px; }
+    .doc-content td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+    .doc-content strong { color: var(--text); }
+
+    /* ── Stats row ── */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    .stat { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
+    .stat-val { font-size: 24px; font-weight: 700; }
+    .stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Output files panel ── */
+    .output-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .output-file-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+    .output-file-card:hover { border-color: var(--accent); background: rgba(108,99,255,.05); }
+    .output-file-icon { font-size: 24px; margin-bottom: 6px; }
+    .output-file-name { font-size: 11px; font-weight: 600; word-break: break-all; }
+    .output-file-type { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+    .empty-icon { font-size: 48px; margin-bottom: 16px; }
+    .empty-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+    .empty-sub { font-size: 13px; }
+
+    /* ── Pipeline log panel ── */
+    .log-panel { background: #0a0c14; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .log-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; }
+    .log-panel-header .log-count { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .log-scroll { max-height: 320px; overflow-y: auto; padding: 10px 14px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px; line-height: 1.8; }
+    .log-row { display: flex; gap: 10px; border-bottom: 1px solid rgba(255,255,255,.03); padding: 2px 0; }
+    .log-row:last-child { border-bottom: none; }
+    .log-ts   { color: #4b5563; flex-shrink: 0; width: 85px; }
+    .log-step { color: #6366f1; flex-shrink: 0; width: 54px; }
+    .log-lvl  { flex-shrink: 0; width: 56px; font-weight: 700; }
+    .log-lvl.INFO     { color: #4ade80; }
+    .log-lvl.WARNING  { color: #fbbf24; }
+    .log-lvl.ERROR    { color: #f87171; }
+    .log-msg  { color: #cbd5e1; white-space: pre-wrap; word-break: break-word; flex: 1; }
+    .log-data { color: #475569; font-size: 10px; }
+    .log-exc  { color: #f87171; white-space: pre-wrap; font-size: 10px; display: block; margin-top: 4px; }
+
+    /* ── Log ── (legacy, keep for compatibility) */
+    .log { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; line-height: 1.8; }
+    .log-entry { color: var(--muted); }
+    .log-entry.info  { color: #60a5fa; }
+    .log-entry.ok    { color: #4ade80; }
+    .log-entry.warn  { color: #fbbf24; }
+    .log-entry.error { color: #f87171; }
+
+    /* ── Info box ── */
+    .info-box { background: rgba(108,99,255,.07); border: 1px solid rgba(108,99,255,.25); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #a5b4fc; margin-bottom: 12px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+      .check-grid { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Sidebar ─────────────────────────── -->
+  <aside class="sidebar">
+    <div>
+      <div class="logo">⚡ Informatica Converter</div>
+      <div class="logo-sub">PowerCenter → Python / PySpark / dbt</div>
+    </div>
+    <hr/>
+
+    <!-- Upload -->
+    <div>
+      <div class="section-title">New Conversion</div>
+      <div class="upload-zone" id="dropzone">
+        <input type="file" id="fileInput" accept=".xml"/>
+        <div class="upload-icon">📂</div>
+        <div class="upload-label" id="fileLabel">Drop Informatica XML here<br/>or click to browse</div>
+      </div>
+      <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
+    </div>
+    <hr/>
+
+    <!-- Job list -->
+    <div class="section-title">Recent Jobs</div>
+    <div class="job-list" id="jobList">
+      <div class="empty" style="padding:20px 0">
+        <div style="font-size:24px">📋</div>
+        <div style="font-size:12px;margin-top:8px">No jobs yet</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main Panel ───────────────────────── -->
+  <main class="main" id="mainPanel">
+    <div class="empty">
+      <div class="empty-icon">🔄</div>
+      <div class="empty-title">Informatica Conversion Tool</div>
+      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 10-step pipeline will parse, document, verify, convert,<br/>generate tests, and deliver reviewed, production-ready code.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────
+let currentJobId = null;
+let selectedFile = null;
+let eventSource = null;
+
+const STEPS = [
+  { n:1,  label:"Parse" },
+  { n:2,  label:"Classify" },
+  { n:3,  label:"Document" },
+  { n:4,  label:"Verify" },
+  { n:5,  label:"Review" },
+  { n:6,  label:"Stack" },
+  { n:7,  label:"Convert" },
+  { n:8,  label:"Validate" },
+  { n:9,  label:"Tests" },
+  { n:10, label:"Sign-Off" },
+];
+
+const STATUS_BADGE = {
+  pending:         ['badge-pending','Pending'],
+  parsing:         ['badge-running','Parsing'],
+  classifying:     ['badge-running','Classifying'],
+  documenting:     ['badge-running','Documenting'],
+  verifying:       ['badge-running','Verifying'],
+  awaiting_review: ['badge-waiting','Awaiting Review'],
+  assigning_stack: ['badge-running','Assigning Stack'],
+  converting:      ['badge-running','Converting'],
+  validating:      ['badge-running','Validating'],
+  testing:              ['badge-running','Testing'],
+  awaiting_code_review: ['badge-waiting','Code Review'],
+  complete:             ['badge-complete','Complete'],
+  failed:               ['badge-failed','Failed'],
+  blocked:              ['badge-blocked','Blocked'],
+};
+
+const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
+
+// ─────────────────────────────────────────────
+// Upload handling
+// ─────────────────────────────────────────────
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileLabel = document.getElementById('fileLabel');
+const startBtn  = document.getElementById('startBtn');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.xml')) setFile(f);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+function setFile(f) {
+  selectedFile = f;
+  fileLabel.textContent = f.name;
+  startBtn.disabled = false;
+}
+
+startBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  startBtn.disabled = true;
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  try {
+    const res = await fetch('/api/jobs', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.job_id) {
+      await loadJobs();
+      openJob(data.job_id);
+    } else {
+      alert('Upload failed: ' + JSON.stringify(data));
+      startBtn.disabled = false;
+    }
+  } catch(e) {
+    alert('Upload error: ' + e.message);
+    startBtn.disabled = false;
+  }
+});
+
+// ─────────────────────────────────────────────
+// Job List
+// ─────────────────────────────────────────────
+async function loadJobs() {
+  try {
+    const res = await fetch('/api/jobs');
+    const data = await res.json();
+    renderJobList(data.jobs || []);
+  } catch(e) { /* ignore poll errors */ }
+}
+
+function renderJobList(jobs) {
+  const el = document.getElementById('jobList');
+  if (!jobs.length) {
+    el.innerHTML = '<div class="empty" style="padding:20px 0"><div style="font-size:24px">📋</div><div style="font-size:12px;margin-top:8px">No jobs yet</div></div>';
+    return;
+  }
+  el.innerHTML = jobs.map(j => {
+    const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+    return `<div class="job-item ${j.job_id === currentJobId ? 'active':''} ${j.status === 'complete' ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
+        <div style="min-width:0">
+          <div class="job-name">${esc(j.filename)}</div>
+          <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${j.current_step}/8 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
+        </div>
+        <button
+          title="Delete job"
+          onclick="event.stopPropagation(); deleteJob('${j.job_id}', '${esc(j.filename)}')"
+          style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:2px 5px;border-radius:4px;color:var(--muted);font-size:14px;line-height:1;opacity:0.5;transition:opacity .15s,color .15s"
+          onmouseenter="this.style.opacity='1';this.style.color='var(--danger)'"
+          onmouseleave="this.style.opacity='0.5';this.style.color='var(--muted)'">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// Open Job
+// ─────────────────────────────────────────────
+async function openJob(jobId) {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  currentJobId = jobId;
+  await loadJobs();
+
+  const res = await fetch(`/api/jobs/${jobId}`);
+  const job = await res.json();
+  renderJobPanel(job);
+
+  // Subscribe to SSE for live updates
+  eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+  eventSource.onmessage = async (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'done') {
+      eventSource.close();
+      const updated = await fetch(`/api/jobs/${jobId}`);
+      renderJobPanel(await updated.json());
+      await loadJobs();
+    } else if (msg.type === 'progress' || msg.type === 'state') {
+      const updated = await fetch(`/api/jobs/${jobId}`);
+      renderJobPanel(await updated.json());
+      await loadJobs();
+    }
+  };
+  eventSource.onerror = () => eventSource.close();
+}
+
+// ─────────────────────────────────────────────
+// Render Job Panel
+// ─────────────────────────────────────────────
+function renderJobPanel(job) {
+  const state = job.state || {};
+  window._currentJobState = state;   // expose for S2T modal
+  const [badgeCls, badgeLabel] = STATUS_BADGE[job.status] || ['badge-pending', job.status];
+  const isRejected = job.status === 'blocked' && state.sign_off?.decision === 'REJECTED';
+
+  let html = `
+    <div class="panel-title">${esc(job.filename)} <span class="badge ${badgeCls}" style="font-size:12px;vertical-align:middle">${badgeLabel}</span></div>
+    <div class="panel-sub">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${new Date(job.created_at).toLocaleString()}</div>
+    ${renderStepper(job.current_step, job.status)}
+  `;
+
+  // ── ERROR CARD ────────────────────────────
+  if ((job.status === 'failed' || job.status === 'blocked') && state.error && !isRejected) {
+    const hasTrace = !!state.error_detail;
+    const traceId = 'trace_' + Math.random().toString(36).slice(2);
+    html += `<div class="error-card">
+      <div class="card-title"><span class="icon">🚨</span> Pipeline Error — Step ${job.current_step}</div>
+      <div class="error-msg">${esc(state.error)}</div>
+      ${hasTrace ? `
+        <span class="error-toggle" onclick="toggleTrace('${traceId}')">▶ Show full traceback</span>
+        <pre class="error-trace" id="${traceId}">${esc(state.error_detail)}</pre>
+      ` : ''}
+      <div class="error-actions">
+        <div class="info-box" style="margin-bottom:0;flex:1">
+          <strong>What to do:</strong> Check the traceback above. Common causes: invalid XML structure,
+          missing ANTHROPIC_API_KEY, network timeout, or unsupported transformation type in the mapping.
+          Fix the root cause, then re-upload the file to start a new job.
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="reuploadForJob()">↩ Re-upload Fixed File</button>
+      </div>
+    </div>`;
+  }
+
+  // ── REJECTED CARD ─────────────────────────
+  if (isRejected) {
+    const sr = state.sign_off;
+    html += `<div class="rejected-card">
+      <h3>✗ Review Rejected by ${esc(sr.reviewer_name)} (${esc(sr.reviewer_role)})</h3>
+      ${sr.notes ? `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">Notes: ${esc(sr.notes)}</div>` : ''}
+      <div style="font-size:12px;color:var(--muted)">Reviewed: ${new Date(sr.review_date).toLocaleString()}</div>
+      <div class="next-steps">
+        <div class="next-step">
+          <div class="next-step-num">1</div>
+          <div class="next-step-content">
+            <strong>Review the flags raised in Step 4</strong>
+            <span>Address each CRITICAL and HIGH severity flag. The verification report is shown below — check recommendations for each flag.</span>
+          </div>
+        </div>
+        <div class="next-step">
+          <div class="next-step-num">2</div>
+          <div class="next-step-content">
+            <strong>Fix the source Informatica mapping</strong>
+            <span>Return to Informatica Designer, address the issues (e.g. remove dead logic, resolve parameters, remove unsupported transformations), and re-export the XML.</span>
+          </div>
+        </div>
+        <div class="next-step">
+          <div class="next-step-num">3</div>
+          <div class="next-step-content">
+            <strong>Start a new job with the corrected file</strong>
+            <span>Use the upload panel on the left to submit the fixed XML. The pipeline will re-run from scratch and produce a fresh verification report.</span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px">
+        <button class="btn btn-warn btn-sm" onclick="reuploadForJob()">↩ Upload Corrected File</button>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 1 — PARSE REPORT ─────────────────
+  if (state.parse_report) {
+    const pr = state.parse_report;
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔍</span> Step 1 — Parse Report<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div class="stats">
+        <div class="stat"><div class="stat-val">${Object.values(pr.objects_found||{}).reduce((a,b)=>a+b,0)}</div><div class="stat-label">Objects Found</div></div>
+        <div class="stat"><div class="stat-val">${pr.mapping_names?.length||0}</div><div class="stat-label">Mappings</div></div>
+        <div class="stat"><div class="stat-val">${pr.unresolved_parameters?.length||0}</div><div class="stat-label">Unresolved Params</div></div>
+        <div class="stat"><div class="stat-val" style="font-size:14px;color:${pr.parse_status==='COMPLETE'?'#60a5fa':pr.parse_status==='PARTIAL'?'var(--warn)':'var(--danger)'}">${pr.parse_status==='COMPLETE'?'✓ Parsed':pr.parse_status}</div><div class="stat-label">Parse Status</div></div>
+      </div>
+      ${pr.mapping_names?.length ? `<div style="font-size:12px;color:var(--muted)">Mappings: <strong style="color:var(--text)">${pr.mapping_names.map(esc).join(', ')}</strong></div>` : ''}
+      ${pr.unresolved_parameters?.length ? `<div style="font-size:12px;color:var(--warn);margin-top:8px">⚠️ Unresolved parameters: <code style="background:var(--bg);padding:2px 6px;border-radius:4px">${pr.unresolved_parameters.map(esc).join(', ')}</code></div>` : ''}
+      ${pr.flags?.filter(f=>f.flag_type==='PARSE_ERROR').length ? `<div style="font-size:12px;color:var(--danger);margin-top:8px">Parse errors detected — see full flags in Step 4.</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 2 — COMPLEXITY ───────────────────
+  if (state.complexity) {
+    const c = state.complexity;
+    const tierClass = { 'Low':'tier-low','Medium':'tier-medium','High':'tier-high','Very High':'tier-veryhigh' }[c.tier] || '';
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📊</span> Step 2 — Complexity Classification<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div style="font-size:28px;font-weight:800;margin-bottom:12px" class="${tierClass}">${c.tier}</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:10px">Criteria matched:</div>
+      ${c.criteria_matched?.map(cr=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">· ${esc(cr)}</div>`).join('')||''}
+      ${c.rationale ? `<div style="font-size:12px;color:var(--muted);margin-top:10px;font-style:italic">${esc(c.rationale)}</div>` : ''}
+      ${c.special_flags?.length ? `<div style="margin-top:10px;padding:8px;background:rgba(248,113,113,.08);border-radius:6px;font-size:12px;color:var(--danger)">⚠️ ${c.special_flags.map(esc).join('<br/>⚠️ ')}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 2b — SOURCE-TO-TARGET MAPPING ───
+  if (state.s2t && state.s2t.summary) {
+    const s = state.s2t.summary;
+    const hasUnmappedTgt = (s.unmapped_target_fields || 0) > 0;
+    const hasUnmappedSrc = (s.unmapped_source_fields || 0) > 0;
+    const records = state.s2t.records || [];
+    // preview first 8 rows
+    const preview = records.slice(0, 8);
+    const STATUS_COLORS = {
+      'Direct':    '#f0fdf4', 'Derived':   '#fffbeb',
+      'Lookup':    '#faf5ff', 'Filtered':  '#fff7ed',
+      'Aggregated':'#faf5ff', 'Unmapped Target':'#fef2f2',
+      'Unmapped Source':'#fef2f2',
+    };
+    html += `<div class="card" style="border-color:${hasUnmappedTgt?'var(--warn)':'var(--border)'}">
+      <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+        <span><span class="icon">🗺️</span> Source-to-Target Mapping</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <button onclick="event.stopPropagation();downloadS2T('${job.job_id}')" style="padding:5px 12px;font-size:11px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer">⬇ Download Excel</button>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </span>
+      </div>
+      <div class="card-body">
+      <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+        <div class="stat"><div class="stat-val">${s.total_target_fields||0}</div><div class="stat-label">Target Fields</div></div>
+        <div class="stat"><div class="stat-val" style="color:var(--accent2)">${s.mapped_fields||0}</div><div class="stat-label">Mapped</div></div>
+        <div class="stat"><div class="stat-val" style="color:${hasUnmappedTgt?'var(--danger)':'var(--muted)'}">${s.unmapped_target_fields||0}</div><div class="stat-label">Unmapped Target</div></div>
+        <div class="stat"><div class="stat-val" style="color:${hasUnmappedSrc?'var(--warn)':'var(--muted)'}">${s.unmapped_source_fields||0}</div><div class="stat-label">Unmapped Source</div></div>
+      </div>
+
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;font-size:12px">
+        ${[['Direct','#f0fdf4','direct_mappings'],['Derived','#fffbeb','derived_mappings'],['Lookup','#faf5ff','lookup_enriched'],['Filtered','#fff7ed','filtered_fields']].map(([lbl,col,key])=>`
+          <span style="display:inline-flex;align-items:center;gap:5px">
+            <span style="width:12px;height:12px;border-radius:2px;background:${col};border:1px solid #cbd5e1;display:inline-block"></span>
+            <span>${lbl}: <strong>${s[key]??0}</strong></span>
+          </span>`).join('')}
+      </div>
+
+      ${hasUnmappedTgt ? `<div style="padding:8px 12px;background:rgba(248,113,113,.08);border-radius:6px;font-size:12px;color:var(--danger);margin-bottom:12px">
+        ⚠️ ${s.unmapped_target_fields} target field(s) have no upstream source — see <strong>Unmapped Targets</strong> sheet in Excel.
+      </div>` : ''}
+
+      ${preview.length ? `
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+        <span>PREVIEW — first ${preview.length} of ${records.length} rows</span>
+        ${records.length > 0 ? `<button onclick="openS2TModal()" style="padding:4px 12px;font-size:11px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-weight:600">🔍 View Full Mapping (${records.length})</button>` : ''}
+      </div>
+      <div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border)">
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead>
+            <tr style="background:#1e293b;color:#f8fafc">
+              ${['Source Table','Source Field','→','Target Table','Target Field','Status','Logic'].map(h=>`<th style="padding:6px 8px;text-align:left;white-space:nowrap;font-weight:600">${h}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${preview.map((r,i)=>`<tr style="background:${i%2===0?(STATUS_COLORS[r.status]||'#fff'):'#f8fafc'}">
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#1e3a8a;font-weight:700">${esc(r.source_table||'—')}</td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600">${esc(r.source_field||'—')}</td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#64748b;text-align:center">→</td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#14532d;font-weight:700">${esc(r.target_table||'—')}</td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600">${esc(r.target_field||'—')}</td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0"><span style="padding:2px 7px;border-radius:4px;background:${STATUS_COLORS[r.status]||'#f1f5f9'};font-size:10px;font-weight:700;color:#1e293b">${esc(r.status||'—')}</span></td>
+              <td style="padding:5px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.logic||'')}">${esc(r.logic||'—')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      ` : '<div style="font-size:13px;color:var(--muted)">No mapped fields found.</div>'}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 3 — DOCUMENTATION ────────────────
+  if (state.documentation_md) {
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3 — Documentation<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div class="doc-content" id="docContent">${markdownToHtml(state.documentation_md)}</div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 4 — VERIFICATION ─────────────────
+  if (state.verification) {
+    const v = state.verification;
+    const isBlocked = v.conversion_blocked;
+    // Sort flags: blocking first, then by severity
+    const sortedFlags = [...(v.flags||[])].sort((a,b) => {
+      if (a.blocking !== b.blocking) return a.blocking ? -1 : 1;
+      return (SEV_ORDER[a.severity]??9) - (SEV_ORDER[b.severity]??9);
+    });
+    const critCount = sortedFlags.filter(f=>f.severity==='CRITICAL'||f.blocking).length;
+    const highCount = sortedFlags.filter(f=>f.severity==='HIGH'&&!f.blocking).length;
+
+    html += `<div class="card" style="border-color:${isBlocked?'var(--danger)':v.overall_status==='APPROVED_FOR_CONVERSION'?'var(--accent2)':'var(--warn)'}">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">✅</span> Step 4 — Verification Report
+        <span class="badge ${isBlocked?'badge-blocked':v.overall_status==='APPROVED_FOR_CONVERSION'?'badge-complete':'badge-waiting'}" style="font-size:10px">${v.overall_status?.replace(/_/g,' ')}</span>
+        <span class="card-chevron">▼</span>
+      </div>
+      <div class="card-body">
+      <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+        <div class="stat"><div class="stat-val">${v.total_checks}</div><div class="stat-label">Total Checks</div></div>
+        <div class="stat"><div class="stat-val" style="color:var(--accent2)">${v.total_passed}</div><div class="stat-label">Passed</div></div>
+        <div class="stat"><div class="stat-val" style="color:var(--danger)">${v.total_failed}</div><div class="stat-label">Failed</div></div>
+        <div class="stat"><div class="stat-val" style="color:var(--warn)">${v.total_flags}</div><div class="stat-label">Flags</div></div>
+      </div>
+
+      ${critCount > 0 ? `<div style="padding:10px 14px;background:rgba(248,113,113,.1);border-radius:8px;font-size:13px;color:var(--danger);margin-bottom:12px;font-weight:600">
+        🚫 ${critCount} CRITICAL / BLOCKING issue${critCount>1?'s':''} — conversion cannot proceed until resolved
+      </div>` : ''}
+
+      ${sortedFlags.length ? `
+        <div style="font-size:12px;font-weight:700;margin-bottom:10px;color:var(--muted)">FLAGS <span style="font-weight:400;color:var(--muted)">(sorted by severity — most critical first)</span></div>
+        <div class="flag-list">
+          ${sortedFlags.map(f => renderFlag(f)).join('')}
+        </div>` : '<div style="color:var(--accent2);font-size:13px">✓ No flags raised</div>'}
+
+      ${renderFailedChecks(v)}
+
+      <div style="margin-top:14px;padding:10px 14px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--muted)">
+        Recommendation: <strong style="color:var(--text)">${esc(v.recommendation)}</strong>
+      </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 5 — HUMAN SIGN-OFF GATE ──────────
+  if (job.status === 'awaiting_review') {
+    const v = state.verification || {};
+    const flags = v.flags || [];
+    const sortedFlags = [...flags].sort((a,b) => {
+      if (a.blocking !== b.blocking) return a.blocking ? -1 : 1;
+      return (SEV_ORDER[a.severity]??9) - (SEV_ORDER[b.severity]??9);
+    });
+    html += `<div class="card" style="border-color:var(--accent)">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">👤</span> Step 5 — Human Review & Sign-off<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+        Review the Verification Report above. Each flag is sorted by severity.
+        For each flag: either resolve the issue or accept it with a documented rationale.
+        Your decision is recorded as part of the audit trail.
+      </p>
+      ${sortedFlags.length ? `
+        <div style="font-size:12px;font-weight:700;margin-bottom:10px;color:var(--muted)">FLAG RESOLUTIONS</div>
+        <div id="flagResolutions" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+          ${sortedFlags.map((f,i)=>`
+            <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px;border-left:3px solid var(--sev-${(f.severity||'medium').toLowerCase()})">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="sev-badge ${f.severity||'MEDIUM'}">${f.severity||'MEDIUM'}</span>
+                ${f.blocking ? '<span class="flag-blocking-pill">BLOCKING</span>' : ''}
+                <strong>${esc(f.flag_type)}</strong>
+              </div>
+              <div style="color:var(--muted);font-size:11px;margin-bottom:4px">📍 ${esc(f.location)}</div>
+              <div style="margin-bottom:8px">${esc(f.description)}</div>
+              ${f.recommendation ? `<div style="font-size:11px;color:#a5b4fc;padding:6px 8px;background:rgba(108,99,255,.07);border-radius:4px;margin-bottom:8px">💡 ${esc(f.recommendation)}</div>` : ''}
+              ${f.auto_fix_suggestion ? `
+              <div style="margin-bottom:10px;border:1px solid rgba(74,222,128,.35);border-radius:6px;overflow:hidden">
+                <div style="background:rgba(74,222,128,.1);padding:6px 10px;font-size:11px;font-weight:600;color:#4ade80;display:flex;align-items:center;gap:6px">
+                  🔧 Suggested Auto-Fix
+                </div>
+                <div style="padding:8px 10px;font-size:12px;color:var(--text);line-height:1.6;font-style:italic">${esc(f.auto_fix_suggestion)}</div>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(74,222,128,.06);cursor:pointer;border-top:1px solid rgba(74,222,128,.2)">
+                  <input type="checkbox" id="flag_apply_fix_${i}" style="width:15px;height:15px;accent-color:#4ade80;cursor:pointer;flex-shrink:0" />
+                  <span style="font-size:12px;color:#4ade80;font-weight:500">Apply this fix during code generation (Step 7)</span>
+                </label>
+              </div>` : ''}
+              <div style="display:flex;gap:8px;align-items:center">
+                <select id="flag_action_${i}" style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);font-size:12px">
+                  <option value="accepted">Accept (document rationale)</option>
+                  <option value="resolved">Resolved (describe what was fixed)</option>
+                </select>
+              </div>
+              <textarea id="flag_note_${i}" placeholder="Rationale or resolution description…" style="width:100%;margin-top:8px;height:60px;resize:vertical;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:12px"></textarea>
+            </div>`).join('')}
+        </div>` : ''}
+      <div class="signoff-form">
+        <div class="form-group">
+          <label>Reviewer Name</label>
+          <input type="text" id="reviewerName" placeholder="Your full name"/>
+        </div>
+        <div class="form-group">
+          <label>Reviewer Role</label>
+          <select id="reviewerRole">
+            <option>Data Engineer</option>
+            <option>Senior Data Engineer</option>
+            <option>Business Analyst</option>
+            <option>Subject Matter Expert</option>
+            <option>Architect</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes (optional)</label>
+          <textarea id="reviewNotes" placeholder="Any conditions, caveats, or observations…" style="height:80px;resize:vertical"></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-success" onclick="submitSignoff('${job.job_id}', 'APPROVED', ${JSON.stringify(sortedFlags).replace(/"/g,'&quot;')})">✓ Approve — Proceed to Conversion</button>
+          <button class="btn btn-danger"  onclick="submitSignoff('${job.job_id}', 'REJECTED', [])">✗ Reject — Needs Remediation</button>
+        </div>
+      </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 5 completed sign-off summary ─────
+  if (state.sign_off && job.status !== 'awaiting_review') {
+    const sr = state.sign_off;
+    const isApproved = sr.decision === 'APPROVED';
+    // Collect all applied fixes for display
+    const appliedFixes = [...(sr.flags_accepted||[]), ...(sr.flags_resolved||[])]
+      .filter(r => r.apply_fix && r.fix_suggestion);
+    html += `<div class="card" style="border-color:${isApproved?'var(--accent2)':'var(--danger)'}">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">${isApproved?'✅':'❌'}</span> Step 5 — Sign-off Record<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+        <span>Reviewer: <strong>${esc(sr.reviewer_name)}</strong> (${esc(sr.reviewer_role)})</span>
+        <span>Decision: <strong style="color:${isApproved?'var(--accent2)':'var(--danger)'}">${sr.decision}</strong></span>
+        <span>Date: ${new Date(sr.review_date).toLocaleString()}</span>
+        ${appliedFixes.length ? `<span style="color:#4ade80;font-weight:600">🔧 ${appliedFixes.length} fix${appliedFixes.length>1?'es':''} applied to Step 7</span>` : ''}
+      </div>
+      ${sr.notes ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px">Notes: ${esc(sr.notes)}</div>` : ''}
+      ${appliedFixes.length ? `
+      <div style="margin-top:10px">
+        <div style="font-size:11px;font-weight:600;color:#4ade80;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">🔧 Fixes Injected into Code Generation</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${appliedFixes.map((r,i) => `
+          <div style="background:rgba(74,222,128,.07);border:1px solid rgba(74,222,128,.2);border-radius:6px;padding:8px 10px;font-size:12px">
+            <span style="color:var(--muted);margin-right:6px">${i+1}.</span>${esc(r.fix_suggestion)}
+          </div>`).join('')}
+        </div>
+      </div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 6 — STACK ASSIGNMENT ─────────────
+  if (state.stack_assignment) {
+    const sa = state.stack_assignment;
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🎯</span> Step 6 — Stack Assignment<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div style="font-size:28px;font-weight:800;color:var(--accent);margin-bottom:12px">${esc(sa.assigned_stack)}</div>
+      <div style="font-size:13px;margin-bottom:10px;line-height:1.6">${esc(sa.rationale)}</div>
+      ${sa.data_volume_est ? `<div style="font-size:12px;color:var(--muted)">Estimated data volume: ${esc(sa.data_volume_est)}</div>` : ''}
+      ${sa.special_concerns?.length ? `<div style="font-size:12px;color:var(--warn);margin-top:10px">⚠️ ${sa.special_concerns.map(esc).join('<br/>⚠️ ')}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 7 — CONVERTED CODE ───────────────
+  if (state.conversion) {
+    const co = state.conversion;
+    const fileNames = Object.keys(co.files || {});
+    const firstFile = fileNames[0] || '';
+
+    const fileIcon = (name) => {
+      if (name.endsWith('.py'))  return '🐍';
+      if (name.endsWith('.sql')) return '🗄️';
+      if (name.endsWith('.yml') || name.endsWith('.yaml')) return '📋';
+      if (name.endsWith('.md'))  return '📄';
+      return '📁';
+    };
+    const fileType = (name) => {
+      if (name.endsWith('.py'))  return 'Python';
+      if (name.endsWith('.sql')) return 'SQL';
+      if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'YAML';
+      return name.split('.').pop()?.toUpperCase() || 'File';
+    };
+
+    const convDegraded = co.parse_ok === false;
+    html += `<div class="card" style="border-color:${convDegraded ? 'var(--warn)' : 'var(--accent2)'}">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">💻</span> Step 7 — Converted Code <span style="color:var(--accent)">(${esc(co.target_stack)})</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+          <span class="badge ${convDegraded ? 'badge-waiting' : 'badge-complete'}" style="font-size:10px">${fileNames.length} file${fileNames.length!==1?'s':''}</span>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </span>
+      </div>
+      <div class="card-body">
+      ${convDegraded ? `<div style="padding:10px 14px;background:rgba(251,191,36,.12);border:1px solid var(--warn);border-radius:8px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:var(--warn);margin-bottom:4px">⚠️ Conversion Output Degraded</div>
+        <div style="font-size:12px;color:var(--text)">The response JSON could not be parsed cleanly — files below may be partial or truncated.
+        <strong>Review each file carefully before use.</strong> Re-running the job may produce a cleaner result.</div>
+      </div>` : ''}
+
+      ${co.notes?.length ? `<div style="margin-bottom:14px">${co.notes.map(n=>`<div style="font-size:12px;color:var(--warn);margin-bottom:4px">⚠️ ${esc(n)}</div>`).join('')}</div>` : ''}
+
+      <!-- File cards grid -->
+      <div class="output-files">
+        ${fileNames.map(f=>`<div class="output-file-card" onclick="showFileInViewer('${esc(f)}', ${JSON.stringify(co.files).replace(/"/g,'&quot;')})">
+          <div class="output-file-icon">${fileIcon(f)}</div>
+          <div class="output-file-name">${esc(f)}</div>
+          <div class="output-file-type">${fileType(f)}</div>
+        </div>`).join('')}
+      </div>
+
+      <!-- Code viewer -->
+      <div class="code-tabs" id="codeTabs">
+        ${fileNames.map((f,i)=>`<div class="code-tab ${i===0?'active':''}" id="tab_${i}" onclick="showCodeTab('${esc(f)}', this, ${JSON.stringify(co.files).replace(/"/g,'&quot;')})">${esc(f)}</div>`).join('')}
+      </div>
+      <pre class="code-block" id="codeBlock">${escHtml(co.files[firstFile]||'')}</pre>
+
+      <!-- Download buttons -->
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span style="font-size:12px;color:var(--muted)">Download:</span>
+        ${fileNames.map(f=>`<button class="btn btn-ghost btn-sm" onclick="downloadCode('${job.job_id}','${esc(f)}')">${fileIcon(f)} ${esc(f)}</button>`).join('')}
+      </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 8 — RECONCILIATION ───────────────
+  if (state.code_review) {
+    const cr = state.code_review;
+    const recColor = { APPROVED: 'var(--accent2)', REVIEW_RECOMMENDED: 'var(--warn)', REQUIRES_FIXES: 'var(--danger)' }[cr.recommendation] || 'var(--muted)';
+    const recBadge = { APPROVED: 'badge-complete', REVIEW_RECOMMENDED: 'badge-waiting', REQUIRES_FIXES: 'badge-blocked' }[cr.recommendation] || 'badge-pending';
+    const recIcon  = { APPROVED: '✅', REVIEW_RECOMMENDED: '⚠️', REQUIRES_FIXES: '❌' }[cr.recommendation] || '❓';
+    const SEV_ORDER_CR = { CRITICAL:0, HIGH:1, MEDIUM:2, LOW:3 };
+    const sortedChecks = [...(cr.checks||[])].sort((a,b) => {
+      if (a.passed !== b.passed) return a.passed ? 1 : -1;  // failed first
+      return (SEV_ORDER_CR[a.severity]??9) - (SEV_ORDER_CR[b.severity]??9);
+    });
+
+    html += `<div class="card" style="border-color:${recColor}">
+      <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+        <span><span class="icon">🔬</span> Step 8 — Code Quality Review</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="badge ${recBadge}" style="font-size:11px">${recIcon} ${cr.recommendation?.replace(/_/g,' ')}</span>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </span>
+      </div>
+      <div class="card-body">
+      <div class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+        <div class="stat"><div class="stat-val">${(cr.checks||[]).length}</div><div class="stat-label">Checks Run</div></div>
+        <div class="stat"><div class="stat-val" style="color:var(--accent2)">${cr.total_passed}</div><div class="stat-label">Passed</div></div>
+        <div class="stat"><div class="stat-val" style="color:${cr.total_failed>0?'var(--danger)':'var(--accent2)'}">${cr.total_failed}</div><div class="stat-label">Failed</div></div>
+      </div>
+
+      ${cr.parse_degraded ? `<div style="padding:8px 12px;background:rgba(251,191,36,.1);border-radius:6px;font-size:12px;color:var(--warn);margin-bottom:12px">
+        ⚠️ Review based on partially-recovered code — some checks may be incomplete due to truncated output in Step 7.
+      </div>` : ''}
+
+      ${cr.summary ? `<div style="padding:10px 14px;background:var(--surface2);border-radius:8px;font-size:13px;margin-bottom:14px;line-height:1.6">
+        ${esc(cr.summary)}
+      </div>` : ''}
+
+      ${sortedChecks.length ? `
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px">CHECK RESULTS</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${sortedChecks.map(c => {
+          const sevCols = { CRITICAL:'var(--danger)', HIGH:'#f97316', MEDIUM:'var(--warn)', LOW:'var(--muted)' };
+          const sc = sevCols[c.severity] || 'var(--muted)';
+          return `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;background:${c.passed?'rgba(34,197,94,.04)':'rgba(248,113,113,.06)'};border-radius:6px;border-left:3px solid ${c.passed?'var(--accent2)':sc}">
+            <span style="font-size:14px;flex-shrink:0">${c.passed?'✅':'✗'}</span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:600;margin-bottom:2px;display:flex;gap:6px;align-items:center">
+                ${esc(c.name.replace(/_/g,' '))}
+                ${!c.passed ? `<span style="font-size:10px;font-weight:700;color:${sc}">${esc(c.severity)}</span>` : ''}
+              </div>
+              ${c.note ? `<div style="font-size:11px;color:var(--muted)">${esc(c.note)}</div>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+      </div>
+    </div>`;
+  } else if (state.reconciliation) {
+    // Legacy placeholder (old jobs)
+    const r = state.reconciliation;
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔬</span> Step 8 — Code Quality Review<span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div style="font-size:13px;color:var(--muted)">This job was run before Step 8 was implemented. Re-run to get a full code review.</div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 9 — TEST GENERATION & COVERAGE ───────────────────
+  if (state.test_report) {
+    const tr = state.test_report;
+    const pct = tr.coverage_pct ?? 0;
+    const pctColor = pct >= 90 ? 'var(--accent2)' : pct >= 70 ? 'var(--warn)' : 'var(--danger)';
+    const pctBadge = pct >= 90 ? 'badge-complete' : pct >= 70 ? 'badge-waiting' : 'badge-blocked';
+    const testFileNames = Object.keys(tr.test_files || {});
+    const missingFields = tr.missing_fields || [];
+
+    html += `<div class="card" style="border-color:${pctColor}">
+      <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+        <span><span class="icon">🧪</span> Step 9 — Test Generation &amp; Coverage Check</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="badge ${pctBadge}" style="font-size:11px">${pct}% Field Coverage</span>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </span>
+      </div>
+      <div class="card-body">
+
+        <!-- Summary row -->
+        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="background:var(--surface-alt);border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:${pctColor}">${pct}%</div>
+            <div style="font-size:11px;color:var(--muted)">Field Coverage</div>
+          </div>
+          <div style="background:var(--surface-alt);border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:var(--accent2)">${tr.fields_covered ?? 0}</div>
+            <div style="font-size:11px;color:var(--muted)">Fields Covered</div>
+          </div>
+          <div style="background:var(--surface-alt);border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:${(tr.fields_missing??0) > 0 ? 'var(--danger)' : 'var(--accent2)'}">${tr.fields_missing ?? 0}</div>
+            <div style="font-size:11px;color:var(--muted)">Fields Missing</div>
+          </div>
+          <div style="background:var(--surface-alt);border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:var(--accent)">${testFileNames.length}</div>
+            <div style="font-size:11px;color:var(--muted)">Test Files</div>
+          </div>
+        </div>
+
+        ${missingFields.length > 0 ? `
+        <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:10px 14px;margin-bottom:14px">
+          <div style="font-size:12px;font-weight:600;color:var(--danger);margin-bottom:6px">⚠️ ${missingFields.length} field(s) not found in generated code — review Step 7 output:</div>
+          <div style="font-size:12px;color:var(--text);font-family:monospace">${missingFields.map(f => esc(f)).join(', ')}</div>
+        </div>` : ''}
+
+        <!-- Field coverage table -->
+        ${(tr.field_coverage||[]).length > 0 ? `
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Field Coverage</div>
+          <div style="overflow-x:auto;max-height:220px;overflow-y:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead>
+                <tr style="background:var(--surface-alt);position:sticky;top:0">
+                  <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)">Status</th>
+                  <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)">Target Field</th>
+                  <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)">Table</th>
+                  <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)">Found In</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(tr.field_coverage||[]).map(fc => `
+                <tr style="border-bottom:1px solid var(--border)">
+                  <td style="padding:5px 10px">${fc.covered ? '✅' : '❌'}</td>
+                  <td style="padding:5px 10px;font-family:monospace;font-weight:600;color:var(--text)">${esc(fc.target_field)}</td>
+                  <td style="padding:5px 10px;color:var(--muted)">${esc(fc.target_table||'—')}</td>
+                  <td style="padding:5px 10px;color:var(--muted);font-size:11px">${fc.found_in_files?.length ? esc(fc.found_in_files.join(', ')) : (fc.note ? esc(fc.note) : '—')}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>` : ''}
+
+        <!-- Filter coverage -->
+        ${(tr.filter_coverage||[]).length > 0 ? `
+        <div style="margin-bottom:14px">
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Filter Coverage</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${(tr.filter_coverage||[]).map(fc => `
+            <div style="background:var(--surface-alt);border-radius:6px;padding:8px 12px;display:flex;align-items:flex-start;gap:10px">
+              <span style="font-size:14px;flex-shrink:0">${fc.covered ? '✅' : '⚠️'}</span>
+              <div>
+                <div style="font-size:12px;font-family:monospace;color:var(--text)">${esc(fc.filter_description)}</div>
+                <div style="font-size:11px;color:var(--muted)">${esc(fc.source)}</div>
+                ${!fc.covered && fc.note ? `<div style="font-size:11px;color:var(--danger);margin-top:2px">${esc(fc.note)}</div>` : ''}
+              </div>
+            </div>`).join('')}
+          </div>
+        </div>` : ''}
+
+        <!-- Test files -->
+        ${testFileNames.length > 0 ? `
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Generated Test Files</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            ${testFileNames.map(fname => `
+            <button class="btn btn-secondary" style="font-size:11px;padding:5px 12px;font-family:monospace"
+              onclick="downloadTestFile('${esc(job.job_id)}','${esc(fname)}')">
+              ⬇ ${esc(fname.split('/').pop())}
+            </button>`).join('')}
+          </div>
+        </div>` : ''}
+
+        ${(tr.notes||[]).length > 0 ? `
+        <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+          ${tr.notes.map(n => `<div style="padding:3px 0">${esc(n)}</div>`).join('')}
+        </div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 10 — CODE REVIEW SIGN-OFF ────────────────────────
+  if (job.status === 'awaiting_code_review' || state.code_sign_off) {
+    const signedOff = !!state.code_sign_off;
+    const sod = state.code_sign_off || {};
+
+    if (signedOff) {
+      const isApproved = sod.decision === 'APPROVED';
+      html += `<div class="card" style="border-color:${isApproved ? 'var(--accent2)' : 'var(--danger)'}">
+        <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+          <span><span class="icon">🏁</span> Step 10 — Code Review Sign-Off</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span class="badge ${isApproved ? 'badge-complete' : 'badge-blocked'}" style="font-size:11px">${isApproved ? '✅ APPROVED' : '🔄 REGENERATE'}</span>
+            <span class="card-chevron" style="margin-left:0">▼</span>
+          </span>
+        </div>
+        <div class="card-body">
+          <div style="font-size:13px;color:var(--muted)">
+            Reviewed by <strong>${esc(sod.reviewer_name||'')}</strong> (${esc(sod.reviewer_role||'')})
+            on ${esc((sod.review_date||'').slice(0,10))}
+            — decision: <strong style="color:${isApproved?'var(--accent2)':'var(--danger)'}">${esc(sod.decision||'')}</strong>
+          </div>
+          ${sod.notes ? `<div style="margin-top:8px;font-size:13px;color:var(--text)">${esc(sod.notes)}</div>` : ''}
+        </div>
+      </div>`;
+    } else {
+      // Gate is open — show sign-off form
+      html += `<div class="card" style="border-color:var(--accent)">
+        <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+          <span><span class="icon">🏁</span> Step 10 — Code Review Sign-Off</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span class="badge badge-waiting" style="font-size:11px">⏳ Awaiting Sign-Off</span>
+            <span class="card-chevron" style="margin-left:0">▼</span>
+          </span>
+        </div>
+        <div class="card-body">
+          <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
+            Review the generated code (Step 7), quality report (Step 8), and test coverage (Step 9).
+            Then record your decision below.
+          </div>
+          <div class="form-group">
+            <label>Your Name</label>
+            <input id="codeReviewerName" type="text" placeholder="Full name" />
+          </div>
+          <div class="form-group">
+            <label>Role</label>
+            <select id="codeReviewerRole">
+              <option>Data Engineer</option>
+              <option>Senior Data Engineer</option>
+              <option>Tech Lead</option>
+              <option>Architect</option>
+              <option>QA Engineer</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Notes (optional)</label>
+            <textarea id="codeReviewNotes" placeholder="Observations, caveats, or issues found…" style="height:80px;resize:vertical"></textarea>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-success" onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','APPROVED')">✅ Approve — Mark Complete</button>
+            <button class="btn btn-danger"  onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','REGENERATE')">🔄 Reject — Request Regeneration</button>
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  // ── PIPELINE LOG ──────────────────────────────────────────
+  const pipelineLog = state.pipeline_log || [];
+  html += renderLogPanel(pipelineLog, job.job_id);
+
+  document.getElementById('mainPanel').innerHTML = html;
+
+  // After render: auto-scroll the log to bottom
+  const ls = document.getElementById('logScroll');
+  if (ls) ls.scrollTop = ls.scrollHeight;
+}
+
+// ─────────────────────────────────────────────
+// Render Flag (with severity + recommendation)
+// ─────────────────────────────────────────────
+function renderFlag(f) {
+  const sevClass = 'sev-' + (f.severity || 'MEDIUM').toLowerCase();
+  const blockingClass = f.blocking ? 'blocking' : '';
+  return `<div class="flag ${blockingClass} ${sevClass}">
+    <div class="flag-header">
+      <span class="sev-badge ${f.severity||'MEDIUM'}">${f.severity||'MEDIUM'}</span>
+      ${f.blocking ? '<span class="flag-blocking-pill">🚫 BLOCKING</span>' : ''}
+      <span class="flag-type">${esc(f.flag_type)}</span>
+    </div>
+    <div class="flag-loc">📍 ${esc(f.location)}</div>
+    <div class="flag-desc">${esc(f.description)}</div>
+    ${f.recommendation ? `<div class="flag-rec">${esc(f.recommendation)}</div>` : ''}
+  </div>`;
+}
+
+// ─────────────────────────────────────────────
+// Log Panel
+// ─────────────────────────────────────────────
+function renderLogPanel(entries, jobId) {
+  const count = entries.length;
+  const rows = entries.map(e => {
+    const ts   = (e.ts || '').slice(11, 19);                // HH:MM:SS
+    const step = e.step != null ? `step ${e.step}`.padEnd(6) : '      ';
+    const lvl  = e.level || 'INFO';
+    const msg  = esc(e.message || '');
+    const data = e.data ? `<span class="log-data">  ${esc(JSON.stringify(e.data))}</span>` : '';
+    const exc  = e.exc  ? `<span class="log-exc">${esc(e.exc)}</span>` : '';
+    return `<div class="log-row">
+      <span class="log-ts">${ts}</span>
+      <span class="log-step">${esc(step)}</span>
+      <span class="log-lvl ${lvl}">${lvl}</span>
+      <span class="log-msg">${msg}${data}${exc}</span>
+    </div>`;
+  }).join('');
+
+  const placeholder = count === 0
+    ? '<div style="color:#4b5563;padding:8px 0;font-size:11px">No log entries yet — log populates as the pipeline runs.</div>'
+    : '';
+
+  return `<div class="card card-collapsed" style="margin-top:8px">
+    <div class="card-title" onclick="toggleCard(this)" style="margin-bottom:0">
+      <span class="icon">📋</span> Pipeline Log
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <span style="font-size:11px;color:var(--muted)">${count} entries</span>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();downloadJobLog('${jobId}')">⬇ Download .log</button>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();refreshLog('${jobId}')">↻ Refresh</button>
+        <span class="card-chevron" style="margin-left:0">▼</span>
+      </span>
+    </div>
+    <div class="card-body">
+    <div class="log-panel">
+      <div class="log-scroll" id="logScroll">
+        ${placeholder}${rows}
+      </div>
+    </div>
+    </div>
+  </div>`;
+}
+
+async function refreshLog(jobId) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/logs`);
+    const data = await res.json();
+    const entries = data.entries || [];
+    const panel = document.getElementById('logScroll');
+    if (!panel) return;
+    panel.innerHTML = entries.map(e => {
+      const ts   = (e.ts || '').slice(11, 19);
+      const step = e.step != null ? `step ${e.step}`.padEnd(6) : '      ';
+      const lvl  = e.level || 'INFO';
+      const msg  = esc(e.message || '');
+      const data = e.data ? `<span class="log-data">  ${esc(JSON.stringify(e.data))}</span>` : '';
+      const exc  = e.exc  ? `<span class="log-exc">${esc(e.exc)}</span>` : '';
+      return `<div class="log-row">
+        <span class="log-ts">${ts}</span>
+        <span class="log-step">${esc(step)}</span>
+        <span class="log-lvl ${lvl}">${lvl}</span>
+        <span class="log-msg">${msg}${data}${exc}</span>
+      </div>`;
+    }).join('') || '<div style="color:#4b5563;padding:8px 0;font-size:11px">No log entries yet.</div>';
+    panel.scrollTop = panel.scrollHeight;
+  } catch(e) { console.error('Log refresh failed', e); }
+}
+
+async function deleteJob(jobId, filename) {
+  if (!confirm(`Delete job "${filename}"?\n\nThis will remove the job record, log file, and S2T Excel from the server. This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('Delete failed: ' + (err.detail || res.statusText));
+      return;
+    }
+    // If we just deleted the active job, clear the panel
+    if (currentJobId === jobId) {
+      currentJobId = null;
+      if (eventSource) { eventSource.close(); eventSource = null; }
+      document.getElementById('jobPanel').innerHTML =
+        '<div class="empty"><div style="font-size:32px">🗂️</div><div>Select a job from the list</div></div>';
+    }
+    await loadJobs();
+  } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
+async function downloadS2T(jobId) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/s2t/download`);
+    if (!res.ok) { alert('S2T Excel not available yet — run a job first.'); return; }
+    const blob = await res.blob();
+    const cd   = res.headers.get('content-disposition') || '';
+    const match = cd.match(/filename="?([^"]+)"?/);
+    const fname = match ? match[1] : `${jobId}_s2t.xlsx`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+  } catch(e) { alert('Download failed: ' + e.message); }
+}
+
+async function downloadJobLog(jobId) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/logs/download`);
+    if (!res.ok) { alert('Log file not available yet.'); return; }
+    const text = await res.text();
+    const blob = new Blob([text], {type: 'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${jobId}.log`;
+    a.click();
+  } catch(e) { alert('Download failed: ' + e.message); }
+}
+
+function renderStepper(currentStep, status) {
+  const isBlocked = status === 'blocked' || status === 'failed';
+  return `<div class="stepper">
+    ${STEPS.map((s) => {
+      let dotClass = '';
+      if (s.n < currentStep) dotClass = 'done';
+      else if (s.n === currentStep) {
+        if (status === 'awaiting_review' || status === 'awaiting_code_review') dotClass = 'waiting';
+        else if (isBlocked) dotClass = 'blocked';
+        else dotClass = 'active';
+      }
+      const connDone = s.n < currentStep;
+      return `<div class="step">
+        <div class="step-connector ${connDone?'done':''}"></div>
+        <div class="step-inner">
+          <div class="step-dot ${dotClass}">${dotClass==='done'?'✓':s.n}</div>
+          <div class="step-label">${s.label}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderFailedChecks(v) {
+  const failed = [...(v.completeness_checks||[]), ...(v.accuracy_checks||[]), ...(v.self_checks||[])]
+    .filter(c => !c.passed);
+  if (!failed.length) return '';
+  return `<div style="margin-top:14px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:var(--muted)">FAILED CHECKS (${failed.length})</div>
+    <div class="check-grid">
+      ${failed.map(c=>`<div class="check fail"><span class="check-icon">✗</span><span>${esc(c.name)}${c.detail?`<br/><span style="color:var(--muted);font-size:11px">${esc(c.detail)}</span>`:''}</span></div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// ─────────────────────────────────────────────
+// Error traceback toggle
+// ─────────────────────────────────────────────
+function toggleCard(titleEl) {
+  // titleEl = the .card-title element
+  const card = titleEl.closest('.card');
+  if (!card) return;
+  card.classList.toggle('card-collapsed');
+  // fix margin-bottom on title when collapsing/expanding
+  titleEl.style.marginBottom = card.classList.contains('card-collapsed') ? '0' : '';
+}
+
+function toggleTrace(id) {
+  const el = document.getElementById(id);
+  const toggle = el.previousElementSibling;
+  if (el.classList.contains('visible')) {
+    el.classList.remove('visible');
+    toggle.textContent = '▶ Show full traceback';
+  } else {
+    el.classList.add('visible');
+    toggle.textContent = '▼ Hide traceback';
+  }
+}
+
+// ─────────────────────────────────────────────
+// Re-upload helper
+// ─────────────────────────────────────────────
+function reuploadForJob() {
+  document.getElementById('fileInput').click();
+}
+
+// ─────────────────────────────────────────────
+// Sign-off submission
+// ─────────────────────────────────────────────
+async function submitSignoff(jobId, decision, flags) {
+  const name  = document.getElementById('reviewerName')?.value?.trim();
+  const role  = document.getElementById('reviewerRole')?.value;
+  const notes = document.getElementById('reviewNotes')?.value?.trim();
+
+  if (!name) { alert('Please enter your name.'); return; }
+
+  const flagResolutions = flags.map((f, i) => {
+    const applyFixEl = document.getElementById(`flag_apply_fix_${i}`);
+    const applyFix   = applyFixEl ? applyFixEl.checked : false;
+    return {
+      flag_type:      f.flag_type,
+      location:       f.location,
+      action:         document.getElementById(`flag_action_${i}`)?.value || 'accepted',
+      rationale:      document.getElementById(`flag_note_${i}`)?.value || '',
+      apply_fix:      applyFix,
+      fix_suggestion: (applyFix && f.auto_fix_suggestion) ? f.auto_fix_suggestion : null,
+    };
+  });
+
+  const payload = { reviewer_name: name, reviewer_role: role, decision, flag_resolutions: flagResolutions, notes };
+
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/sign-off`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    // Reload job state in either case (approved or rejected)
+    await openJob(jobId);
+  } catch(e) {
+    alert('Sign-off submission failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Code review sign-off submission (Step 10)
+// ─────────────────────────────────────────────
+async function submitCodeSignoff(jobId, decision) {
+  const name  = document.getElementById('codeReviewerName')?.value?.trim();
+  const role  = document.getElementById('codeReviewerRole')?.value;
+  const notes = document.getElementById('codeReviewNotes')?.value?.trim();
+
+  if (!name) { alert('Please enter your name.'); return; }
+
+  const label = decision === 'APPROVED' ? 'approve and mark this job complete' : 'reject and request regeneration';
+  if (!confirm(`Are you sure you want to ${label}?`)) return;
+
+  const payload = { reviewer_name: name, reviewer_role: role, decision, notes: notes || null };
+
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/code-signoff`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Sign-off failed: ' + (err.detail || res.statusText));
+      return;
+    }
+    await openJob(jobId);
+  } catch(e) {
+    alert('Sign-off submission failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Test file download
+// ─────────────────────────────────────────────
+async function downloadTestFile(jobId, filename) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/tests/download/${encodeURIComponent(filename)}`);
+    if (!res.ok) { alert('Download failed: ' + res.statusText); return; }
+    const data = await res.json();
+    const blob = new Blob([data.content], {type:'text/plain'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = filename.split('/').pop();
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Download failed: ' + e.message); }
+}
+
+// ─────────────────────────────────────────────
+// Code viewer / file viewer
+// ─────────────────────────────────────────────
+function showCodeTab(filename, tabEl, files) {
+  document.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+  tabEl.classList.add('active');
+  document.getElementById('codeBlock').textContent = files[filename] || '';
+}
+
+function showFileInViewer(filename, files) {
+  // Scroll to code viewer and activate the tab
+  const tabs = document.querySelectorAll('.code-tab');
+  tabs.forEach(t => {
+    if (t.textContent.trim() === filename) {
+      t.click();
+      t.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+  const codeBlock = document.getElementById('codeBlock');
+  if (codeBlock) codeBlock.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function downloadCode(jobId, filename) {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/download/${encodeURIComponent(filename)}`);
+    const data = await res.json();
+    const blob = new Blob([data.content], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+  } catch(e) {
+    alert('Download failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escHtml(s) { return esc(s); }
+
+function markdownToHtml(md) {
+  return md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,   '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/```[\w]*\n([\s\S]*?)```/g, '<pre>$1</pre>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/\n\n/g, '<br/><br/>');
+}
+
+// ─────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────
+loadJobs();
+setInterval(loadJobs, 5000);
+
+// ── S2T Full Mapping Modal ────────────────────
+let _s2tAllRecords = [], _s2tUnmappedSrc = [], _s2tUnmappedTgt = [];
+
+function openS2TModal() {
+  const state = window._currentJobState;
+  if (!state || !state.s2t) return;
+  _s2tAllRecords  = state.s2t.records || [];
+  _s2tUnmappedSrc = state.s2t.unmapped_sources || [];
+  _s2tUnmappedTgt = state.s2t.unmapped_targets || [];
+  document.getElementById('s2tModal').style.display = 'flex';
+  renderS2TTable();
+}
+function closeS2TModal() { document.getElementById('s2tModal').style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeS2TModal(); });
+
+function renderS2TTable() {
+  const SC = {'Direct':'#dcfce7','Derived':'#fef9c3','Lookup':'#ede9fe','Filtered':'#ffedd5',
+              'Aggregated':'#ede9fe','Unmapped Target':'#fee2e2','Unmapped Source':'#fee2e2'};
+  const SC_TEXT = {'Direct':'#14532d','Derived':'#713f12','Lookup':'#4c1d95','Filtered':'#7c2d12',
+                   'Aggregated':'#4c1d95','Unmapped Target':'#7f1d1d','Unmapped Source':'#7f1d1d'};
+  const statusFilter = document.getElementById('s2tStatusFilter')?.value || '';
+  const q = (document.getElementById('s2tSearch')?.value || '').toLowerCase();
+
+  const filtered = _s2tAllRecords.filter(r => {
+    if (statusFilter && r.status !== statusFilter) return false;
+    if (!q) return true;
+    return (r.source_table+' '+r.source_field+' '+r.target_table+' '+r.target_field+' '+r.logic+' '+r.status).toLowerCase().includes(q);
+  });
+  document.getElementById('s2tCount').textContent = `${filtered.length} of ${_s2tAllRecords.length} rows`;
+
+  document.getElementById('s2tTbody').innerHTML = filtered.map((r,i) => {
+    const bg = i%2===0 ? (SC[r.status]||'#fff') : '#f8fafc';
+    const chain = r.transformation_chain_str || (r.transformation_chain||[]).join(' → ') || '—';
+    return `<tr style="background:${bg}">
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e3a8a;font-weight:700;white-space:nowrap">${esc(r.source_table||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.source_field||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:10px">${esc(r.source_type||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;text-align:center;font-size:16px">→</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#14532d;font-weight:700;white-space:nowrap">${esc(r.target_table||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.target_field||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:10px">${esc(r.target_type||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0"><span style="padding:2px 8px;border-radius:4px;background:${SC[r.status]||'#f1f5f9'};color:${SC_TEXT[r.status]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${SC[r.status]||'#e2e8f0'};white-space:nowrap">${esc(r.status||'—')}</span></td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#94a3b8;font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(chain)}">${esc(chain)}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#475569;max-width:240px" title="${esc(r.logic||'')}">${esc(r.logic||'—')}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#94a3b8;max-width:180px" title="${esc(r.notes||'')}">${esc(r.notes||'—')}</td>
+    </tr>`;
+  }).join('');
+
+  // Unmapped panels — show when no filter active
+  const showAll = !statusFilter && !q;
+  const srcEl = document.getElementById('s2tUnmappedSrcPanel');
+  const tgtEl = document.getElementById('s2tUnmappedTgtPanel');
+  if (srcEl) {
+    srcEl.style.display = (showAll && _s2tUnmappedSrc.length) ? '' : 'none';
+    srcEl.querySelector('tbody').innerHTML = _s2tUnmappedSrc.map(r =>
+      `<tr><td style="padding:4px 10px;color:#1e3a8a;font-weight:700">${esc(r.source_table)}</td>
+       <td style="padding:4px 10px">${esc(r.source_field)}</td>
+       <td style="padding:4px 10px;color:#94a3b8;font-size:10px">${esc(r.source_type||'')}</td>
+       <td style="padding:4px 10px;color:#94a3b8;font-size:11px">${esc(r.note||'')}</td></tr>`
+    ).join('');
+  }
+  if (tgtEl) {
+    tgtEl.style.display = (showAll && _s2tUnmappedTgt.length) ? '' : 'none';
+    tgtEl.querySelector('tbody').innerHTML = _s2tUnmappedTgt.map(r =>
+      `<tr><td style="padding:4px 10px;color:#14532d;font-weight:700">${esc(r.target_table)}</td>
+       <td style="padding:4px 10px">${esc(r.target_field)}</td>
+       <td style="padding:4px 10px;color:#94a3b8;font-size:10px">${esc(r.target_type||'')}</td>
+       <td style="padding:4px 10px;color:#94a3b8;font-size:11px">${esc(r.note||'')}</td></tr>`
+    ).join('');
+  }
+}
+</script>
+
+<!-- ── S2T Full Mapping Modal ───────────────────────────────────── -->
+<div id="s2tModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px">
+  <div style="background:#0f1117;border:1px solid #2e3145;border-radius:12px;width:96vw;max-width:1400px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6)">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #2e3145;flex-shrink:0">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#f8fafc">🗺️ Source-to-Target Field Mapping</div>
+        <div id="s2tCount" style="font-size:12px;color:#94a3b8;margin-top:2px"></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <input id="s2tSearch" type="text" placeholder="Search fields, tables, logic…"
+          oninput="renderS2TTable()"
+          style="padding:6px 12px;font-size:12px;background:#1e2433;border:1px solid #2e3145;border-radius:6px;color:#f8fafc;width:220px;outline:none">
+        <select id="s2tStatusFilter" onchange="renderS2TTable()"
+          style="padding:6px 10px;font-size:12px;background:#1e2433;border:1px solid #2e3145;border-radius:6px;color:#f8fafc;outline:none">
+          <option value="">All statuses</option>
+          <option value="Direct">Direct</option>
+          <option value="Derived">Derived</option>
+          <option value="Lookup">Lookup</option>
+          <option value="Filtered">Filtered</option>
+          <option value="Aggregated">Aggregated</option>
+          <option value="Unmapped Target">Unmapped Target</option>
+        </select>
+        <button onclick="closeS2TModal()" style="padding:6px 14px;background:#334155;color:#f8fafc;border:none;border-radius:6px;cursor:pointer;font-size:13px">✕ Close</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div style="overflow:auto;flex:1">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:inherit">
+        <thead style="position:sticky;top:0;z-index:1">
+          <tr style="background:#1e293b;color:#94a3b8">
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Source Table</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Source Field</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Type</th>
+            <th style="padding:8px 10px;border-bottom:1px solid #2e3145"></th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Target Table</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Target Field</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Type</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Status</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Transform Chain</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Logic / Expression</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;border-bottom:1px solid #2e3145">Notes</th>
+          </tr>
+        </thead>
+        <tbody id="s2tTbody"></tbody>
+      </table>
+
+      <!-- Unmapped Sources panel -->
+      <div id="s2tUnmappedSrcPanel" style="margin:16px;border-radius:8px;overflow:hidden;border:1px solid #fca5a5">
+        <div style="background:#fef2f2;padding:8px 12px;font-size:12px;font-weight:700;color:#dc2626">⚠️ Unmapped Source Fields — exist in source but not used in any target mapping</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#fee2e2">
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Source Table</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Source Field</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Type</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Note</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- Unmapped Targets panel -->
+      <div id="s2tUnmappedTgtPanel" style="margin:16px;margin-top:0;border-radius:8px;overflow:hidden;border:1px solid #fca5a5">
+        <div style="background:#fef2f2;padding:8px 12px;font-size:12px;font-weight:700;color:#dc2626">⚠️ Unmapped Target Fields — target columns with no source mapping</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#fee2e2">
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Target Table</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Target Field</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Type</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b">Note</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
