@@ -41,3 +41,6 @@ htmlcov/
 # ── Misc ──────────────────────────────────────────────────────────────────────
 *.log
 *.tmp
+
+# ── Project-specific ignores ─────────────────────────────────────────────────
+informatica_conversion_tool_prompt_v4.md
