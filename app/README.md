@@ -66,7 +66,7 @@ bash start.sh
 | **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist |
 | 10 | Code Quality Review | Claude | Static analysis, 10+ checks against docs and S2T |
 | 11 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
-| **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REGENERATE / REJECTED** |
+| **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REJECTED** |
 
 ### Human Gates
 
@@ -81,8 +81,7 @@ bash start.sh
 
 **Gate 3 (Step 12 — Code Review):** Reviewer sees converted code, test coverage, and the security report.
 - APPROVED → job marked COMPLETE
-- REGENERATE → job marked FAILED; reviewer re-runs from Step 6
-- REJECTED → job blocked permanently
+- REJECTED → job blocked permanently; team re-uploads the mapping to start a fresh job
 
 ---
 

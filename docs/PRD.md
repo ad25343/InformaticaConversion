@@ -58,7 +58,7 @@ Steps:
 7. Code generation
 8. Code quality review (Claude cross-check vs. documentation and S2T)
 9. Test generation
-10. Gate 2 — code review sign-off (APPROVE / REGENERATE / REJECT)
+10. Gate 2 — code review sign-off (APPROVE / REJECT)
 
 Delivered: single-file upload, SSE progress stream, per-job structured logging, SQLite
 job persistence, session-cookie authentication, sample mappings across three complexity
@@ -163,9 +163,8 @@ Step 11  Test Generation               [Claude, pytest / dbt test stubs]
     │
     ▼
 Step 12  ◼ Gate 3 — Code Review Sign-off
-         APPROVE     → COMPLETE
-         REGENERATE  → FAILED (re-run from Step 6)
-         REJECT      → BLOCKED (terminal)
+         APPROVED  → COMPLETE
+         REJECTED  → BLOCKED (terminal)
 ```
 
 ---
@@ -205,7 +204,7 @@ flows through `backend/security.py`.
 | `DELETE` | `/api/jobs/{id}` | Delete job and associated files |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (APPROVE / REJECT) |
 | `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / FAILED) |
-| `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVE / REGENERATE / REJECT) |
+| `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVED / REJECTED) |
 | `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text) |
 | `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
 | `GET` | `/api/jobs/{id}/s2t/download` | Download S2T Excel workbook |
