@@ -234,6 +234,38 @@
       .check-grid { grid-template-columns: 1fr; }
       .stats { grid-template-columns: 1fr 1fr; }
     }
+
+    /* ── Report download actions ── */
+    .report-actions { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    .report-actions .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
+
+    /* ── Print / PDF styles ── */
+    @media print {
+      .sidebar, .report-actions, .log-panel, .error-actions button,
+      .form-actions, #codeReviewForm, .btn-primary { display: none !important; }
+      .app   { display: block !important; }
+      .main  { padding: 20px !important; overflow: visible !important; }
+      body   { background: #fff !important; color: #111 !important; font-size: 12px; }
+      .card  { background: #fff !important; border: 1px solid #ccc !important;
+               margin-bottom: 12px !important; break-inside: avoid; }
+      .card-title  { color: #111 !important; font-size: 13px !important; }
+      .panel-title { color: #111 !important; }
+      .panel-sub   { color: #555 !important; }
+      .badge { background: #eee !important; color: #333 !important; border: 1px solid #ccc !important; }
+      .card-collapsed .card-body { display: block !important; }
+      .code-block  { max-height: none !important; overflow: visible !important;
+                     white-space: pre-wrap !important; word-break: break-all !important;
+                     background: #f8f8f8 !important; color: #111 !important;
+                     border: 1px solid #ddd !important; font-size: 10px !important; }
+      .log-scroll  { max-height: none !important; overflow: visible !important; }
+      .stepper     { display: none !important; }
+      pre, code    { background: #f5f5f5 !important; color: #111 !important; }
+      .stat        { background: #f5f5f5 !important; border: 1px solid #ddd !important; }
+      .stat-val    { color: #111 !important; }
+      .error-card  { background: #fff8f8 !important; border-color: #e88 !important; }
+      .flag        { background: #fafafa !important; }
+      @page        { margin: 0.75in; size: A4; }
+    }
   </style>
 </head>
 <body>
@@ -677,9 +709,20 @@ function renderJobPanel(job) {
   const [badgeCls, badgeLabel] = STATUS_BADGE[job.status] || ['badge-pending', job.status];
   const isRejected = job.status === 'blocked' && state.sign_off?.decision === 'REJECTED';
 
+  window._currentJob = job;  // used by download functions
+
   let html = `
-    <div class="panel-title">${esc(job.filename)} <span class="badge ${badgeCls}" style="font-size:12px;vertical-align:middle">${badgeLabel}</span></div>
-    <div class="panel-sub">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${new Date(job.created_at).toLocaleString()}</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+      <div>
+        <div class="panel-title" style="margin-bottom:4px">${esc(job.filename)} <span class="badge ${badgeCls}" style="font-size:12px;vertical-align:middle">${badgeLabel}</span></div>
+        <div class="panel-sub" style="margin-bottom:0">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${new Date(job.created_at).toLocaleString()}</div>
+      </div>
+      <div class="report-actions" style="margin-bottom:0;flex-shrink:0">
+        <span class="lbl">Download report:</span>
+        <button class="btn btn-ghost btn-sm" title="Download full report as Markdown" onclick="downloadReportMd()">📄 .md</button>
+        <button class="btn btn-ghost btn-sm" title="Print / Save as PDF" onclick="window.print()">🖨️ PDF</button>
+      </div>
+    </div>
     ${renderStepper(job.current_step, job.status)}
   `;
 
@@ -1717,6 +1760,225 @@ async function downloadCode(jobId, filename) {
   } catch(e) {
     alert('Download failed: ' + e.message);
   }
+}
+
+// ─────────────────────────────────────────────
+// Report Download (MD + PDF)
+// ─────────────────────────────────────────────
+function downloadReportMd() {
+  const job = window._currentJob;
+  if (!job) return;
+  const md  = buildReportMarkdown(job);
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = (job.filename || 'report').replace(/[^a-z0-9_\-\.]/gi, '_');
+  a.href     = url;
+  a.download = `${safe}_conversion_report.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildReportMarkdown(job) {
+  const state = job.state || {};
+  const L = [];   // lines accumulator
+
+  const hr   = () => L.push('---', '');
+  const h1   = s => L.push(`# ${s}`, '');
+  const h2   = s => L.push(`## ${s}`, '');
+  const h3   = s => L.push(`### ${s}`, '');
+  const p    = s => L.push(s, '');
+  const kv   = (k, v) => L.push(`**${k}:** ${v ?? '—'}`);
+  const code = (lang, body) => { L.push('```' + lang); L.push(body); L.push('```', ''); };
+
+  // ── Cover ────────────────────────────────────────────────────────────────
+  h1(`Conversion Report: ${job.filename}`);
+  kv('Job ID',    job.job_id);
+  kv('Status',    job.status?.toUpperCase());
+  kv('Started',   new Date(job.created_at).toLocaleString());
+  if (job.complexity) kv('Complexity', job.complexity);
+  L.push('');
+  hr();
+
+  // ── Step 1 — Parse Report ───────────────────────────────────────────────
+  const pr = state.parse_report;
+  if (pr) {
+    h2('Step 1 — Parse Report');
+    kv('Mapping Name', pr.mapping_name);
+    kv('Source',       pr.source_name);
+    kv('Target',       pr.target_name);
+    kv('Transformations', pr.transformation_count);
+    kv('Source Fields',   pr.source_field_count);
+    kv('Target Fields',   pr.target_field_count);
+    if (pr.flags?.length) {
+      L.push('', `**Flags (${pr.flags.length}):**`);
+      pr.flags.forEach(f => L.push(`- [${f.severity || f.flag_type}] ${f.message || f.description || ''}`));
+    }
+    L.push('');
+  }
+
+  // ── Step 2 — Complexity ──────────────────────────────────────────────────
+  const cx = state.complexity;
+  if (cx) {
+    h2('Step 2 — Complexity Classification');
+    kv('Tier',      cx.tier);
+    kv('Score',     cx.score);
+    kv('Rationale', cx.rationale);
+    L.push('');
+  }
+
+  // ── Step 3 — Documentation ───────────────────────────────────────────────
+  if (state.documentation_md) {
+    h2('Step 3 — Documentation');
+    L.push(state.documentation_md, '');
+  }
+
+  // ── Step 4 — Verification ────────────────────────────────────────────────
+  const vr = state.verification;
+  if (vr) {
+    h2('Step 4 — Verification Report');
+    kv('Overall Status', vr.overall_status);
+    kv('Blocking Flags', vr.blocking_flag_count ?? 0);
+    kv('Total Flags',    vr.flags?.length ?? 0);
+    if (vr.flags?.length) {
+      L.push('', '**Flags:**');
+      vr.flags.forEach(f => {
+        const sev = f.severity || f.flag_type || '';
+        L.push(`- **[${sev}]** ${f.message || f.description || ''}`);
+        if (f.recommendation) L.push(`  - 💡 ${f.recommendation}`);
+      });
+    }
+    L.push('');
+  }
+
+  // ── Step 5 — Human Review Sign-off ───────────────────────────────────────
+  const so = state.sign_off;
+  if (so) {
+    h2('Step 5 — Human Review Sign-off');
+    kv('Reviewer',  so.reviewer_name);
+    kv('Role',      so.reviewer_role);
+    kv('Decision',  so.decision);
+    kv('Date',      (so.review_date || '').slice(0, 10));
+    if (so.notes) p(so.notes);
+    if (so.applied_fixes?.length) {
+      L.push('**Applied Fixes:**');
+      so.applied_fixes.forEach(f => L.push(`- ${f.description || f}`));
+      L.push('');
+    }
+  }
+
+  // ── Step 6 — Stack Assignment ────────────────────────────────────────────
+  const sa = state.stack_assignment;
+  if (sa) {
+    h2('Step 6 — Stack Assignment');
+    kv('Assigned Stack',   sa.assigned_stack);
+    kv('Complexity Tier',  sa.complexity_tier);
+    if (sa.rationale) p(sa.rationale);
+    if (sa.special_concerns?.length) {
+      L.push('**Special Concerns:**');
+      sa.special_concerns.forEach(c => L.push(`- ${c}`));
+      L.push('');
+    }
+  }
+
+  // ── Step 7 — Converted Code ──────────────────────────────────────────────
+  const co = state.conversion;
+  if (co?.files) {
+    h2(`Step 7 — Converted Code (${co.target_stack})`);
+    if (co.notes?.length) {
+      L.push('**Notes:**');
+      co.notes.forEach(n => L.push(`- ${n}`));
+      L.push('');
+    }
+    Object.entries(co.files).forEach(([fname, body]) => {
+      h3(fname);
+      const ext = fname.split('.').pop()?.toLowerCase() || '';
+      const lang = { py:'python', sql:'sql', yml:'yaml', yaml:'yaml', md:'markdown' }[ext] || '';
+      code(lang, body);
+    });
+  }
+
+  // ── Step 8 — Security Scan ───────────────────────────────────────────────
+  const ss = state.security_scan;
+  if (ss) {
+    h2('Step 8 — Security Scan');
+    kv('Recommendation', ss.recommendation);
+    kv('Critical', ss.critical_count ?? 0);
+    kv('High',     ss.high_count ?? 0);
+    kv('Medium',   ss.medium_count ?? 0);
+    kv('Low',      ss.low_count ?? 0);
+    kv('Bandit Ran', ss.ran_bandit ? 'Yes' : 'No');
+    if (ss.claude_summary) p(ss.claude_summary);
+    if (ss.findings?.length) {
+      L.push('**Findings:**', '');
+      ss.findings.forEach(f => {
+        L.push(`#### [${f.severity}] ${f.test_name || f.test_id || ''} _(${f.source})_`);
+        if (f.filename) L.push(`📄 \`${f.filename}\`${f.line ? ` line ${f.line}` : ''}`);
+        L.push(f.text || '');
+        if (f.code) code('', f.code);
+        else L.push('');
+      });
+    } else {
+      p('✅ No security findings detected.');
+    }
+  }
+
+  // ── Step 9 — Code Quality Review ─────────────────────────────────────────
+  const cr = state.code_review;
+  if (cr) {
+    h2('Step 9 — Code Quality Review');
+    kv('Recommendation', cr.recommendation);
+    kv('Passed', cr.total_passed ?? 0);
+    kv('Failed', cr.total_failed ?? 0);
+    if (cr.summary) p(cr.summary);
+    if (cr.checks?.length) {
+      L.push('**Checks:**', '');
+      cr.checks.forEach(c => {
+        const icon = c.passed ? '✅' : '❌';
+        L.push(`- ${icon} **${c.name?.replace(/_/g,' ')}**${c.passed ? '' : ` [${c.severity}]`}${c.note ? ` — ${c.note}` : ''}`);
+      });
+      L.push('');
+    }
+  }
+
+  // ── Step 10 — Test Generation ─────────────────────────────────────────────
+  const tr = state.test_report;
+  if (tr) {
+    h2('Step 10 — Test Generation & Coverage');
+    kv('Field Coverage', `${tr.coverage_pct ?? 0}%`);
+    kv('Fields Covered', tr.fields_covered ?? 0);
+    kv('Fields Missing', tr.fields_missing ?? 0);
+    if (tr.test_files) {
+      const fnames = Object.keys(tr.test_files);
+      kv('Test Files', fnames.length);
+      L.push('');
+      fnames.forEach(fname => {
+        h3(fname);
+        code('python', tr.test_files[fname]);
+      });
+    }
+    if (tr.missing_fields?.length) {
+      L.push('**Missing Fields:**');
+      tr.missing_fields.forEach(f => L.push(`- ${f}`));
+      L.push('');
+    }
+  }
+
+  // ── Step 11 — Code Review Sign-Off ───────────────────────────────────────
+  const cs = state.code_sign_off;
+  if (cs) {
+    h2('Step 11 — Code Review Sign-Off');
+    kv('Reviewer', cs.reviewer_name);
+    kv('Role',     cs.reviewer_role);
+    kv('Decision', cs.decision);
+    kv('Date',     (cs.review_date || '').slice(0, 10));
+    if (cs.notes) p(cs.notes);
+  }
+
+  hr();
+  L.push(`_Generated by Informatica Conversion Tool · ${new Date().toLocaleString()}_`);
+
+  return L.join('\n');
 }
 
 // ─────────────────────────────────────────────
