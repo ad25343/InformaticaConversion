@@ -1436,7 +1436,7 @@ function renderJobPanel(job) {
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
           <span><span class="icon">🏁</span> Step 12 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
-            <span class="badge ${isApproved ? 'badge-complete' : 'badge-blocked'}" style="font-size:11px">${isApproved ? '✅ APPROVED' : '🔄 REGENERATE'}</span>
+            <span class="badge ${isApproved ? 'badge-complete' : 'badge-blocked'}" style="font-size:11px">${isApproved ? '✅ APPROVED' : '❌ REJECTED'}</span>
             <span class="card-chevron" style="margin-left:0">▼</span>
           </span>
         </div>
@@ -1461,7 +1461,7 @@ function renderJobPanel(job) {
         </div>
         <div class="card-body">
           <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
-            Review the generated code (Step 7), security scan (Step 8), quality report (Step 9), and test coverage (Step 10).
+            Review the generated code (Step 7), security scan (Step 8), security review (Step 9), quality report (Step 10), and test coverage (Step 11).
             Then record your decision below.
           </div>
           <div class="form-group">
@@ -1485,7 +1485,7 @@ function renderJobPanel(job) {
           </div>
           <div class="form-actions">
             <button class="btn btn-success" onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','APPROVED')">✅ Approve — Mark Complete</button>
-            <button class="btn btn-danger"  onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','REGENERATE')">🔄 Reject — Request Regeneration</button>
+            <button class="btn btn-danger"  onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','REJECTED')">❌ Reject — Block &amp; Start Over</button>
           </div>
         </div>
       </div>`;
@@ -1789,7 +1789,9 @@ async function submitCodeSignoff(jobId, decision) {
 
   if (!name) { alert('Please enter your name.'); return; }
 
-  const label = decision === 'APPROVED' ? 'approve and mark this job complete' : 'reject and request regeneration';
+  const label = decision === 'APPROVED'
+    ? 'approve and mark this job complete'
+    : 'reject and block this job — you will need to re-upload the mapping to start over';
   if (!confirm(`Are you sure you want to ${label}?`)) return;
 
   const payload = { reviewer_name: name, reviewer_role: role, decision, notes: notes || null };

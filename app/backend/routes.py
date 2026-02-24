@@ -390,14 +390,16 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
 
 @router.post("/jobs/{job_id}/code-signoff")
 async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
-    """Submit code review decision (APPROVED | REGENERATE). If APPROVED, marks job complete."""
+    """
+    Submit code review decision (Gate 3 — Step 12).
+      APPROVED → mark job COMPLETE.
+      REJECTED → block the job permanently.
+    """
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     if job["status"] != JobStatus.AWAITING_CODE_REVIEW.value:
         raise HTTPException(400, f"Job is not awaiting code review (status: {job['status']})")
-
-    # Decision validation is handled by Pydantic (CodeReviewDecision enum)
 
     code_signoff = CodeSignOffRecord(
         reviewer_name=payload.reviewer_name,
@@ -413,26 +415,25 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     await db.update_job(job_id, JobStatus.AWAITING_CODE_REVIEW.value, 12,
                         {"code_sign_off": code_signoff.model_dump()})
 
-    # Hard reject — block the job immediately, no pipeline resume needed
+    # REJECTED — block the job immediately
     if payload.decision == CodeReviewDecision.REJECTED:
         await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
-        logger.info("Code review hard-rejected: job_id=%s reviewer=%s",
+        logger.info("Code review rejected: job_id=%s reviewer=%s",
                     job_id, payload.reviewer_name)
         return {
             "message": (
-                "Code review rejected. Job is blocked — pipeline will not proceed. "
-                "Upload the mapping again to start a fresh conversion."
+                "Code review rejected. Job is blocked — upload the mapping again "
+                "to start a fresh conversion."
             ),
             "job_id":   job_id,
             "decision": payload.decision,
         }
 
-    # Resume pipeline to write final status
+    # APPROVED — resume to write COMPLETE status
     queue: asyncio.Queue = asyncio.Queue()
     _progress_queues[job_id] = queue
 
     state    = job["state"]
-    # Merge the new sign-off into state before passing
     state["code_sign_off"] = code_signoff.model_dump()
     filename = job["filename"]
 

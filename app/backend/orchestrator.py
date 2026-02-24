@@ -839,7 +839,12 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
 
 
 async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "unknown") -> AsyncGenerator[dict, None]:
-    """Called after code review sign-off decision. Finalises job (COMPLETE or re-queues)."""
+    """
+    Called after APPROVED code review sign-off.
+    REGENERATE is handled entirely in routes.py (re-runs from Step 6).
+    REJECTED  is handled entirely in routes.py (sets BLOCKED immediately).
+    This function is only called for APPROVED decisions.
+    """
     log = JobLogger(job_id, filename)
 
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
@@ -849,35 +854,8 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
         return {"step": step, "status": status.value, "message": message}
 
     code_signoff = state.get("code_sign_off", {})
-    decision = code_signoff.get("decision", "APPROVED")
     reviewer = code_signoff.get("reviewer_name", "unknown")
 
-    log.info(
-        f"Code sign-off received — decision={decision}, reviewer={reviewer}",
-        step=12,
-    )
-
-    if decision == "REGENERATE":
-        # Soft reject — mark failed so reviewer can re-run conversion from Step 6
-        log.step_failed(12, "Code Sign-Off", "Reviewer requested regeneration")
-        log.finalize("failed", steps_completed=12)
-        log.close()
-        yield await emit(12, JobStatus.FAILED,
-                         "Code review — regeneration requested. Please re-run the job.")
-        return
-
-    if decision == "REJECTED":
-        # Hard reject — job is permanently blocked; route handler already set BLOCKED status
-        log.step_failed(12, "Code Sign-Off",
-                        f"Code hard-rejected by reviewer '{reviewer}'. Job blocked.")
-        log.finalize("blocked", steps_completed=12)
-        log.close()
-        yield await emit(12, JobStatus.BLOCKED,
-                         "❌ Code review rejected. Job is blocked — upload the mapping again "
-                         "to start a fresh conversion.")
-        return
-
-    # APPROVED — mark complete
     log.info("✅ Code review approved — pipeline complete", step=12)
     log.finalize("complete", steps_completed=12)
     log.close()
