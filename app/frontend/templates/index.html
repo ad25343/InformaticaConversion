@@ -244,37 +244,61 @@
     </div>
     <hr/>
 
-    <!-- Upload (v1.1 multi-file) -->
+    <!-- Upload (v1.1 multi-file + ZIP) -->
     <div>
       <div class="section-title">New Conversion</div>
 
-      <!-- Mapping XML (required) -->
-      <div class="upload-zone" id="dropzone">
-        <input type="file" id="fileInput" accept=".xml"/>
-        <div class="upload-icon">📂</div>
-        <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
+      <!-- Upload mode toggle -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px">
+        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
+                onclick="setUploadMode('files')">📄 Individual Files</button>
+        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+                onclick="setUploadMode('zip')">🗜 ZIP Archive</button>
       </div>
 
-      <!-- Workflow XML (optional, v1.1) -->
-      <div style="margin-top:8px">
-        <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
-          Workflow XML <span style="font-weight:400;color:var(--muted)">(optional — session config extraction)</span>
-        </label>
-        <div class="upload-zone" id="dropzoneWF" style="padding:12px 10px">
-          <input type="file" id="workflowInput" accept=".xml"/>
-          <div class="upload-label" id="workflowLabel" style="font-size:12px">Drop Workflow .xml here or click to add</div>
+      <!-- ── Individual files panel ── -->
+      <div id="panelFiles">
+        <!-- Mapping XML (required) -->
+        <div class="upload-zone" id="dropzone">
+          <input type="file" id="fileInput" accept=".xml"/>
+          <div class="upload-icon">📂</div>
+          <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
+        </div>
+
+        <!-- Workflow XML (optional, v1.1) -->
+        <div style="margin-top:8px">
+          <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
+            Workflow XML <span style="font-weight:400;color:var(--muted)">(optional — session config)</span>
+          </label>
+          <div class="upload-zone" id="dropzoneWF" style="padding:12px 10px">
+            <input type="file" id="workflowInput" accept=".xml"/>
+            <div class="upload-label" id="workflowLabel" style="font-size:12px">Drop Workflow .xml here or click to add</div>
+          </div>
+        </div>
+
+        <!-- Parameter file (optional, v1.1) -->
+        <div style="margin-top:8px">
+          <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
+            Parameter File <span style="font-weight:400;color:var(--muted)">(optional — $$VAR resolution)</span>
+          </label>
+          <div class="upload-zone" id="dropzonePF" style="padding:12px 10px">
+            <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
+            <div class="upload-label" id="paramLabel" style="font-size:12px">Drop parameter file here or click to add</div>
+          </div>
         </div>
       </div>
 
-      <!-- Parameter file (optional, v1.1) -->
-      <div style="margin-top:8px">
-        <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
-          Parameter File <span style="font-weight:400;color:var(--muted)">(optional — resolves $$VARIABLES)</span>
-        </label>
-        <div class="upload-zone" id="dropzonePF" style="padding:12px 10px">
-          <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
-          <div class="upload-label" id="paramLabel" style="font-size:12px">Drop parameter file here or click to add</div>
+      <!-- ── ZIP archive panel ── -->
+      <div id="panelZip" style="display:none">
+        <div class="upload-zone" id="dropzoneZip">
+          <input type="file" id="zipInput" accept=".zip"/>
+          <div class="upload-icon">🗜</div>
+          <div class="upload-label" id="zipLabel">
+            Drop .zip archive here or click to browse<br/>
+            <span style="font-size:11px;color:var(--muted)">Must contain a Mapping XML — Workflow &amp; params auto-detected</span>
+          </div>
         </div>
+        <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
       </div>
 
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
@@ -342,7 +366,7 @@ const STATUS_BADGE = {
 const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
 
 // ─────────────────────────────────────────────
-// Upload handling (v1.1 multi-file)
+// Upload handling (v1.1 multi-file + ZIP)
 // ─────────────────────────────────────────────
 const dropzone      = document.getElementById('dropzone');
 const fileInput     = document.getElementById('fileInput');
@@ -357,8 +381,33 @@ const dropzonePF    = document.getElementById('dropzonePF');
 const paramInput    = document.getElementById('paramInput');
 const paramLabel    = document.getElementById('paramLabel');
 
+const dropzoneZip   = document.getElementById('dropzoneZip');
+const zipInput      = document.getElementById('zipInput');
+const zipLabel      = document.getElementById('zipLabel');
+const zipWarnings   = document.getElementById('zipWarnings');
+
 let selectedWorkflowFile = null;
 let selectedParamFile    = null;
+let selectedZipFile      = null;
+let uploadMode           = 'files';  // 'files' | 'zip'
+
+// ── Upload mode toggle ────────────────────────
+function setUploadMode(mode) {
+  uploadMode = mode;
+  document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
+  document.getElementById('panelZip').style.display   = mode === 'zip'   ? '' : 'none';
+  const tabFiles = document.getElementById('tabFiles');
+  const tabZip   = document.getElementById('tabZip');
+  if (mode === 'files') {
+    tabFiles.className = 'btn btn-sm btn-primary';
+    tabZip.className   = 'btn btn-sm btn-ghost';
+    startBtn.disabled  = !selectedFile;
+  } else {
+    tabFiles.className = 'btn btn-sm btn-ghost';
+    tabZip.className   = 'btn btn-sm btn-primary';
+    startBtn.disabled  = !selectedZipFile;
+  }
+}
 
 // Workflow XML dropzone wiring
 dropzoneWF.addEventListener('click', () => workflowInput.click());
@@ -394,6 +443,7 @@ function setParamFile(f) {
   dropzonePF.style.borderColor = 'var(--success)';
 }
 
+// Mapping XML dropzone wiring
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
@@ -407,34 +457,81 @@ fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fil
 function setFile(f) {
   selectedFile = f;
   fileLabel.textContent = f.name;
-  startBtn.disabled = false;
+  if (uploadMode === 'files') startBtn.disabled = false;
 }
 
+// ZIP dropzone wiring
+dropzoneZip.addEventListener('click', () => zipInput.click());
+dropzoneZip.addEventListener('dragover', e => { e.preventDefault(); dropzoneZip.classList.add('drag'); });
+dropzoneZip.addEventListener('dragleave', () => dropzoneZip.classList.remove('drag'));
+dropzoneZip.addEventListener('drop', e => {
+  e.preventDefault(); dropzoneZip.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.zip')) setZipFile(f);
+});
+zipInput.addEventListener('change', () => { if (zipInput.files[0]) setZipFile(zipInput.files[0]); });
+
+function setZipFile(f) {
+  selectedZipFile = f;
+  zipLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024/1024).toFixed(2)} MB)</span>`;
+  dropzoneZip.style.borderColor = 'var(--success)';
+  zipWarnings.style.display = 'none';
+  if (uploadMode === 'zip') startBtn.disabled = false;
+}
+
+// ── Start button ─────────────────────────────
 startBtn.addEventListener('click', async () => {
-  if (!selectedFile) return;
   startBtn.disabled = true;
-  const fd = new FormData();
-  fd.append('file', selectedFile);
-  if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
-  if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
-  try {
-    const res = await fetch('/api/jobs', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (data.job_id) {
-      // Reset optional file selections for next upload
-      selectedWorkflowFile = null; selectedParamFile = null;
-      workflowLabel.textContent = 'Drop Workflow .xml here or click to add';
-      paramLabel.textContent    = 'Drop parameter file here or click to add';
-      dropzoneWF.style.borderColor = ''; dropzonePF.style.borderColor = '';
-      await loadJobs();
-      openJob(data.job_id);
-    } else {
-      alert('Upload failed: ' + JSON.stringify(data));
+
+  if (uploadMode === 'zip') {
+    // ── ZIP upload path ──────────────────────
+    if (!selectedZipFile) { startBtn.disabled = false; return; }
+    const fd = new FormData();
+    fd.append('file', selectedZipFile);
+    try {
+      const res  = await fetch('/api/jobs/zip', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.job_id) {
+        if (data.warnings && data.warnings.length) {
+          zipWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
+          zipWarnings.style.display = 'block';
+        }
+        await loadJobs();
+        openJob(data.job_id);
+      } else {
+        alert('ZIP upload failed: ' + JSON.stringify(data));
+        startBtn.disabled = false;
+      }
+    } catch(e) {
+      alert('ZIP upload error: ' + e.message);
       startBtn.disabled = false;
     }
-  } catch(e) {
-    alert('Upload error: ' + e.message);
-    startBtn.disabled = false;
+  } else {
+    // ── Individual files path ────────────────
+    if (!selectedFile) { startBtn.disabled = false; return; }
+    const fd = new FormData();
+    fd.append('file', selectedFile);
+    if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
+    if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
+    try {
+      const res  = await fetch('/api/jobs', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.job_id) {
+        // Reset optional file selections for next upload
+        selectedWorkflowFile = null; selectedParamFile = null;
+        workflowLabel.textContent = 'Drop Workflow .xml here or click to add';
+        paramLabel.textContent    = 'Drop parameter file here or click to add';
+        dropzoneWF.style.borderColor = ''; dropzonePF.style.borderColor = '';
+        await loadJobs();
+        openJob(data.job_id);
+      } else {
+        alert('Upload failed: ' + JSON.stringify(data));
+        startBtn.disabled = false;
+      }
+    } catch(e) {
+      alert('Upload error: ' + e.message);
+      startBtn.disabled = false;
+    }
   }
 });
 

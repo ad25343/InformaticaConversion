@@ -248,6 +248,38 @@ class ReconciliationReport(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Security Scan Report (Step 8a)
+# ─────────────────────────────────────────────
+
+class SecurityFinding(BaseModel):
+    """A single finding from bandit or Claude security review."""
+    source:     str    = "bandit"   # "bandit" | "claude"
+    test_id:    Optional[str] = None
+    test_name:  Optional[str] = None
+    severity:   str    = "LOW"      # CRITICAL | HIGH | MEDIUM | LOW
+    confidence: str    = ""
+    line:       Optional[int] = None
+    filename:   Optional[str] = None
+    text:       str    = ""
+    code:       str    = ""
+
+
+class SecurityScanReport(BaseModel):
+    mapping_name:   str
+    target_stack:   str
+    ran_bandit:     bool = False
+    bandit_error:   Optional[str] = None
+    findings:       List[SecurityFinding] = []
+    high_count:     int = 0
+    medium_count:   int = 0
+    low_count:      int = 0
+    critical_count: int = 0
+    recommendation: str = "APPROVED"  # APPROVED | REVIEW_RECOMMENDED | REQUIRES_FIXES
+    claude_summary: Optional[str] = None
+    skipped_files:  List[str] = []    # files skipped (e.g. too large for bandit)
+
+
+# ─────────────────────────────────────────────
 # Code Review Report (Step 8)
 # ─────────────────────────────────────────────
 
@@ -334,6 +366,7 @@ class ConversionJob(BaseModel):
     sign_off:             Optional[SignOffRecord]        = None
     stack_assignment:     Optional[StackAssignment]     = None
     conversion:           Optional[ConversionOutput]    = None
+    security_scan:        Optional[SecurityScanReport]  = None
     reconciliation:       Optional[ReconciliationReport]= None
     error:                Optional[str]                 = None
 

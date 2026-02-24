@@ -1,11 +1,13 @@
 """
 Informatica Conversion Tool — FastAPI Application Entry Point
 """
+import logging
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from dotenv import load_dotenv
@@ -17,8 +19,11 @@ from backend.routes import router
 from backend.logger import configure_app_logging
 from backend.auth import (
     is_authenticated, check_password,
-    create_session_token, COOKIE_NAME, SESSION_HOURS
+    create_session_token, COOKIE_NAME, SESSION_HOURS,
+    SECRET_KEY,
 )
+
+_startup_log = logging.getLogger("conversion.startup")
 
 TEMPLATES = Path(__file__).parent / "frontend" / "templates"
 
@@ -28,6 +33,18 @@ async def lifespan(app: FastAPI):
     log_level = os.environ.get("LOG_LEVEL", "INFO")
     configure_app_logging(log_level)
     await init_db()
+    # ── Security startup warnings ──────────────────────────────────────────
+    if SECRET_KEY == "change-me-in-production-please":
+        _startup_log.warning(
+            "SECURITY WARNING: SECRET_KEY is set to the default insecure value. "
+            "Set a strong random SECRET_KEY in your .env before deploying to production."
+        )
+    if not os.environ.get("APP_PASSWORD"):
+        _startup_log.warning(
+            "SECURITY WARNING: APP_PASSWORD is not set. "
+            "The application is running in open-access dev mode — all requests are unauthenticated. "
+            "Set APP_PASSWORD in your .env for any non-local deployment."
+        )
     yield
 
 
@@ -40,6 +57,23 @@ app = FastAPI(
     docs_url="/docs" if os.environ.get("SHOW_DOCS", "true").lower() != "false" else None,
     redoc_url=None,
 )
+
+# ── CORS — restrict to same-origin by default ────────────
+# Allow additional origins via CORS_ORIGINS="https://your.domain,https://other.domain"
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+_allowed_origins: list[str] = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else []  # empty → same-origin only (browser enforces; no CORS headers emitted)
+)
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
 
 # ── Static files (always public — just CSS/JS assets) ────
 static_dir = Path(__file__).parent / "frontend" / "static"

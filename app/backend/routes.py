@@ -19,6 +19,8 @@ from .models.schemas import (
 from . import orchestrator
 from .logger import read_job_log, read_job_log_raw, job_log_path, list_log_registry
 from .agents.s2t_agent import s2t_excel_path
+from .security import validate_upload_size, ZipExtractionError
+from .zip_extractor import extract_informatica_zip
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
@@ -53,11 +55,13 @@ async def create_job(
         raise HTTPException(400, "Mapping file must be a .xml Informatica export")
 
     mapping_content = await file.read()
+    validate_upload_size(mapping_content, label=file.filename)
     xml_str = mapping_content.decode("utf-8", errors="replace")
 
     workflow_str: _Opt[str] = None
     if workflow_file and workflow_file.filename:
         wf_content = await workflow_file.read()
+        validate_upload_size(wf_content, label=workflow_file.filename)
         workflow_str = wf_content.decode("utf-8", errors="replace")
         logger.info("Workflow file uploaded: filename=%s size=%d bytes",
                     workflow_file.filename, len(wf_content))
@@ -65,6 +69,7 @@ async def create_job(
     param_str: _Opt[str] = None
     if parameter_file and parameter_file.filename:
         pf_content = await parameter_file.read()
+        validate_upload_size(pf_content, label=parameter_file.filename)
         param_str = pf_content.decode("utf-8", errors="replace")
         logger.info("Parameter file uploaded: filename=%s size=%d bytes",
                     parameter_file.filename, len(pf_content))
@@ -426,3 +431,84 @@ async def download_test_file(job_id: str, filename: str):
     if filename not in files:
         raise HTTPException(404, f"Test file '{filename}' not found")
     return JSONResponse({"filename": filename, "content": files[filename]})
+
+
+# ─────────────────────────────────────────────
+# ZIP Upload (v1.1+)
+# ─────────────────────────────────────────────
+
+@router.post("/jobs/zip")
+async def create_job_from_zip(file: UploadFile = File(...)):
+    """
+    Upload a single ZIP archive containing Informatica export files and start
+    the conversion pipeline.
+
+    The ZIP may contain any combination of:
+      - Mapping XML  (.xml with a <MAPPING> element)       — REQUIRED
+      - Workflow XML (.xml with <WORKFLOW>/<SESSION>)       — optional
+      - Parameter file (.txt / .par with $$VAR= lines)     — optional
+
+    File types are auto-detected from content — filenames don't matter.
+    The archive is protected against Zip Slip, Zip Bombs, and symlink attacks.
+
+    Size limits (configurable via environment variables):
+      MAX_UPLOAD_MB          — per-file limit for the ZIP itself (default 50 MB)
+      MAX_ZIP_EXTRACTED_MB   — total extracted size limit (default 200 MB)
+      MAX_ZIP_FILE_COUNT     — maximum entries in the archive (default 200)
+    """
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "File must be a .zip archive")
+
+    zip_bytes = await file.read()
+    validate_upload_size(zip_bytes, label=file.filename)
+
+    try:
+        extracted = extract_informatica_zip(zip_bytes)
+    except ZipExtractionError as exc:
+        raise HTTPException(400, str(exc))
+
+    warnings = extracted.warnings
+    if extracted.skipped:
+        warnings = warnings + [
+            f"Skipped {len(extracted.skipped)} unclassified entries: "
+            + ", ".join(extracted.skipped[:5])
+            + ("…" if len(extracted.skipped) > 5 else "")
+        ]
+
+    job_id = await db.create_job(
+        extracted.mapping_filename or file.filename,
+        extracted.mapping_xml,
+        workflow_xml_content=extracted.workflow_xml,
+        parameter_file_content=extracted.parameter_file,
+    )
+
+    logger.info(
+        "ZIP job created: job_id=%s zip=%s mapping=%s workflow=%s params=%s",
+        job_id, file.filename,
+        extracted.mapping_filename, extracted.workflow_filename, extracted.param_filename,
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _progress_queues[job_id] = queue
+
+    async def _run():
+        async for progress in orchestrator.run_pipeline(
+            job_id, extracted.mapping_filename or file.filename
+        ):
+            await queue.put(progress)
+        await queue.put(None)
+
+    task = asyncio.create_task(_run())
+    _active_tasks[job_id] = task
+
+    return {
+        "job_id":            job_id,
+        "source_zip":        file.filename,
+        "mapping_filename":  extracted.mapping_filename,
+        "workflow_filename": extracted.workflow_filename,
+        "param_filename":    extracted.param_filename,
+        "has_workflow":      extracted.workflow_xml is not None,
+        "has_params":        extracted.parameter_file is not None,
+        "warnings":          warnings,
+        "status":            "started",
+    }

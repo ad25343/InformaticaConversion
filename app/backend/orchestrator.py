@@ -13,7 +13,7 @@ from .db.database import get_xml, get_session_files, update_job
 from .models.schemas import JobStatus
 from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
-    session_parser_agent
+    session_parser_agent, security_agent
 from .logger import JobLogger
 
 
@@ -438,12 +438,51 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
                          {"conversion": conversion_output.model_dump()})
         return
 
+    # ── STEP 8a — SECURITY SCAN ────────────────────────────────
+    log.step_start(8, "Security Scan (bandit + Claude)")
+    log.state_change("converting", "reviewing", step=8)
+    yield await emit(8, JobStatus.CONVERTING,
+                     "Running security scan on generated code (bandit + Claude)…")
+
+    security_scan = None
+    try:
+        security_scan = await security_agent.scan(
+            conversion=conversion_output,
+            mapping_name=conversion_output.mapping_name,
+        )
+        _sec_rec = security_scan.recommendation
+        log.info(
+            f"Security scan complete — recommendation={_sec_rec}, "
+            f"critical={security_scan.critical_count}, high={security_scan.high_count}, "
+            f"medium={security_scan.medium_count}, low={security_scan.low_count}",
+            step=8,
+            data={
+                "recommendation": _sec_rec,
+                "critical": security_scan.critical_count,
+                "high":     security_scan.high_count,
+                "medium":   security_scan.medium_count,
+                "low":      security_scan.low_count,
+                "ran_bandit": security_scan.ran_bandit,
+            },
+        )
+        log.step_complete(8, "Security Scan", _sec_rec)
+    except Exception as e:
+        log.warning(f"Security scan failed (non-blocking): {e}", step=8)
+        from .models.schemas import SecurityScanReport
+        security_scan = SecurityScanReport(
+            mapping_name=conversion_output.mapping_name,
+            target_stack=str(conversion_output.target_stack),
+            recommendation="REVIEW_RECOMMENDED",
+            claude_summary=f"Security scan could not complete: {e}. Manual review recommended.",
+        )
+        log.step_complete(8, "Security Scan", "SKIPPED (error)")
+
     # ── STEP 8 — CODE QUALITY REVIEW ──────────────────────────
     log.step_start(8, "Code Quality Review")
-    log.state_change("converting", "reviewing", step=8)
     log.claude_call(8, "static code review")
     yield await emit(8, JobStatus.CONVERTING,
-                     "Running code quality review (Claude)…")
+                     "Running code quality review (Claude)…",
+                     {"security_scan": security_scan.model_dump()})
 
     # All needed variables are in scope from earlier steps (or restored from state).
     # verification may be a VerificationReport object or None.
@@ -544,7 +583,10 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
     log.close()
     yield await emit(10, JobStatus.AWAITING_CODE_REVIEW,
                      "Awaiting code review sign-off. Pipeline paused.",
-                     {"test_report": test_report.model_dump()})
+                     {
+                         "test_report":   test_report.model_dump(),
+                         "security_scan": security_scan.model_dump() if security_scan else None,
+                     })
 
 
 async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "unknown") -> AsyncGenerator[dict, None]:

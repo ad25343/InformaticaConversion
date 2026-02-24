@@ -23,6 +23,7 @@ from typing import Optional
 
 from lxml import etree
 
+from ..security import safe_parse_xml
 from ..models.schemas import (
     CrossRefValidation,
     FileType,
@@ -172,7 +173,7 @@ def _detect_type(content: Optional[str]) -> FileType:
 
     # Try to find the marker elements without full parsing (faster, tolerant)
     try:
-        root = etree.fromstring(stripped.encode("utf-8"))
+        root = safe_parse_xml(stripped)
     except Exception:
         # Not valid XML — check for parameter file patterns
         if re.search(r"\$\$\w+\s*=", stripped):
@@ -203,7 +204,7 @@ def _detect_type(content: Optional[str]) -> FileType:
 def _extract_mapping_name(mapping_xml: str) -> Optional[str]:
     """Pull the first MAPPING/@NAME from the mapping XML."""
     try:
-        root = etree.fromstring(mapping_xml.encode("utf-8"))
+        root = safe_parse_xml(mapping_xml)
     except Exception:
         return None
     el = root.find(".//MAPPING")
@@ -223,7 +224,7 @@ def _extract_session_mapping_ref(workflow_xml: str) -> tuple[Optional[str], Opti
       - INSTANCE/@REUSABLE_INSTANCE_NAME pointing to a MAPPING
     """
     try:
-        root = etree.fromstring(workflow_xml.encode("utf-8"))
+        root = safe_parse_xml(workflow_xml)
     except Exception:
         return None, None
 
@@ -398,7 +399,7 @@ def _extract_session_config(
     Returns (SessionConfig or None, list_of_unresolved_variable_names).
     """
     try:
-        root = etree.fromstring(workflow_xml.encode("utf-8"))
+        root = safe_parse_xml(workflow_xml)
     except Exception:
         return None, []
 

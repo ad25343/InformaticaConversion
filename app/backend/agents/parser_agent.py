@@ -9,6 +9,7 @@ from typing import Any
 from lxml import etree
 
 from ..models.schemas import ParseReport, ParseFlag
+from ..security import safe_parse_xml
 
 
 # ─────────────────────────────────────────────
@@ -32,7 +33,7 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
     }
 
     try:
-        root = etree.fromstring(xml_content.encode("utf-8"))
+        root = safe_parse_xml(xml_content)
     except etree.XMLSyntaxError as e:
         return ParseReport(
             objects_found={},
