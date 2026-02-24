@@ -345,8 +345,8 @@ const STEPS = [
   { n:6,  label:"Stack" },
   { n:7,  label:"Convert" },
   { n:8,  label:"Security" },
-  { n:9,  label:"Tests" },
-  { n:10, label:"Sign-Off" },
+  { n:9,  label:"Quality" },
+  { n:10, label:"Tests" },
 ];
 
 const STATUS_BADGE = {
@@ -357,9 +357,11 @@ const STATUS_BADGE = {
   verifying:       ['badge-running','Verifying'],
   awaiting_review: ['badge-waiting','Awaiting Review'],
   assigning_stack: ['badge-running','Assigning Stack'],
-  converting:      ['badge-running','Converting'],
-  validating:      ['badge-running','Security Scan'],
-  testing:              ['badge-running','Testing'],
+  converting:        ['badge-running','Converting'],
+  security_scanning: ['badge-running','Security Scan'],
+  validating:        ['badge-running','Security Scan'],
+  reviewing:         ['badge-running','Quality Review'],
+  testing:           ['badge-running','Testing'],
   awaiting_code_review: ['badge-waiting','Code Review'],
   complete:             ['badge-complete','Complete'],
   failed:               ['badge-failed','Failed'],
@@ -552,8 +554,9 @@ async function loadJobs() {
 // Statuses that mean a job is still running / waiting for action
 const _ACTIVE_STATUSES = new Set([
   'pending','parsing','classifying','documenting','verifying',
-  'awaiting_review','assigning_stack','converting','validating',
-  'testing','awaiting_code_review'
+  'awaiting_review','assigning_stack','converting',
+  'security_scanning','validating','reviewing','testing',
+  'awaiting_code_review'
 ]);
 
 // Persists across re-renders so toggle state survives polling.
@@ -1081,7 +1084,62 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 8 — RECONCILIATION ───────────────
+  // ── STEP 8 — SECURITY SCAN ───────────────
+  if (state.security_scan) {
+    const ss = state.security_scan;
+    const ssRecColor = { APPROVED:'var(--accent2)', REVIEW_RECOMMENDED:'var(--warn)', REQUIRES_FIXES:'var(--danger)' }[ss.recommendation] || 'var(--muted)';
+    const ssRecBadge = { APPROVED:'badge-complete', REVIEW_RECOMMENDED:'badge-waiting', REQUIRES_FIXES:'badge-blocked' }[ss.recommendation] || 'badge-pending';
+    const ssRecIcon  = { APPROVED:'✅', REVIEW_RECOMMENDED:'⚠️', REQUIRES_FIXES:'❌' }[ss.recommendation] || '❓';
+    const ssFindings = (ss.findings||[]).sort((a,b) => ({ CRITICAL:0,HIGH:1,MEDIUM:2,LOW:3 }[a.severity]??9) - ({ CRITICAL:0,HIGH:1,MEDIUM:2,LOW:3 }[b.severity]??9));
+    const ssHasFindings = ssFindings.length > 0;
+    const ssSevColor = { CRITICAL:'var(--danger)', HIGH:'#f97316', MEDIUM:'var(--warn)', LOW:'#60a5fa' };
+
+    html += `<div class="card" style="border-color:${ssRecColor}">
+      <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+        <span><span class="icon">🛡️</span> Step 8 — Security Scan</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="badge ${ssRecBadge}" style="font-size:11px">${ssRecIcon} ${(ss.recommendation||'').replace(/_/g,' ')}</span>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </span>
+      </div>
+      <div class="card-body">
+      <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+        <div class="stat"><div class="stat-val" style="color:${(ss.critical_count||0)>0?'var(--danger)':'var(--accent2)'}">${ss.critical_count||0}</div><div class="stat-label">Critical</div></div>
+        <div class="stat"><div class="stat-val" style="color:${(ss.high_count||0)>0?'#f97316':'var(--accent2)'}">${ss.high_count||0}</div><div class="stat-label">High</div></div>
+        <div class="stat"><div class="stat-val" style="color:${(ss.medium_count||0)>0?'var(--warn)':'var(--accent2)'}">${ss.medium_count||0}</div><div class="stat-label">Medium</div></div>
+        <div class="stat"><div class="stat-val">${ss.low_count||0}</div><div class="stat-label">Low</div></div>
+      </div>
+
+      ${ss.ran_bandit ? `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">🔎 bandit static analysis ran &nbsp;·&nbsp; YAML regex scan ran &nbsp;·&nbsp; Claude review ran</div>` :
+                        `<div style="font-size:11px;color:var(--warn);margin-bottom:10px">⚠️ bandit not available — Claude + YAML regex scan ran</div>`}
+
+      ${ss.bandit_error ? `<div style="font-size:12px;color:var(--warn);margin-bottom:10px">bandit error: ${esc(ss.bandit_error)}</div>` : ''}
+
+      ${ss.claude_summary ? `<div style="padding:10px 14px;background:var(--surface2);border-radius:8px;font-size:13px;margin-bottom:14px;line-height:1.6">${esc(ss.claude_summary)}</div>` : ''}
+
+      ${ssHasFindings ? `
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px">FINDINGS (${ssFindings.length})</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${ssFindings.map(f => {
+          const sc = ssSevColor[f.severity] || 'var(--muted)';
+          const srcTag = f.source === 'bandit' ? '🔎 bandit' : f.source === 'yaml_scan' ? '📋 yaml' : '🤖 claude';
+          return `<div style="padding:10px 12px;background:rgba(248,113,113,.05);border-radius:8px;border-left:3px solid ${sc}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span style="font-size:10px;font-weight:800;color:${sc}">${esc(f.severity)}</span>
+              <span style="font-size:11px;font-weight:600;color:var(--text)">${esc(f.test_name||f.test_id||'')}</span>
+              <span style="margin-left:auto;font-size:10px;color:var(--muted)">${srcTag}</span>
+            </div>
+            ${f.filename ? `<div style="font-size:11px;color:var(--muted);margin-bottom:3px">📄 ${esc(f.filename)}${f.line ? ` line ${f.line}` : ''}</div>` : ''}
+            <div style="font-size:12px;color:var(--text)">${esc(f.text||'')}</div>
+            ${f.code ? `<pre style="margin-top:6px;background:#0a0a0a;border-radius:4px;padding:6px 8px;font-size:11px;color:#fca5a5;white-space:pre-wrap;word-break:break-all;max-height:80px;overflow-y:auto">${escHtml(f.code)}</pre>` : ''}
+          </div>`;
+        }).join('')}
+      </div>` : `<div style="color:var(--accent2);font-size:13px">✅ No security findings detected.</div>`}
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 9 — CODE QUALITY REVIEW ───────────────
   if (state.code_review) {
     const cr = state.code_review;
     const recColor = { APPROVED: 'var(--accent2)', REVIEW_RECOMMENDED: 'var(--warn)', REQUIRES_FIXES: 'var(--danger)' }[cr.recommendation] || 'var(--muted)';
@@ -1095,7 +1153,7 @@ function renderJobPanel(job) {
 
     html += `<div class="card" style="border-color:${recColor}">
       <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-        <span><span class="icon">🔬</span> Step 8 — Code Quality Review</span>
+        <span><span class="icon">🔬</span> Step 9 — Code Quality Review</span>
         <span style="display:flex;align-items:center;gap:8px">
           <span class="badge ${recBadge}" style="font-size:11px">${recIcon} ${cr.recommendation?.replace(/_/g,' ')}</span>
           <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1138,16 +1196,15 @@ function renderJobPanel(job) {
     </div>`;
   } else if (state.reconciliation) {
     // Legacy placeholder (old jobs)
-    const r = state.reconciliation;
     html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔬</span> Step 8 — Code Quality Review<span class="card-chevron">▼</span></div>
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔬</span> Step 9 — Code Quality Review<span class="card-chevron">▼</span></div>
       <div class="card-body">
-      <div style="font-size:13px;color:var(--muted)">This job was run before Step 8 was implemented. Re-run to get a full code review.</div>
+      <div style="font-size:13px;color:var(--muted)">This job was run before Step 9 was implemented. Re-run to get a full code review.</div>
       </div>
     </div>`;
   }
 
-  // ── STEP 9 — TEST GENERATION & COVERAGE ───────────────────
+  // ── STEP 10 — TEST GENERATION & COVERAGE ───────────────────
   if (state.test_report) {
     const tr = state.test_report;
     const pct = tr.coverage_pct ?? 0;
@@ -1158,7 +1215,7 @@ function renderJobPanel(job) {
 
     html += `<div class="card" style="border-color:${pctColor}">
       <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-        <span><span class="icon">🧪</span> Step 9 — Test Generation &amp; Coverage Check</span>
+        <span><span class="icon">🧪</span> Step 10 — Test Generation &amp; Coverage Check</span>
         <span style="display:flex;align-items:center;gap:8px">
           <span class="badge ${pctBadge}" style="font-size:11px">${pct}% Field Coverage</span>
           <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1266,7 +1323,7 @@ function renderJobPanel(job) {
       const isApproved = sod.decision === 'APPROVED';
       html += `<div class="card" style="border-color:${isApproved ? 'var(--accent2)' : 'var(--danger)'}">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-          <span><span class="icon">🏁</span> Step 10 — Code Review Sign-Off</span>
+          <span><span class="icon">🏁</span> Step 11 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
             <span class="badge ${isApproved ? 'badge-complete' : 'badge-blocked'}" style="font-size:11px">${isApproved ? '✅ APPROVED' : '🔄 REGENERATE'}</span>
             <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1285,7 +1342,7 @@ function renderJobPanel(job) {
       // Gate is open — show sign-off form
       html += `<div class="card" style="border-color:var(--accent)">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-          <span><span class="icon">🏁</span> Step 10 — Code Review Sign-Off</span>
+          <span><span class="icon">🏁</span> Step 11 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
             <span class="badge badge-waiting" style="font-size:11px">⏳ Awaiting Sign-Off</span>
             <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1293,7 +1350,7 @@ function renderJobPanel(job) {
         </div>
         <div class="card-body">
           <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
-            Review the generated code (Step 7), quality report (Step 8), and test coverage (Step 9).
+            Review the generated code (Step 7), security scan (Step 8), quality report (Step 9), and test coverage (Step 10).
             Then record your decision below.
           </div>
           <div class="form-group">
