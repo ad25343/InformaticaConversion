@@ -556,11 +556,20 @@ const _ACTIVE_STATUSES = new Set([
   'testing','awaiting_code_review'
 ]);
 
-// Persists across re-renders so toggle state survives polling
-let historyOpen = false;
+// Persists across re-renders so toggle state survives polling.
+// historyOpenSet = false means "user hasn't toggled yet, use smart default".
+let historyOpen    = false;
+let historyOpenSet = false;
 
 function toggleHistory() {
-  historyOpen = !historyOpen;
+  // On first explicit toggle, derive from current rendered state
+  if (!historyOpenSet) {
+    const list = document.getElementById('historyList');
+    historyOpen = list ? list.style.display === 'none' : true;
+  } else {
+    historyOpen = !historyOpen;
+  }
+  historyOpenSet = true;
   const list    = document.getElementById('historyList');
   const chevron = document.getElementById('historyChevron');
   if (list)    list.style.display = historyOpen ? 'flex' : 'none';
@@ -569,13 +578,14 @@ function toggleHistory() {
 
 function renderJobItem(j) {
   const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
-  const isActive   = j.job_id === currentJobId;
-  const isComplete = j.status === 'complete';
+  const isActive    = j.job_id === currentJobId;
+  const isComplete  = j.status === 'complete';
+  const stepDisplay = Math.min(j.current_step, 10);
   return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
       <div style="min-width:0">
         <div class="job-name">${esc(j.filename)}</div>
-        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${j.current_step}/10 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
+        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/10 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
       </div>
       <button
         title="Delete job"
@@ -606,22 +616,19 @@ function renderJobList(jobs) {
   }
 
   // ── Past jobs (complete / failed / blocked) ──────────────────────────────
+  // Always shown in a collapsable History section.
+  // Defaults: open when no active jobs are running, collapsed when they are.
   if (past.length) {
-    if (active.length) {
-      // When something is actively running, collapse history by default so
-      // the running job stays front-and-center.
-      html += `
-      <div class="history-header" onclick="toggleHistory()">
-        <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">History (${past.length})</span>
-        <span id="historyChevron" class="history-chevron" style="transform:${historyOpen?'rotate(0deg)':'rotate(-90deg)'}">▼</span>
-      </div>
-      <div id="historyList" style="display:${historyOpen?'flex':'none'};flex-direction:column;gap:6px">
-        ${past.map(renderJobItem).join('')}
-      </div>`;
-    } else {
-      // No active jobs — show past jobs directly (nothing to push aside)
-      html += past.map(renderJobItem).join('');
-    }
+    const defaultOpen = active.length === 0;
+    const showPast    = historyOpenSet ? historyOpen : defaultOpen;
+    html += `
+    <div class="history-header" onclick="toggleHistory()">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">History (${past.length})</span>
+      <span id="historyChevron" class="history-chevron" style="transform:${showPast?'rotate(0deg)':'rotate(-90deg)'}">▼</span>
+    </div>
+    <div id="historyList" style="display:${showPast?'flex':'none'};flex-direction:column;gap:6px">
+      ${past.map(renderJobItem).join('')}
+    </div>`;
   }
 
   el.innerHTML = html;
