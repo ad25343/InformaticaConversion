@@ -137,10 +137,10 @@ See the Roadmap below for planned versions that address these gaps.
 | Version | Name | Scope |
 |---------|------|-------|
 | **v1.0** | Mapping Conversion | Transformation logic, human review gates, PySpark / dbt / Python code generation |
-| **v1.1** | Session & Parameter Support | Session config extraction (connections, reject handling, pre/post SQL), parameter file resolution (`$$VARIABLES`) |
+| **v1.1** | Session & Parameter Support | Two-file upload (Mapping XML + Workflow XML) + optional Parameter file; auto-detect file type from XML structure; cross-reference validation (Session must reference uploaded Mapping before pipeline runs); Session config extraction (connections, reject handling, pre/post SQL, commit intervals, error thresholds); parameter file resolution (`$$VARIABLES`); generates `connections.yaml` + `runtime_config.yaml` alongside converted code |
 | **v2.0** | Workflow Conversion | WF → Airflow / Dagster / Prefect DAG; Sessions as task nodes; Worklets as TaskGroups |
 | **v2.1** | Dependency Graph | Cross-mapping lineage, load order, shared staging table awareness |
-| **v3.0** | Portfolio Migration | Bulk processing, migration dashboard, repository-level export, progress tracking across a full Informatica portfolio |
+| **v3.0** | Portfolio Migration | Bulk processing of full Repository exports; auto-detect + cross-reference engine (built in v1.1) scales to match hundreds of Mappings to their Sessions and Workflows automatically; migration dashboard showing conversion status across the full portfolio; prioritisation queue; progress tracking |
 
 ---
 
