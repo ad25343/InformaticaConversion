@@ -582,11 +582,19 @@ Documentation to review:
 Respond with ONLY the JSON array. No other text."""
 
     try:
+        import asyncio as _asyncio
         qc_max_tokens = _QC_MAX_TOKENS.get(tier, 4_096)
-        message = await client.messages.create(
-            model=MODEL,
-            max_tokens=qc_max_tokens,
-            messages=[{"role": "user", "content": prompt}],
+        # Hard timeout: verification must complete within 5 minutes.
+        # Without this, a stalled Claude API call leaves the job permanently
+        # stuck in 'verifying' state across server restarts.
+        _VERIFY_TIMEOUT_SECS = int(os.environ.get("VERIFY_TIMEOUT_SECS", "300"))
+        message = await _asyncio.wait_for(
+            client.messages.create(
+                model=MODEL,
+                max_tokens=qc_max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            ),
+            timeout=_VERIFY_TIMEOUT_SECS,
         )
         text = message.content[0].text.strip()
         if text.startswith("```"):

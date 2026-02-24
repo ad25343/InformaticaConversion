@@ -1,20 +1,24 @@
 """
 Informatica Conversion Tool — FastAPI Application Entry Point
 """
+import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from backend.db.database import init_db
+from backend.db.database import init_db, DB_PATH
 from backend.routes import router
 from backend.logger import configure_app_logging
 from backend.auth import (
@@ -22,10 +26,15 @@ from backend.auth import (
     create_session_token, COOKIE_NAME, SESSION_HOURS,
     SECRET_KEY,
 )
+from backend.limiter import limiter, RATE_LIMIT_LOGIN
+from backend.cleanup import run_cleanup_loop
 
 _startup_log = logging.getLogger("conversion.startup")
 
 TEMPLATES = Path(__file__).parent / "frontend" / "templates"
+
+
+_APP_START_TIME = time.monotonic()
 
 
 @asynccontextmanager
@@ -33,6 +42,7 @@ async def lifespan(app: FastAPI):
     log_level = os.environ.get("LOG_LEVEL", "INFO")
     configure_app_logging(log_level)
     await init_db()
+
     # ── Security startup warnings ──────────────────────────────────────────
     if SECRET_KEY == "change-me-in-production-please":
         _startup_log.warning(
@@ -45,18 +55,43 @@ async def lifespan(app: FastAPI):
             "The application is running in open-access dev mode — all requests are unauthenticated. "
             "Set APP_PASSWORD in your .env for any non-local deployment."
         )
+
+    # ── Stuck-job recovery ─────────────────────────────────────────────────
+    # Jobs left in mid-pipeline states (parsing, classifying, documenting,
+    # verifying, converting) across a server restart can never complete —
+    # their asyncio tasks are gone.  Mark them FAILED so the UI shows them
+    # as actionable (delete + re-upload) rather than spinning forever.
+    from backend.db.database import recover_stuck_jobs
+    recovered = await recover_stuck_jobs()
+    if recovered:
+        _startup_log.warning(
+            "Startup recovery: marked %d stuck job(s) as FAILED "
+            "(were mid-pipeline when server last stopped). "
+            "Delete and re-upload to retry.",
+            len(recovered),
+        )
+
+    # ── Wire rate limiter ──────────────────────────────────────────────────
+    app.state.limiter = limiter
+
+    # ── Start background job cleanup loop ─────────────────────────────────
+    asyncio.create_task(run_cleanup_loop())
+
     yield
 
 
 app = FastAPI(
     title="Informatica Conversion Tool",
     description="Converts Informatica PowerCenter mappings to Python, PySpark, or dbt",
-    version="1.0.0-mvp",
+    version="1.1.0",
     lifespan=lifespan,
     # Hide docs behind auth in production — set SHOW_DOCS=false in .env
     docs_url="/docs" if os.environ.get("SHOW_DOCS", "true").lower() != "false" else None,
     redoc_url=None,
 )
+
+# ── Rate limiter 429 handler ──────────────────────────────
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── CORS — restrict to same-origin by default ────────────
 # Allow additional origins via CORS_ORIGINS="https://your.domain,https://other.domain"
@@ -89,7 +124,27 @@ async def login_page(request: Request):
     return FileResponse(str(TEMPLATES / "login.html"))
 
 
+@app.get("/health")
+async def health_check():
+    """Lightweight health check — used by load balancers and uptime monitors."""
+    import aiosqlite
+    db_ok = False
+    try:
+        async with aiosqlite.connect(DB_PATH) as conn:
+            await conn.execute("SELECT 1")
+        db_ok = True
+    except Exception:
+        pass
+    return JSONResponse({
+        "status":         "ok" if db_ok else "degraded",
+        "version":        "1.1.0",
+        "uptime_seconds": round(time.monotonic() - _APP_START_TIME, 1),
+        "db":             "ok" if db_ok else "error",
+    }, status_code=200 if db_ok else 503)
+
+
 @app.post("/login")
+@limiter.limit(RATE_LIMIT_LOGIN)
 async def login_submit(request: Request, password: str = Form(...)):
     if check_password(password):
         token = create_session_token()
@@ -118,8 +173,9 @@ async def logout():
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
 
-    # Always allow: login page, static assets, favicon
-    if (path.startswith("/login") or
+    # Always allow: health check, login page, static assets, favicon
+    if (path == "/health" or
+        path.startswith("/login") or
         path.startswith("/static") or
         path == "/favicon.ico"):
         return await call_next(request)

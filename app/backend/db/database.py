@@ -141,6 +141,49 @@ async def delete_job(job_id: str) -> bool:
         return db.total_changes > 0
 
 
+async def recover_stuck_jobs() -> List[str]:
+    """
+    Mark jobs that were left in mid-pipeline states as FAILED.
+
+    Called once at startup.  Any job whose status is a transient processing
+    state (parsing, classifying, documenting, verifying, converting) will
+    never complete after a server restart because its asyncio task is gone.
+    Marking them FAILED makes the UI show an actionable state (delete + retry)
+    rather than a spinner that never resolves.
+
+    Returns the list of job_ids that were recovered.
+    """
+    # Statuses that represent in-flight pipeline work (not terminal, not gates)
+    _STUCK_STATUSES = (
+        "parsing", "classifying", "documenting", "verifying", "converting",
+    )
+    placeholders = ",".join("?" * len(_STUCK_STATUSES))
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT job_id FROM jobs WHERE status IN ({placeholders})",
+            _STUCK_STATUSES,
+        ) as cur:
+            rows = await cur.fetchall()
+        job_ids = [row["job_id"] for row in rows]
+        if job_ids:
+            state_patch_json = json.dumps({
+                "error": (
+                    "Job was interrupted by a server restart while the pipeline was running. "
+                    "Delete this job and re-upload the mapping to start a fresh conversion."
+                )
+            })
+            for job_id in job_ids:
+                await db.execute(
+                    "UPDATE jobs SET status='failed', state_json=?, updated_at=? "
+                    "WHERE job_id=?",
+                    (state_patch_json, now, job_id),
+                )
+            await db.commit()
+    return job_ids
+
+
 async def list_jobs() -> List[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

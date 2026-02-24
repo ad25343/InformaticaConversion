@@ -7,11 +7,12 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks, Form
+from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
 from typing import Optional as _Opt
 
 from .db import database as db
+from .limiter import limiter, RATE_LIMIT_JOBS
 from .models.schemas import (
     SignOffRecord, SignOffRequest, ReviewDecision, JobStatus,
     CodeSignOffRequest, CodeSignOffRecord, CodeReviewDecision,
@@ -35,7 +36,9 @@ _progress_queues: dict[str, asyncio.Queue] = {}
 # ─────────────────────────────────────────────
 
 @router.post("/jobs")
+@limiter.limit(RATE_LIMIT_JOBS)
 async def create_job(
+    request:        Request,
     file:           UploadFile = File(...),
     workflow_file:  _Opt[UploadFile] = File(default=None),
     parameter_file: _Opt[UploadFile] = File(default=None),
@@ -438,7 +441,8 @@ async def download_test_file(job_id: str, filename: str):
 # ─────────────────────────────────────────────
 
 @router.post("/jobs/zip")
-async def create_job_from_zip(file: UploadFile = File(...)):
+@limiter.limit(RATE_LIMIT_JOBS)
+async def create_job_from_zip(request: Request, file: UploadFile = File(...)):
     """
     Upload a single ZIP archive containing Informatica export files and start
     the conversion pipeline.

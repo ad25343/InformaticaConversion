@@ -359,6 +359,12 @@ def scan_xml_for_secrets(xml_text: str) -> list[dict]:
         return findings  # if it won't parse, XXE check already handled it
 
     for element in root.iter():
+        # lxml Comment and ProcessingInstruction nodes have a callable .tag
+        # (e.g. lxml.etree.Comment), not a string.  Their .attrib is also
+        # non-standard — iterating it causes the Cython "not iterable" error.
+        # Skip all non-Element nodes before touching .tag or .attrib.
+        if not isinstance(element.tag, str):
+            continue
         tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
         for attr_name, attr_value in element.attrib.items():
             if not _CRED_ATTR_NAMES.search(attr_name):
