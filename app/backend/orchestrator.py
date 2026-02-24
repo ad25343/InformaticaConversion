@@ -495,30 +495,32 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         )
         log.step_complete(8, "Security Scan", "SKIPPED (error)")
 
-    # ── CRITICAL GATE — block pipeline on CRITICAL findings ─────────────────
-    if security_scan and security_scan.critical_count > 0:
-        _crit_detail = "; ".join(
-            f.text for f in security_scan.findings if f.severity == "CRITICAL"
-        )[:300]
-        log.error(
-            f"Pipeline blocked: {security_scan.critical_count} CRITICAL security finding(s) "
-            f"in generated code — {_crit_detail}",
-            step=8,
+    # ── STEP 9 — HUMAN SECURITY REVIEW GATE ─────────────────────────────────
+    # Pause for human review whenever findings exist (REVIEW_RECOMMENDED or REQUIRES_FIXES).
+    # Only auto-proceed when the scan is fully clean (APPROVED).
+    if security_scan and security_scan.recommendation != "APPROVED":
+        log.state_change("security_scanning", "awaiting_security_review", step=9)
+        log.info(
+            f"Security scan found issues (recommendation={security_scan.recommendation}) — "
+            f"pausing for human review at Step 9.",
+            step=9,
         )
-        log.finalize("blocked", steps_completed=8)
+        log.finalize("awaiting_security_review", steps_completed=9)
         log.close()
-        yield await emit(8, JobStatus.BLOCKED,
-                         f"🚨 Pipeline blocked — {security_scan.critical_count} CRITICAL "
-                         "security finding(s) in generated code. Fix the issues in the source "
-                         "mapping and re-upload.",
+        yield await emit(9, JobStatus.AWAITING_SEC_REVIEW,
+                         "⚠️ Security findings require review. Pipeline paused at Step 9 — "
+                         "please review and decide to proceed, acknowledge, or fail the job.",
                          {"security_scan": security_scan.model_dump()})
         return
+    else:
+        # Clean scan — skip the human gate, continue automatically
+        log.info("Security scan clean (APPROVED) — auto-proceeding to Step 10.", step=9)
 
-    # ── STEP 9 — CODE QUALITY REVIEW ────────────────────────────────────────
-    log.step_start(9, "Code Quality Review")
-    log.state_change("security_scanning", "reviewing", step=9)
-    log.claude_call(9, "static code review")
-    yield await emit(9, JobStatus.CONVERTING,
+    # ── STEP 10 — CODE QUALITY REVIEW ───────────────────────────────────────
+    log.step_start(10, "Code Quality Review")
+    log.state_change("security_scanning", "reviewing", step=10)
+    log.claude_call(10, "static code review")
+    yield await emit(10, JobStatus.REVIEWING,
                      "Running code quality review (Claude)…",
                      {"security_scan": security_scan.model_dump()})
 
@@ -541,16 +543,16 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         log.info(
             f"Code review complete — {code_review.total_passed}/{len(code_review.checks)} checks passed, "
             f"recommendation: {rec}",
-            step=9,
+            step=10,
             data={
                 "recommendation": rec,
                 "total_passed": code_review.total_passed,
                 "total_failed": code_review.total_failed,
             },
         )
-        log.step_complete(9, "Code Quality Review", rec)
+        log.step_complete(10, "Code Quality Review", rec)
     except Exception as e:
-        log.warning(f"Code review failed (non-blocking): {e}", step=9)
+        log.warning(f"Code review failed (non-blocking): {e}", step=10)
         from .models.schemas import CodeReviewReport
         code_review = CodeReviewReport(
             mapping_name=conversion_output.mapping_name,
@@ -562,12 +564,12 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
             summary=f"Automated review could not complete: {e}. Please review the converted code manually.",
             parse_degraded=not conversion_output.parse_ok,
         )
-        log.step_complete(9, "Code Quality Review", "SKIPPED (error)")
+        log.step_complete(10, "Code Quality Review", "SKIPPED (error)")
 
-    # ── STEP 10 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
-    log.step_start(10, "Test Generation & Coverage Check")
-    log.state_change("reviewing", "testing", step=10)
-    yield await emit(10, JobStatus.TESTING, "Generating tests and checking field coverage…",
+    # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
+    log.step_start(11, "Test Generation & Coverage Check")
+    log.state_change("reviewing", "testing", step=11)
+    yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
                      {"code_review": code_review.model_dump()})
 
     try:
@@ -581,7 +583,7 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
             f"Test generation complete — coverage {test_report.coverage_pct}%, "
             f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
             f"{len(test_report.test_files)} test file(s) generated",
-            step=10,
+            step=11,
             data={
                 "coverage_pct":   test_report.coverage_pct,
                 "fields_covered": test_report.fields_covered,
@@ -592,11 +594,11 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         )
         if test_report.notes:
             for note in test_report.notes:
-                log.info(f"Test note: {note}", step=10)
-        log.step_complete(10, "Test Generation",
+                log.info(f"Test note: {note}", step=11)
+        log.step_complete(11, "Test Generation",
                           f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
     except Exception as e:
-        log.warning(f"Test generation failed (non-blocking): {e}", step=10)
+        log.warning(f"Test generation failed (non-blocking): {e}", step=11)
         from .models.schemas import TestReport as TR
         test_report = TR(
             mapping_name=conversion_output.mapping_name,
@@ -612,9 +614,9 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
             filters_missing=0,
             notes=[f"Test generation failed (non-blocking): {e}"],
         )
-        log.step_complete(10, "Test Generation", "SKIPPED (error)")
+        log.step_complete(11, "Test Generation", "SKIPPED (error)")
 
-    # ── STEP 10b — SECURITY SCAN OF GENERATED TEST FILES ────────────────────
+    # ── STEP 11b — SECURITY SCAN OF GENERATED TEST FILES ────────────────────
     # Test code can contain hardcoded credentials and real-looking connection strings.
     if test_report.test_files:
         try:
@@ -633,17 +635,202 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
                     security_scan.recommendation = "REVIEW_RECOMMENDED"
                 log.info(
                     f"Test file security scan: {len(test_sec.findings)} additional finding(s)",
-                    step=10,
+                    step=11,
                 )
         except Exception as e:
-            log.warning(f"Test file security scan failed (non-blocking): {e}", step=10)
+            log.warning(f"Test file security scan failed (non-blocking): {e}", step=11)
 
-    # ── STEP 11 — AWAIT CODE REVIEW SIGN-OFF ─────────────────────────────────
-    log.state_change("testing", "awaiting_code_review", step=11)
-    log.info("Pipeline paused — awaiting code review sign-off", step=11)
-    log.finalize("awaiting_code_review", steps_completed=11)
+    # ── STEP 12 — AWAIT CODE REVIEW SIGN-OFF ─────────────────────────────────
+    log.state_change("testing", "awaiting_code_review", step=12)
+    log.info("Pipeline paused — awaiting code review sign-off", step=12)
+    log.finalize("awaiting_code_review", steps_completed=12)
     log.close()
-    yield await emit(11, JobStatus.AWAITING_CODE_REVIEW,
+    yield await emit(12, JobStatus.AWAITING_CODE_REVIEW,
+                     "Awaiting code review sign-off. Pipeline paused.",
+                     {
+                         "test_report":   test_report.model_dump(),
+                         "security_scan": security_scan.model_dump() if security_scan else None,
+                     })
+
+
+async def resume_after_security_review(job_id: str, state: dict, filename: str = "unknown") -> AsyncGenerator[dict, None]:
+    """
+    Called after human security review (Gate 2 — Step 9).
+    Continues with Step 10 (Code Quality Review) through Step 12 (Code Sign-Off gate).
+    Decision options:
+      APPROVED     — no issues / clean scan
+      ACKNOWLEDGED — issues noted, accepted risk — continue with notes
+      FAILED       — block pipeline permanently
+    """
+    log = JobLogger(job_id, filename)
+
+    async def emit(step: int, status: JobStatus, message: str, data: dict = None):
+        patch = data or {}
+        patch["pipeline_log"] = log.get_buffer()
+        await update_job(job_id, status.value, step, patch)
+        return {"step": step, "status": status.value, "message": message}
+
+    from .models.schemas import (
+        SecurityReviewDecision, ComplexityReport, ParseReport,
+        VerificationReport, SessionParseReport,
+    )
+
+    sec_signoff = state.get("security_sign_off", {})
+    decision_str = sec_signoff.get("decision", "APPROVED")
+    reviewer = sec_signoff.get("reviewer_name", "unknown")
+
+    log.info(
+        f"Security review decision received — decision={decision_str}, reviewer={reviewer}",
+        step=9,
+    )
+
+    # Reconstruct state objects needed by Steps 10-12
+    try:
+        parse_report     = ParseReport(**state["parse_report"])
+        complexity       = ComplexityReport(**state["complexity"])
+        documentation_md = state["documentation_md"]
+        graph            = state["graph"]
+        _v = state.get("verification")
+        verification     = VerificationReport(**_v) if _v else None
+        s2t_state        = state.get("s2t", {})
+        _spr = state.get("session_parse_report")
+        session_parse_report = SessionParseReport(**_spr) if _spr else None
+        from .models.schemas import ConversionOutput, SecurityScanReport, StackAssignment
+        conversion_output = ConversionOutput(**state["conversion"])
+        stack_assignment  = StackAssignment(**state["stack_assignment"])
+        _sec = state.get("security_scan")
+        security_scan = SecurityScanReport(**_sec) if _sec else None
+    except Exception as e:
+        log.step_failed(10, "State reconstruction", str(e), exc_info=True)
+        log.close()
+        yield await emit(10, JobStatus.FAILED, f"State reconstruction failed: {e}", _err(e))
+        return
+
+    verification_dict = (verification.model_dump()
+                         if verification and hasattr(verification, "model_dump")
+                         else {})
+    s2t_dict = s2t_state
+
+    # ── STEP 10 — CODE QUALITY REVIEW ───────────────────────────────────────
+    log.step_start(10, "Code Quality Review")
+    log.state_change("awaiting_security_review", "reviewing", step=10)
+    log.claude_call(10, "static code review")
+    yield await emit(10, JobStatus.REVIEWING,
+                     "Running code quality review (Claude)…",
+                     {"security_scan": security_scan.model_dump() if security_scan else None})
+
+    try:
+        code_review = await review_agent.review(
+            conversion_output=conversion_output,
+            documentation_md=documentation_md,
+            verification=verification_dict,
+            s2t=s2t_dict,
+            parse_report=parse_report,
+        )
+        rec = code_review.recommendation
+        log.info(
+            f"Code review complete — {code_review.total_passed}/{len(code_review.checks)} checks passed, "
+            f"recommendation: {rec}",
+            step=10,
+            data={
+                "recommendation": rec,
+                "total_passed": code_review.total_passed,
+                "total_failed": code_review.total_failed,
+            },
+        )
+        log.step_complete(10, "Code Quality Review", rec)
+    except Exception as e:
+        log.warning(f"Code review failed (non-blocking): {e}", step=10)
+        from .models.schemas import CodeReviewReport
+        code_review = CodeReviewReport(
+            mapping_name=conversion_output.mapping_name,
+            target_stack=conversion_output.target_stack.value,
+            checks=[],
+            total_passed=0,
+            total_failed=0,
+            recommendation="REVIEW_RECOMMENDED",
+            summary=f"Automated review could not complete: {e}. Please review manually.",
+            parse_degraded=not conversion_output.parse_ok,
+        )
+        log.step_complete(10, "Code Quality Review", "SKIPPED (error)")
+
+    # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
+    log.step_start(11, "Test Generation & Coverage Check")
+    log.state_change("reviewing", "testing", step=11)
+    yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
+                     {"code_review": code_review.model_dump()})
+
+    try:
+        test_report = test_agent.generate_tests(
+            conversion_output=conversion_output,
+            s2t=s2t_state,
+            verification=verification_dict,
+            graph=graph,
+        )
+        log.info(
+            f"Test generation complete — coverage {test_report.coverage_pct}%, "
+            f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
+            f"{len(test_report.test_files)} test file(s) generated",
+            step=11,
+            data={
+                "coverage_pct":   test_report.coverage_pct,
+                "fields_covered": test_report.fields_covered,
+                "fields_missing": test_report.fields_missing,
+                "missing_fields": test_report.missing_fields,
+                "test_files":     list(test_report.test_files.keys()),
+            }
+        )
+        if test_report.notes:
+            for note in test_report.notes:
+                log.info(f"Test note: {note}", step=11)
+        log.step_complete(11, "Test Generation",
+                          f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
+    except Exception as e:
+        log.warning(f"Test generation failed (non-blocking): {e}", step=11)
+        from .models.schemas import TestReport as TR
+        test_report = TR(
+            mapping_name=conversion_output.mapping_name,
+            target_stack=conversion_output.target_stack.value,
+            test_files={},
+            field_coverage=[],
+            filter_coverage=[],
+            fields_covered=0,
+            fields_missing=0,
+            coverage_pct=0.0,
+            missing_fields=[],
+            filters_covered=0,
+            filters_missing=0,
+            notes=[f"Test generation failed (non-blocking): {e}"],
+        )
+        log.step_complete(11, "Test Generation", "SKIPPED (error)")
+
+    # ── STEP 11b — SECURITY SCAN OF GENERATED TEST FILES ────────────────────
+    if test_report.test_files and security_scan:
+        try:
+            test_sec = await security_agent.scan_files(
+                files=test_report.test_files,
+                mapping_name=conversion_output.mapping_name,
+                target_stack=str(conversion_output.target_stack),
+                label="test files",
+            )
+            if test_sec.findings:
+                security_scan.findings.extend(test_sec.findings)
+                security_scan.high_count   += test_sec.high_count
+                security_scan.medium_count += test_sec.medium_count
+                security_scan.low_count    += test_sec.low_count
+                log.info(
+                    f"Test file security scan: {len(test_sec.findings)} additional finding(s)",
+                    step=11,
+                )
+        except Exception as e:
+            log.warning(f"Test file security scan failed (non-blocking): {e}", step=11)
+
+    # ── STEP 12 — AWAIT CODE REVIEW SIGN-OFF ─────────────────────────────────
+    log.state_change("testing", "awaiting_code_review", step=12)
+    log.info("Pipeline paused — awaiting code review sign-off", step=12)
+    log.finalize("awaiting_code_review", steps_completed=12)
+    log.close()
+    yield await emit(12, JobStatus.AWAITING_CODE_REVIEW,
                      "Awaiting code review sign-off. Pipeline paused.",
                      {
                          "test_report":   test_report.model_dump(),
@@ -667,32 +854,32 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
 
     log.info(
         f"Code sign-off received — decision={decision}, reviewer={reviewer}",
-        step=11,
+        step=12,
     )
 
     if decision == "REGENERATE":
         # Soft reject — mark failed so reviewer can re-run conversion from Step 6
-        log.step_failed(11, "Code Sign-Off", "Reviewer requested regeneration")
-        log.finalize("failed", steps_completed=11)
+        log.step_failed(12, "Code Sign-Off", "Reviewer requested regeneration")
+        log.finalize("failed", steps_completed=12)
         log.close()
-        yield await emit(11, JobStatus.FAILED,
+        yield await emit(12, JobStatus.FAILED,
                          "Code review — regeneration requested. Please re-run the job.")
         return
 
     if decision == "REJECTED":
         # Hard reject — job is permanently blocked; route handler already set BLOCKED status
-        log.step_failed(11, "Code Sign-Off",
+        log.step_failed(12, "Code Sign-Off",
                         f"Code hard-rejected by reviewer '{reviewer}'. Job blocked.")
-        log.finalize("blocked", steps_completed=11)
+        log.finalize("blocked", steps_completed=12)
         log.close()
-        yield await emit(11, JobStatus.BLOCKED,
+        yield await emit(12, JobStatus.BLOCKED,
                          "❌ Code review rejected. Job is blocked — upload the mapping again "
                          "to start a fresh conversion.")
         return
 
     # APPROVED — mark complete
-    log.info("✅ Code review approved — pipeline complete", step=11)
-    log.finalize("complete", steps_completed=11)
+    log.info("✅ Code review approved — pipeline complete", step=12)
+    log.finalize("complete", steps_completed=12)
     log.close()
-    yield await emit(11, JobStatus.COMPLETE,
+    yield await emit(12, JobStatus.COMPLETE,
                      "✅ Pipeline complete — code approved and ready for deployment.")

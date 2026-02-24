@@ -20,9 +20,12 @@ class JobStatus(str, Enum):
     AWAITING_REVIEW  = "awaiting_review"
     ASSIGNING_STACK  = "assigning_stack"
     CONVERTING       = "converting"
-    VALIDATING       = "validating"
-    TESTING          = "testing"           # Step 9 — test generation
-    AWAITING_CODE_REVIEW = "awaiting_code_review"  # Step 10 — code sign-off gate
+    VALIDATING             = "validating"
+    SECURITY_SCANNING      = "security_scanning"
+    AWAITING_SEC_REVIEW    = "awaiting_security_review"  # Step 9 — security sign-off gate
+    REVIEWING              = "reviewing"
+    TESTING                = "testing"                   # Step 11 — test generation
+    AWAITING_CODE_REVIEW   = "awaiting_code_review"      # Step 12 — code sign-off gate
     COMPLETE         = "complete"
     FAILED           = "failed"
     BLOCKED          = "blocked"
@@ -44,10 +47,16 @@ class ReviewDecision(str, Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
+class SecurityReviewDecision(str, Enum):
+    """Gate 2 (Step 9) decisions — security scan human review."""
+    APPROVED     = "APPROVED"      # No issues / clean scan — proceed
+    ACKNOWLEDGED = "ACKNOWLEDGED"  # Issues noted, accepted risk — proceed with notes
+    FAILED       = "FAILED"        # Unacceptable findings — block pipeline
+
 class CodeReviewDecision(str, Enum):
-    """Gate 2 (Step 10) decisions — generated code review sign-off."""
+    """Gate 3 (Step 12) decisions — generated code review sign-off."""
     APPROVED   = "APPROVED"    # Accept the code — pipeline complete
-    REGENERATE = "REGENERATE"  # Reject this attempt — re-run conversion (Steps 6–9)
+    REGENERATE = "REGENERATE"  # Reject this attempt — re-run conversion (Steps 6–11)
     REJECTED   = "REJECTED"    # Hard stop — code is fundamentally unacceptable
 
 class FileType(str, Enum):
@@ -381,6 +390,21 @@ class SignOffRequest(BaseModel):
     decision:          ReviewDecision
     flag_resolutions:  List[FlagResolution] = []
     notes:             Optional[str] = None
+
+class SecuritySignOffRecord(BaseModel):
+    """Stored on the job after security review gate (Step 9)."""
+    reviewer_name: str
+    reviewer_role: str
+    review_date:   str
+    decision:      SecurityReviewDecision
+    notes:         Optional[str] = None
+
+class SecuritySignOffRequest(BaseModel):
+    """POST body for /jobs/{job_id}/security-review."""
+    reviewer_name: str
+    reviewer_role: str
+    decision:      SecurityReviewDecision
+    notes:         Optional[str] = None
 
 class CodeSignOffRequest(BaseModel):
     reviewer_name: str

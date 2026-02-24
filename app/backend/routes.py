@@ -16,6 +16,7 @@ from .limiter import jobs_limiter
 from .models.schemas import (
     SignOffRecord, SignOffRequest, ReviewDecision, JobStatus,
     CodeSignOffRequest, CodeSignOffRecord, CodeReviewDecision,
+    SecuritySignOffRecord, SecuritySignOffRequest, SecurityReviewDecision,
 )
 from . import orchestrator
 from .logger import read_job_log, read_job_log_raw, job_log_path, list_log_registry
@@ -319,7 +320,72 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
 
 
 # ─────────────────────────────────────────────
-# Code Review Sign-off (Step 10 gate)
+# Security Review Sign-off (Step 9 gate)
+# ─────────────────────────────────────────────
+
+@router.post("/jobs/{job_id}/security-review")
+async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
+    """
+    Submit human security review decision (Gate 2 — Step 9).
+    APPROVED / ACKNOWLEDGED  → resume pipeline from Step 10.
+    FAILED                   → block the job permanently.
+    """
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] != JobStatus.AWAITING_SEC_REVIEW.value:
+        raise HTTPException(400, f"Job is not awaiting security review (status: {job['status']})")
+
+    sec_signoff = SecuritySignOffRecord(
+        reviewer_name=payload.reviewer_name,
+        reviewer_role=payload.reviewer_role,
+        review_date=__import__("datetime").datetime.utcnow().isoformat(),
+        decision=payload.decision,
+        notes=payload.notes,
+    )
+
+    logger.info("Security review received: job_id=%s decision=%s reviewer=%s",
+                job_id, payload.decision, payload.reviewer_name)
+
+    await db.update_job(job_id, JobStatus.AWAITING_SEC_REVIEW.value, 9,
+                        {"security_sign_off": sec_signoff.model_dump()})
+
+    if payload.decision == SecurityReviewDecision.FAILED:
+        await db.update_job(job_id, JobStatus.BLOCKED.value, 9, {})
+        logger.info("Security review failed — job blocked: job_id=%s", job_id)
+        return {
+            "message": "Security review failed. Job is blocked — pipeline will not proceed.",
+            "job_id": job_id,
+            "decision": payload.decision,
+        }
+
+    # APPROVED or ACKNOWLEDGED — resume pipeline from Step 10
+    queue: asyncio.Queue = asyncio.Queue()
+    _progress_queues[job_id] = queue
+
+    state    = job["state"]
+    state["security_sign_off"] = sec_signoff.model_dump()
+    filename = job["filename"]
+
+    async def _resume():
+        async for progress in orchestrator.resume_after_security_review(job_id, state, filename):
+            await queue.put(progress)
+        await queue.put(None)
+
+    task = asyncio.create_task(_resume())
+    _active_tasks[job_id] = task
+    logger.info("Pipeline resuming after security review: job_id=%s decision=%s",
+                job_id, payload.decision)
+
+    return {
+        "message": f"Security review recorded ({payload.decision}). Pipeline resuming from Step 10.",
+        "job_id": job_id,
+        "decision": payload.decision,
+    }
+
+
+# ─────────────────────────────────────────────
+# Code Review Sign-off (Step 12 gate)
 # ─────────────────────────────────────────────
 
 @router.post("/jobs/{job_id}/code-signoff")
@@ -344,12 +410,12 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     logger.info("Code sign-off received: job_id=%s decision=%s reviewer=%s",
                 job_id, payload.decision, payload.reviewer_name)
 
-    await db.update_job(job_id, JobStatus.AWAITING_CODE_REVIEW.value, 10,
+    await db.update_job(job_id, JobStatus.AWAITING_CODE_REVIEW.value, 12,
                         {"code_sign_off": code_signoff.model_dump()})
 
     # Hard reject — block the job immediately, no pipeline resume needed
     if payload.decision == CodeReviewDecision.REJECTED:
-        await db.update_job(job_id, JobStatus.BLOCKED.value, 10, {})
+        await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
         logger.info("Code review hard-rejected: job_id=%s reviewer=%s",
                     job_id, payload.reviewer_name)
         return {

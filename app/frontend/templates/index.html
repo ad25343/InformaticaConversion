@@ -355,7 +355,7 @@
     <div class="empty">
       <div class="empty-icon">🔄</div>
       <div class="empty-title">Informatica Conversion Tool</div>
-      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 11-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
+      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
     </div>
   </main>
 </div>
@@ -377,9 +377,10 @@ const STEPS = [
   { n:6,  label:"Stack" },
   { n:7,  label:"Convert" },
   { n:8,  label:"Security" },
-  { n:9,  label:"Quality" },
-  { n:10, label:"Tests" },
-  { n:11, label:"Sign-Off" },
+  { n:9,  label:"Sec Rev" },
+  { n:10, label:"Quality" },
+  { n:11, label:"Tests" },
+  { n:12, label:"Sign-Off" },
 ];
 
 const STATUS_BADGE = {
@@ -391,11 +392,12 @@ const STATUS_BADGE = {
   awaiting_review: ['badge-waiting','Awaiting Review'],
   assigning_stack: ['badge-running','Assigning Stack'],
   converting:        ['badge-running','Converting'],
-  security_scanning: ['badge-running','Security Scan'],
-  validating:        ['badge-running','Security Scan'],
-  reviewing:         ['badge-running','Quality Review'],
-  testing:           ['badge-running','Testing'],
-  awaiting_code_review: ['badge-waiting','Code Review'],
+  security_scanning:      ['badge-running','Security Scan'],
+  validating:             ['badge-running','Security Scan'],
+  awaiting_security_review: ['badge-waiting','Sec Review'],
+  reviewing:              ['badge-running','Quality Review'],
+  testing:                ['badge-running','Testing'],
+  awaiting_code_review:   ['badge-waiting','Code Review'],
   complete:             ['badge-complete','Complete'],
   failed:               ['badge-failed','Failed'],
   blocked:              ['badge-blocked','Blocked'],
@@ -588,8 +590,8 @@ async function loadJobs() {
 const _ACTIVE_STATUSES = new Set([
   'pending','parsing','classifying','documenting','verifying',
   'awaiting_review','assigning_stack','converting',
-  'security_scanning','validating','reviewing','testing',
-  'awaiting_code_review'
+  'security_scanning','validating','awaiting_security_review',
+  'reviewing','testing','awaiting_code_review'
 ]);
 
 // Persists across re-renders so toggle state survives polling.
@@ -616,12 +618,12 @@ function renderJobItem(j) {
   const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
   const isActive    = j.job_id === currentJobId;
   const isComplete  = j.status === 'complete';
-  const stepDisplay = Math.min(j.current_step, 11);
+  const stepDisplay = Math.min(j.current_step, 12);
   return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
       <div style="min-width:0">
         <div class="job-name">${esc(j.filename)}</div>
-        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/11 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
+        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/12 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
       </div>
       <button
         title="Delete job"
@@ -1183,7 +1185,72 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 9 — CODE QUALITY REVIEW ───────────────
+  // ── STEP 9 — SECURITY REVIEW GATE ───────────────
+  if (job.status === 'awaiting_security_review' || state.security_sign_off) {
+    const signedOff = !!state.security_sign_off;
+    const srd = state.security_sign_off || {};
+    const srdDecision = srd.decision || '';
+    const srdDecColor = { APPROVED:'var(--accent2)', ACKNOWLEDGED:'var(--warn)', FAILED:'var(--danger)' }[srdDecision] || 'var(--muted)';
+
+    if (signedOff) {
+      const srdIcon = { APPROVED:'✅', ACKNOWLEDGED:'⚠️', FAILED:'❌' }[srdDecision] || '❓';
+      html += `<div class="card" style="border-color:${srdDecColor}">
+        <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+          <span><span class="icon">🔐</span> Step 9 — Security Review</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span class="badge ${{ APPROVED:'badge-complete', ACKNOWLEDGED:'badge-waiting', FAILED:'badge-blocked' }[srdDecision]||'badge-pending'}" style="font-size:11px">${srdIcon} ${srdDecision}</span>
+            <span class="card-chevron" style="margin-left:0">▼</span>
+          </span>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:24px;font-size:13px;margin-bottom:10px">
+            <div><span style="color:var(--muted)">Reviewer:</span> <strong>${esc(srd.reviewer_name||'')}</strong></div>
+            <div><span style="color:var(--muted)">Role:</span> ${esc(srd.reviewer_role||'')}</div>
+            <div><span style="color:var(--muted)">Date:</span> ${(srd.review_date||'').slice(0,10)}</div>
+          </div>
+          ${srd.notes ? `<div style="font-size:13px;color:var(--muted);padding:8px 12px;background:var(--surface2);border-radius:6px">${esc(srd.notes)}</div>` : ''}
+        </div>
+      </div>`;
+    } else {
+      // Awaiting security review — show decision form
+      const recLabel = (state.security_scan?.recommendation||'REVIEW_RECOMMENDED').replace(/_/g,' ');
+      html += `<div class="card" style="border-color:var(--warn)">
+        <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
+          <span><span class="icon">🔐</span> Step 9 — Security Review <span style="font-size:11px;color:var(--warn);margin-left:8px">⏳ AWAITING YOUR DECISION</span></span>
+          <span class="card-chevron" style="margin-left:0">▼</span>
+        </div>
+        <div class="card-body">
+          <div style="font-size:13px;color:var(--text);margin-bottom:16px;padding:12px;background:rgba(234,179,8,.07);border-radius:8px;border:1px solid rgba(234,179,8,.25)">
+            The automated security scan returned <strong>${esc(recLabel)}</strong>. Please review the findings in Step 8 above and make a decision below.
+          </div>
+          <div class="form-row">
+            <label class="form-label">Your Name</label>
+            <input id="secReviewerName" class="form-input" placeholder="Reviewer name" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Role</label>
+            <select id="secReviewerRole" class="form-input">
+              <option value="Security Engineer">Security Engineer</option>
+              <option value="Lead Developer">Lead Developer</option>
+              <option value="Tech Lead">Tech Lead</option>
+              <option value="Architect">Architect</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Notes (optional)</label>
+            <textarea id="secReviewNotes" class="form-input" rows="2" placeholder="Any notes on the decision…"></textarea>
+          </div>
+          <div class="form-actions" style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-success" onclick="event.stopPropagation();submitSecurityReview('${job.job_id}','APPROVED')">✅ Approve — Proceed</button>
+            <button class="btn btn-warning" onclick="event.stopPropagation();submitSecurityReview('${job.job_id}','ACKNOWLEDGED')" style="background:var(--warn);color:#000">⚠️ Acknowledge &amp; Proceed</button>
+            <button class="btn btn-danger"  onclick="event.stopPropagation();submitSecurityReview('${job.job_id}','FAILED')">❌ Fail — Block Pipeline</button>
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+
+  // ── STEP 10 — CODE QUALITY REVIEW ───────────────
   if (state.code_review) {
     const cr = state.code_review;
     const recColor = { APPROVED: 'var(--accent2)', REVIEW_RECOMMENDED: 'var(--warn)', REQUIRES_FIXES: 'var(--danger)' }[cr.recommendation] || 'var(--muted)';
@@ -1197,7 +1264,7 @@ function renderJobPanel(job) {
 
     html += `<div class="card" style="border-color:${recColor}">
       <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-        <span><span class="icon">🔬</span> Step 9 — Code Quality Review</span>
+        <span><span class="icon">🔬</span> Step 10 — Code Quality Review</span>
         <span style="display:flex;align-items:center;gap:8px">
           <span class="badge ${recBadge}" style="font-size:11px">${recIcon} ${cr.recommendation?.replace(/_/g,' ')}</span>
           <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1241,14 +1308,14 @@ function renderJobPanel(job) {
   } else if (state.reconciliation) {
     // Legacy placeholder (old jobs)
     html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔬</span> Step 9 — Code Quality Review<span class="card-chevron">▼</span></div>
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔬</span> Step 10 — Code Quality Review<span class="card-chevron">▼</span></div>
       <div class="card-body">
-      <div style="font-size:13px;color:var(--muted)">This job was run before Step 9 was implemented. Re-run to get a full code review.</div>
+      <div style="font-size:13px;color:var(--muted)">This job was run before Step 10 was implemented. Re-run to get a full code review.</div>
       </div>
     </div>`;
   }
 
-  // ── STEP 10 — TEST GENERATION & COVERAGE ───────────────────
+  // ── STEP 11 — TEST GENERATION & COVERAGE ───────────────────
   if (state.test_report) {
     const tr = state.test_report;
     const pct = tr.coverage_pct ?? 0;
@@ -1259,7 +1326,7 @@ function renderJobPanel(job) {
 
     html += `<div class="card" style="border-color:${pctColor}">
       <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-        <span><span class="icon">🧪</span> Step 10 — Test Generation &amp; Coverage Check</span>
+        <span><span class="icon">🧪</span> Step 11 — Test Generation &amp; Coverage Check</span>
         <span style="display:flex;align-items:center;gap:8px">
           <span class="badge ${pctBadge}" style="font-size:11px">${pct}% Field Coverage</span>
           <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1358,7 +1425,7 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 10 — CODE REVIEW SIGN-OFF ────────────────────────
+  // ── STEP 12 — CODE REVIEW SIGN-OFF ────────────────────────
   if (job.status === 'awaiting_code_review' || state.code_sign_off) {
     const signedOff = !!state.code_sign_off;
     const sod = state.code_sign_off || {};
@@ -1367,7 +1434,7 @@ function renderJobPanel(job) {
       const isApproved = sod.decision === 'APPROVED';
       html += `<div class="card" style="border-color:${isApproved ? 'var(--accent2)' : 'var(--danger)'}">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-          <span><span class="icon">🏁</span> Step 11 — Code Review Sign-Off</span>
+          <span><span class="icon">🏁</span> Step 12 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
             <span class="badge ${isApproved ? 'badge-complete' : 'badge-blocked'}" style="font-size:11px">${isApproved ? '✅ APPROVED' : '🔄 REGENERATE'}</span>
             <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1386,7 +1453,7 @@ function renderJobPanel(job) {
       // Gate is open — show sign-off form
       html += `<div class="card" style="border-color:var(--accent)">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
-          <span><span class="icon">🏁</span> Step 11 — Code Review Sign-Off</span>
+          <span><span class="icon">🏁</span> Step 12 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
             <span class="badge badge-waiting" style="font-size:11px">⏳ Awaiting Sign-Off</span>
             <span class="card-chevron" style="margin-left:0">▼</span>
@@ -1578,7 +1645,7 @@ function renderStepper(currentStep, status) {
       let dotClass = '';
       if (s.n < currentStep) dotClass = 'done';
       else if (s.n === currentStep) {
-        if (status === 'awaiting_review' || status === 'awaiting_code_review') dotClass = 'waiting';
+        if (status === 'awaiting_review' || status === 'awaiting_security_review' || status === 'awaiting_code_review') dotClass = 'waiting';
         else if (isBlocked) dotClass = 'blocked';
         else dotClass = 'active';
       }
@@ -1677,7 +1744,43 @@ async function submitSignoff(jobId, decision, flags) {
 }
 
 // ─────────────────────────────────────────────
-// Code review sign-off submission (Step 10)
+// Security review submission (Step 9 gate)
+// ─────────────────────────────────────────────
+async function submitSecurityReview(jobId, decision) {
+  const name  = document.getElementById('secReviewerName')?.value?.trim();
+  const role  = document.getElementById('secReviewerRole')?.value;
+  const notes = document.getElementById('secReviewNotes')?.value?.trim();
+
+  if (!name) { alert('Please enter your name.'); return; }
+
+  const labels = {
+    APPROVED:     'approve and proceed to code quality review',
+    ACKNOWLEDGED: 'acknowledge the findings and proceed (accepted risk)',
+    FAILED:       'FAIL this job and block the pipeline permanently',
+  };
+  if (!confirm(`Are you sure you want to ${labels[decision] || decision}?`)) return;
+
+  const payload = { reviewer_name: name, reviewer_role: role, decision, notes: notes || null };
+
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/security-review`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Security review failed: ' + (err.detail || res.statusText));
+      return;
+    }
+    await openJob(jobId);
+  } catch(e) {
+    alert('Security review submission failed: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Code review sign-off submission (Step 12)
 // ─────────────────────────────────────────────
 async function submitCodeSignoff(jobId, decision) {
   const name  = document.getElementById('codeReviewerName')?.value?.trim();
@@ -2017,10 +2120,21 @@ function buildReportMarkdown(job) {
     }
   }
 
-  // ── Step 9 — Code Quality Review ─────────────────────────────────────────
+  // ── Step 9 — Security Review ─────────────────────────────────────────────
+  const sso = state.security_sign_off;
+  if (sso) {
+    h2('Step 9 — Security Review');
+    kv('Decision',  sso.decision);
+    kv('Reviewer',  sso.reviewer_name);
+    kv('Role',      sso.reviewer_role);
+    kv('Date',      (sso.review_date||'').slice(0,10));
+    if (sso.notes) p(sso.notes);
+  }
+
+  // ── Step 10 — Code Quality Review ─────────────────────────────────────────
   const cr = state.code_review;
   if (cr) {
-    h2('Step 9 — Code Quality Review');
+    h2('Step 10 — Code Quality Review');
     kv('Recommendation', cr.recommendation);
     kv('Passed', cr.total_passed ?? 0);
     kv('Failed', cr.total_failed ?? 0);
@@ -2035,10 +2149,10 @@ function buildReportMarkdown(job) {
     }
   }
 
-  // ── Step 10 — Test Generation ─────────────────────────────────────────────
+  // ── Step 11 — Test Generation ─────────────────────────────────────────────
   const tr = state.test_report;
   if (tr) {
-    h2('Step 10 — Test Generation & Coverage');
+    h2('Step 11 — Test Generation & Coverage');
     kv('Field Coverage', `${tr.coverage_pct ?? 0}%`);
     kv('Fields Covered', tr.fields_covered ?? 0);
     kv('Fields Missing', tr.fields_missing ?? 0);
@@ -2058,10 +2172,10 @@ function buildReportMarkdown(job) {
     }
   }
 
-  // ── Step 11 — Code Review Sign-Off ───────────────────────────────────────
+  // ── Step 12 — Code Review Sign-Off ───────────────────────────────────────
   const cs = state.code_sign_off;
   if (cs) {
-    h2('Step 11 — Code Review Sign-Off');
+    h2('Step 12 — Code Review Sign-Off');
     kv('Reviewer', cs.reviewer_name);
     kv('Role',     cs.reviewer_role);
     kv('Decision', cs.decision);
