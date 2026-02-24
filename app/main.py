@@ -8,12 +8,10 @@ import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Form
+from fastapi import Depends, FastAPI, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,7 +24,7 @@ from backend.auth import (
     create_session_token, COOKIE_NAME, SESSION_HOURS,
     SECRET_KEY,
 )
-from backend.limiter import limiter, RATE_LIMIT_LOGIN
+from backend.limiter import login_limiter
 from backend.cleanup import run_cleanup_loop
 
 _startup_log = logging.getLogger("conversion.startup")
@@ -71,9 +69,6 @@ async def lifespan(app: FastAPI):
             len(recovered),
         )
 
-    # ── Wire rate limiter ──────────────────────────────────────────────────
-    app.state.limiter = limiter
-
     # ── Start background job cleanup loop ─────────────────────────────────
     asyncio.create_task(run_cleanup_loop())
 
@@ -89,9 +84,6 @@ app = FastAPI(
     docs_url="/docs" if os.environ.get("SHOW_DOCS", "true").lower() != "false" else None,
     redoc_url=None,
 )
-
-# ── Rate limiter 429 handler ──────────────────────────────
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── CORS — restrict to same-origin by default ────────────
 # Allow additional origins via CORS_ORIGINS="https://your.domain,https://other.domain"
@@ -144,8 +136,11 @@ async def health_check():
 
 
 @app.post("/login")
-@limiter.limit(RATE_LIMIT_LOGIN)
-async def login_submit(request: Request, password: str = Form(...)):
+async def login_submit(
+    request: Request,
+    password: str = Form(...),
+    _rl: None = Depends(login_limiter),
+):
     if check_password(password):
         token = create_session_token()
         response = RedirectResponse("/", status_code=302)
