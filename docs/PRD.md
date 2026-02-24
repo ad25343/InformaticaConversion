@@ -2,9 +2,10 @@
 ## Informatica Conversion Tool
 
 **Version:** 1.1
-**Author:** Aravind Doma
+**Author:** ad25343
 **Last Updated:** 2026-02-24
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
+**Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
 ---
 
@@ -74,7 +75,7 @@ New features:
 - YAML artifact generation (connections.yaml, runtime_config.yaml) from session config
 - UNRESOLVED_VARIABLE flags when $$VARs have no value in the parameter file
 - Security-hardened infrastructure: XXE protection, Zip Slip / Zip Bomb / symlink defense, 7 CVEs patched, CORS middleware, startup secret-key warning, per-upload file size enforcement
-- Step 8a — Security Scan: bandit static analysis + Claude security review of all generated files
+- Step 8 — Security Scan (dedicated step): bandit (Python/PySpark), YAML regex secrets check, Claude review for all stacks; CRITICAL findings block the pipeline before code review reaches the reviewer; test files re-scanned after Step 10
 - Paired sample files for all 9 sample mappings (simple / medium / complex)
 
 ### v2.0 — Planned
@@ -100,15 +101,16 @@ New features:
 ## 4. Pipeline Architecture
 
 ```
-Upload (Mapping XML + optional Workflow XML + optional Parameter File)
+Upload (Mapping XML + optional Workflow XML + optional Parameter File  OR  ZIP archive)
     │
     ▼
 Step 0   Session & Parameter Parse
          Auto-detect file types → Cross-reference validation → $$VAR resolution
+         → Scan uploaded XML for embedded credentials (passwords in CONNECTION attrs)
          → Blocked if INVALID (mapping/session mismatch); PARTIAL if warnings
     │
     ▼
-Step 1   XML Parse & Graph Extraction  [deterministic, lxml]
+Step 1   XML Parse & Graph Extraction  [deterministic, lxml + XXE-hardened parser]
 Step 2   S2T Field Mapping             [Claude + openpyxl Excel output]
 Step 3   Documentation Generation      [Claude, Markdown]
 Step 4   Verification                  [deterministic + Claude flags]
@@ -121,14 +123,22 @@ Step 5   ◼ Gate 1 — Human Review Sign-off
     ▼
 Step 6   Target Stack Assignment       [Claude classifier]
 Step 7   Code Generation               [Claude, multi-file output]
-Step 8a  Security Scan                 [bandit + Claude, non-blocking]
-Step 8   Code Quality Review           [Claude cross-check vs. docs & S2T]
-Step 9   Test Generation               [Claude, pytest / dbt test stubs]
     │
     ▼
-Step 10  ◼ Gate 2 — Code Review Sign-off
+Step 8   Security Scan                 [bandit (Python) + YAML regex + Claude review]
+         → CRITICAL finding → BLOCKED (terminal — fix source and re-upload)
+         → HIGH/MEDIUM      → REVIEW_RECOMMENDED (continues, flagged for reviewer)
+         → clean            → APPROVED
+    │
+    ▼
+Step 9   Code Quality Review           [Claude cross-check vs. docs, S2T, parse flags]
+Step 10  Test Generation               [Claude, pytest / dbt test stubs]
+         → Security re-scan of generated test files (merged into Step 8 report)
+    │
+    ▼
+Step 11  ◼ Gate 2 — Code Review Sign-off
          APPROVE     → COMPLETE
-         REGENERATE  → re-run Steps 7–9
+         REGENERATE  → re-run Steps 7–10
          REJECT      → BLOCKED (terminal)
 ```
 
@@ -150,7 +160,9 @@ flows through `backend/security.py`.
 | Hardcoded secret key | Startup warning logged if `SECRET_KEY` is the default placeholder value |
 | Unauthenticated access | Session-cookie middleware enforces login on all non-static routes |
 | CORS misconfiguration | No CORS headers emitted by default (same-origin only); opt-in via `CORS_ORIGINS` env var |
-| Insecure generated code | Step 8a — bandit B-code scan + Claude security review on every generated file |
+| Credentials in uploaded XML | `scan_xml_for_secrets()` — checks CONNECTION/SESSION attrs for non-placeholder passwords at Step 0 |
+| Insecure generated code | Step 8 — bandit (Python), YAML regex secrets scan, Claude review (all stacks); CRITICAL findings block pipeline |
+| Secrets in generated test code | Step 10 test files re-scanned and merged into Step 8 security report before Gate 2 |
 
 ---
 
@@ -195,10 +207,10 @@ Job
     ├── sign_off               Step 5
     ├── stack_assignment       Step 6
     ├── conversion             Step 7  (files dict: filename → code)
-    ├── security_scan          Step 8a
-    ├── code_review            Step 8
-    ├── test_report            Step 9
-    └── code_sign_off          Step 10
+    ├── security_scan          Step 8
+    ├── code_review            Step 9
+    ├── test_report            Step 10
+    └── code_sign_off          Step 11
 ```
 
 ---

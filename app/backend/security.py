@@ -6,16 +6,19 @@ Do NOT bypass these helpers to accept raw user input.
 
 Protections provided
 ────────────────────
-  XXE        — safe_xml_parser() disables DTD loading and external entity resolution
-  Zip Slip   — safe_zip_extract() validates every entry path before writing
-  Zip Bomb   — safe_zip_extract() enforces total extracted-size and entry-count limits
-  File Size  — validate_upload_size() enforces per-file byte limits
-  Code Scan  — scan_python_with_bandit() wraps bandit for generated-code audits
+  XXE          — safe_xml_parser() disables DTD loading and external entity resolution
+  Zip Slip     — safe_zip_extract() validates every entry path before writing
+  Zip Bomb     — safe_zip_extract() enforces total extracted-size and entry-count limits
+  File Size    — validate_upload_size() enforces per-file byte limits
+  Input Scan   — scan_xml_for_secrets() checks uploaded XMLs for embedded credentials
+  YAML Scan    — scan_yaml_for_secrets() checks config files for plaintext secrets
+  Code Scan    — scan_python_with_bandit() wraps bandit for generated-code audits
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -310,3 +313,135 @@ def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
         Path(tmp_path).unlink(missing_ok=True) if "tmp_path" in dir() else None
 
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Input XML credential scanner
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Attribute names that should never carry plaintext passwords
+_CRED_ATTR_NAMES = re.compile(
+    r"(password|passwd|pwd|secret|apikey|api_key|token|credential|auth)",
+    re.IGNORECASE,
+)
+
+# Values that look like a real secret (non-empty, not a $VARIABLE or placeholder)
+_PLACEHOLDER_RE = re.compile(
+    r"^\$\$?\w+$"          # Informatica $$VAR or $VAR
+    r"|^<.+>$"             # XML placeholder like <your_password>
+    r"|^[*]+$"             # masked-out value
+    r"|^changeme$"
+    r"|^your[_-]",
+    re.IGNORECASE,
+)
+
+
+def scan_xml_for_secrets(xml_text: str) -> list[dict]:
+    """
+    Scan uploaded Informatica XML for hardcoded credentials in attribute values.
+
+    Checks every element attribute whose name matches credential-like keywords
+    (PASSWORD, PASSWD, SECRET, TOKEN, etc.) and flags non-empty, non-placeholder
+    values as potential leaks.
+
+    Returns a list of finding dicts:
+        {severity, attribute, element, value_preview, message}
+    """
+    findings: list[dict] = []
+
+    try:
+        root = safe_parse_xml(xml_text)
+    except Exception:
+        return findings  # if it won't parse, XXE check already handled it
+
+    for element in root.iter():
+        tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
+        for attr_name, attr_value in element.attrib.items():
+            if not _CRED_ATTR_NAMES.search(attr_name):
+                continue
+            if not attr_value or _PLACEHOLDER_RE.match(attr_value.strip()):
+                continue
+            # Flag it — show only first 6 chars of the value
+            preview = attr_value[:6] + "…" if len(attr_value) > 6 else attr_value
+            findings.append({
+                "severity":      "HIGH",
+                "attribute":     attr_name,
+                "element":       tag,
+                "value_preview": preview,
+                "message": (
+                    f"Element <{tag}> has attribute '{attr_name}' with a non-placeholder "
+                    f"value ('{preview}'). This may be a hardcoded credential embedded in "
+                    "the Informatica export — review before committing or sharing."
+                ),
+            })
+            log.warning(
+                "Possible hardcoded credential in uploaded XML: element=%s attr=%s",
+                tag, attr_name,
+            )
+
+    return findings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# YAML secrets scanner
+# ─────────────────────────────────────────────────────────────────────────────
+
+# YAML keys that suggest a value may be a secret
+_YAML_SECRET_KEY_RE = re.compile(
+    r"^\s*(password|passwd|pwd|secret|token|api[_-]?key|credential|auth[_-]?key"
+    r"|private[_-]?key|access[_-]?key|client[_-]?secret)\s*:",
+    re.IGNORECASE,
+)
+
+# YAML values that look like a real secret (not a placeholder or $VAR)
+_YAML_PLACEHOLDER_RE = re.compile(
+    r"^\s*(\"\"|''|null|~|None|changeme|<.+>|\$\$?\w+|your[_-])",
+    re.IGNORECASE,
+)
+
+
+def scan_yaml_for_secrets(yaml_text: str, filename: str = "config.yaml") -> list[dict]:
+    """
+    Scan a YAML config file line-by-line for plaintext secrets.
+
+    Uses regex rather than a full YAML parser so it works even on Jinja-templated
+    dbt files and partial YAML snippets.
+
+    Returns a list of finding dicts:
+        {severity, line, key, value_preview, filename, message}
+    """
+    findings: list[dict] = []
+
+    for lineno, line in enumerate(yaml_text.splitlines(), start=1):
+        if not _YAML_SECRET_KEY_RE.match(line):
+            continue
+
+        # Extract the value part after the colon
+        _, _, value_part = line.partition(":")
+        value = value_part.strip().strip("\"'")
+
+        if not value or _YAML_PLACEHOLDER_RE.match(value):
+            continue
+
+        preview = value[:8] + "…" if len(value) > 8 else value
+        key_match = _YAML_SECRET_KEY_RE.match(line)
+        key_name = key_match.group(1) if key_match else "unknown"
+
+        findings.append({
+            "severity":      "HIGH",
+            "line":          lineno,
+            "key":           key_name,
+            "value_preview": preview,
+            "filename":      filename,
+            "message": (
+                f"Line {lineno} of '{filename}': key '{key_name}' appears to contain "
+                f"a plaintext secret ('{preview}'). Use environment variables or a "
+                "secrets manager instead."
+            ),
+        })
+        log.warning(
+            "Possible plaintext secret in YAML: file=%s line=%d key=%s",
+            filename, lineno, key_name,
+        )
+
+    return findings

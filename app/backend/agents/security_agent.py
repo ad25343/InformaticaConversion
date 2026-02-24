@@ -36,15 +36,16 @@ from ..models.schemas import (
     SecurityFinding,
     SecurityScanReport,
 )
-from ..security import scan_python_with_bandit
+from ..security import scan_python_with_bandit, scan_yaml_for_secrets
 
 log = logging.getLogger("conversion.security_agent")
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
 # ── File-type routing ────────────────────────────────────────────────────────
-# bandit only handles Python; everything goes to Claude
+# bandit only handles Python; YAML gets a dedicated regex scan; everything goes to Claude
 _BANDIT_EXTENSIONS = {".py"}
+_YAML_EXTENSIONS   = {".yaml", ".yml"}
 _CLAUDE_SKIP_EXTENSIONS = {".pyc", ".pyo"}  # binary — never sent to Claude
 
 # ── Claude security review prompt ───────────────────────────────────────────
@@ -174,6 +175,23 @@ async def scan(
 
     log.info("security_agent: bandit finished, %d findings so far", len(all_findings))
 
+    # ── 1b. YAML secrets scan (regex, fast, no subprocess) ──────────────────
+    for filename, code in conversion.files.items():
+        ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in _YAML_EXTENSIONS:
+            continue
+        yaml_findings = scan_yaml_for_secrets(code, filename=filename)
+        for f in yaml_findings:
+            all_findings.append(SecurityFinding(
+                source="yaml_scan",
+                test_name="plaintext_secret_in_yaml",
+                severity=f.get("severity", "HIGH"),
+                filename=filename,
+                line=f.get("line"),
+                text=f.get("message", ""),
+                code=f.get("value_preview", ""),
+            ))
+
     # ── 2. Claude security review (all files) ───────────────────────────────
     files_to_review: dict[str, str] = {
         fname: code
@@ -276,6 +294,32 @@ def _build_files_section(files: dict[str, str]) -> str:
         parts.append(block)
 
     return "\n\n".join(parts)
+
+
+async def scan_files(
+    files: dict[str, str],
+    mapping_name: str = "unknown",
+    target_stack: str = "unknown",
+    label: str = "generated files",
+) -> SecurityScanReport:
+    """
+    Scan an arbitrary dict of {filename: code} — used to scan test files
+    after Step 10 (test generation) without needing a full ConversionOutput.
+    """
+    from ..models.schemas import TargetStack
+
+    # Wrap in a minimal ConversionOutput-like object
+    class _FakeConversion:
+        def __init__(self, files, name, stack):
+            self.files = files
+            self.mapping_name = name
+            self.target_stack = stack
+            self.parse_ok = True
+
+    fake = _FakeConversion(files, mapping_name, target_stack)
+
+    report = await scan(fake, mapping_name=f"{mapping_name} [{label}]")
+    return report
 
 
 def _extract_json(text: str) -> dict:
