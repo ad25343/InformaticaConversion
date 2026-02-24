@@ -23,7 +23,8 @@ import subprocess
 import tempfile
 import zipfile
 from io import BytesIO
-from pathlib import Path, PurePosixPath
+import posixpath
+from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException
@@ -173,7 +174,7 @@ def safe_zip_extract(zip_bytes: bytes) -> dict[str, bytes]:
 
     extracted: dict[str, bytes] = {}
     total_bytes = 0
-    virtual_root = PurePosixPath("/safe_root")
+    virtual_root = "/safe_root"
 
     for entry in entries:
         # Skip directories and symlinks
@@ -184,17 +185,20 @@ def safe_zip_extract(zip_bytes: bytes) -> dict[str, bytes]:
             continue
 
         # ── Zip Slip check ────────────────────────────────────────────────
-        # Resolve the entry path relative to our virtual root.
-        # If the resolved path no longer starts with the virtual root,
-        # the archive is trying to escape — reject it.
+        # Normalise the entry path (strip leading slash, convert backslash)
+        # then resolve it relative to our virtual root using posixpath.normpath
+        # which handles ".." components without requiring OS filesystem access.
+        # If the normalised path escapes the virtual root the archive is rejected.
         try:
-            resolved = (virtual_root / entry.filename).resolve()
+            clean = entry.filename.replace("\\", "/").lstrip("/")
+            normalised = posixpath.normpath(posixpath.join(virtual_root, clean))
         except Exception:
             raise ZipExtractionError(
                 f"Malformed path in ZIP entry: {entry.filename!r}"
             )
 
-        if not str(resolved).startswith(str(virtual_root)):
+        if not (normalised == virtual_root or
+                normalised.startswith(virtual_root + "/")):
             raise ZipExtractionError(
                 f"Zip Slip detected: entry '{entry.filename}' would escape the "
                 "extraction directory. Archive rejected."

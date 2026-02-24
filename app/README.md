@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-10-step agentic pipeline powered by Claude, with two human-in-the-loop review gates.
+11-step agentic pipeline powered by Claude, with security scanning and two human-in-the-loop review gates.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -17,8 +17,11 @@ Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 git clone https://github.com/ad25343/InformaticaConversion.git
 cd InformaticaConversion/app
 
-# 2. Install dependencies (Python 3.10+)
+# 2. Install dependencies (Python 3.11+)
 pip install -r requirements.txt
+
+# Recommended: enable the security scanner
+pip install bandit
 
 # 3. Configure environment
 cp .env.example .env
@@ -30,8 +33,19 @@ cp .env.example .env
 # 4. Start the server
 bash start.sh
 # → Web UI:   http://localhost:8000
-# → API docs: http://localhost:8000/docs
+# → API docs: http://localhost:8000/docs (set SHOW_DOCS=true)
 ```
+
+---
+
+## Upload Modes
+
+**Individual files** — upload up to three files separately:
+- Mapping XML (required)
+- Workflow XML (optional — enables session config extraction and $$VAR cross-referencing)
+- Parameter file `.txt` or `.param` (optional — resolves all `$$VARIABLE` references)
+
+**ZIP archive** — drop a ZIP containing any combination of the above; file types are auto-detected from XML structure (not filename).
 
 ---
 
@@ -39,17 +53,19 @@ bash start.sh
 
 | Step | Name | Powered By | Notes |
 |------|------|-----------|-------|
-| 1 | Parse XML | lxml (deterministic) | Fails fast on malformed XML |
+| 0 | Session & Parameter Parse | Deterministic | Auto-detect file types; cross-ref validation; $$VAR resolution; credential scan on uploaded XML |
+| 1 | Parse XML | lxml (deterministic) | Fails fast on malformed XML; XXE-hardened parser |
 | 2 | Classify Complexity | Rule-based | LOW / MEDIUM / HIGH / VERY_HIGH |
 | S2T | Source-to-Target Map | Rule-based | Excel workbook generated |
 | 3 | Generate Documentation | Claude | Full transformation specs in Markdown |
 | 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
 | **5** | **Human Review Gate 1** | UI sign-off | **Hard gate — APPROVED / REJECTED** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
-| 7 | Convert | Claude | Production-ready code files |
-| 8 | Code Quality Review | Claude | Static analysis, 10+ checks |
-| 9 | Test Generation | Rule-based + Claude | Field + filter coverage report |
-| **10** | **Human Review Gate 2** | UI sign-off | **APPROVED / REGENERATE / REJECTED** |
+| 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
+| **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections; **CRITICAL findings block pipeline** |
+| 9 | Code Quality Review | Claude | Static analysis, 10+ checks against docs and S2T |
+| 10 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
+| **11** | **Human Review Gate 2** | UI sign-off | **APPROVED / REGENERATE / REJECTED** |
 
 ---
 
@@ -57,25 +73,30 @@ bash start.sh
 
 ```
 app/
-├── main.py                        FastAPI entry point
+├── main.py                        FastAPI entry point (CORS, startup security warnings)
 ├── start.sh                       Start script (checks .env, launches uvicorn)
 ├── requirements.txt
 ├── .env.example                   Copy to .env and fill in secrets
 │
 ├── backend/
-│   ├── orchestrator.py            Pipeline state machine
-│   ├── routes.py                  REST API endpoints
+│   ├── orchestrator.py            Pipeline state machine (11 steps + 2 gates)
+│   ├── routes.py                  REST API endpoints (single-file + ZIP upload)
+│   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
+│   │                              credential scan, YAML secrets scan, bandit wrapper)
+│   ├── zip_extractor.py           ZIP upload handler (auto-detect file types)
 │   ├── auth.py                    Session auth
 │   ├── logger.py                  Structured per-job logging
 │   ├── agents/
-│   │   ├── parser_agent.py        Step 1  — XML parser (lxml)
+│   │   ├── session_parser_agent.py Step 0 — Session & parameter parse
+│   │   ├── parser_agent.py        Step 1  — XML parser (lxml, XXE-hardened)
 │   │   ├── classifier_agent.py    Step 2  — Complexity classifier
 │   │   ├── s2t_agent.py           Step S2T — Source-to-Target Excel
 │   │   ├── documentation_agent.py Step 3  — Documentation (Claude)
 │   │   ├── verification_agent.py  Step 4  — Verification
 │   │   ├── conversion_agent.py    Steps 6-7 — Stack assignment + code generation
-│   │   ├── review_agent.py        Step 8  — Code quality review
-│   │   └── test_agent.py          Step 9  — Test generation
+│   │   ├── security_agent.py      Step 8  — Security scan (bandit + YAML + Claude)
+│   │   ├── review_agent.py        Step 9  — Code quality review
+│   │   └── test_agent.py          Step 10 — Test generation
 │   ├── models/
 │   │   └── schemas.py             Pydantic models for all pipeline artifacts
 │   └── db/
@@ -83,14 +104,35 @@ app/
 │
 ├── frontend/
 │   └── templates/
-│       ├── index.html             Main pipeline UI
+│       ├── index.html             Main pipeline UI (individual files + ZIP toggle)
 │       └── login.html             Login screen
 │
 └── sample_xml/
-    ├── simple/                    Simple mappings (1 source, basic expressions)
-    ├── medium/                    Medium mappings (joins, lookups, aggregations)
-    └── complex/                   Complex mappings (SCD2, multi-source, routing)
+    ├── sample_mapping.xml         Quick single-set test (root level)
+    ├── sample_workflow.xml
+    ├── sample_params.txt
+    ├── simple/                    3 mappings — single/dual source, passthrough
+    ├── medium/                    4 mappings — lookups, filters, expressions, SCD1
+    └── complex/                   2 mappings — SCD2, 3+ sources, 9–11 $$VARs
 ```
+
+---
+
+## Security Architecture
+
+Every file-handling path flows through `backend/security.py`. Key protections:
+
+| Threat | Defence |
+|---|---|
+| XXE injection | `safe_xml_parser()` — DTD loading and entity resolution disabled on every lxml parse |
+| Zip Slip | `safe_zip_extract()` — every entry path resolved relative to virtual root |
+| Zip Bomb | `safe_zip_extract()` — total extracted bytes and entry count capped |
+| Symlink attacks | Symlink entries in ZIP silently skipped |
+| Oversized uploads | `validate_upload_size()` called on every upload stream before processing |
+| Credentials in uploaded XML | `scan_xml_for_secrets()` — checks CONNECTION/SESSION attrs at Step 0 |
+| Insecure generated code | Step 8 — bandit (Python), YAML regex scan, Claude review (all stacks) |
+| CRITICAL generated-code issue | Step 8 CRITICAL gate — pipeline blocked before code reaches reviewer |
+| Secrets in generated test code | Step 10 test files re-scanned and merged into Step 8 report |
 
 ---
 
@@ -109,42 +151,48 @@ Documentation token budget auto-scales: `max(tier_floor, num_transformations × 
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key |
-| `APP_PASSWORD` | Yes | Web UI login password |
-| `SECRET_KEY` | Yes | Session signing key (any long random string) |
-| `CLAUDE_MODEL` | No | Override Claude model (default: `claude-sonnet-4-5-20250929`) |
-| `DOC_MAX_TOKENS_OVERRIDE` | No | Force a specific doc token limit — for testing truncation only |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | — | Claude API key |
+| `APP_PASSWORD` | Yes | — | Web UI login password |
+| `SECRET_KEY` | Yes | — | Session signing key (any long random string) |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-5-20250929` | Override Claude model |
+| `HOST` | No | `0.0.0.0` | Server bind address |
+| `PORT` | No | `8000` | Server port |
+| `SHOW_DOCS` | No | `false` | Enable Swagger UI at `/docs` |
+| `CORS_ORIGINS` | No | *(same-origin)* | Comma-separated allowed origins for cross-origin deployments |
+| `HTTPS` | No | `false` | Set `true` to enable secure cookie flag (HTTPS deployments) |
+| `MAX_UPLOAD_MB` | No | `50` | Max size for any single uploaded file |
+| `MAX_ZIP_EXTRACTED_MB` | No | `200` | Max total extracted size from a ZIP (zip bomb guard) |
+| `MAX_ZIP_FILE_COUNT` | No | `200` | Max number of files inside a ZIP |
+| `DOC_MAX_TOKENS_OVERRIDE` | No | — | Force a specific doc token limit — for testing truncation only |
 
 ---
 
-## Current Scope
+## Running Tests
 
-This tool currently handles **Mapping-level conversion only**.
+```bash
+cd app
 
-Given an Informatica PowerCenter XML export, it converts the transformation logic (Source Qualifiers, Expressions, Joiners, Lookups, Routers, Aggregators, etc.) into production-ready PySpark, dbt, or Python code.
+# Unit tests — no API key needed (deterministic security utils)
+python3 test_security.py
 
-The following are **not yet in scope**:
-- Workflows (WF) and Worklets
-- Sessions (runtime config, reject handling, pre/post SQL, commit intervals)
-- Parameter files (`$$VARIABLES`)
-- Source/Target definitions
-- Cross-mapping dependency graphs
-
-See the Roadmap below for planned versions that address these gaps.
+# Integration smoke test — Steps 0–4 against sample files
+python3 test_pipeline.py              # mapping-only
+python3 test_pipeline.py --full       # mapping + workflow + params
+python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
+```
 
 ---
 
 ## Roadmap
 
-| Version | Name | Scope |
-|---------|------|-------|
-| **v1.0** | Mapping Conversion | Transformation logic, human review gates, PySpark / dbt / Python code generation |
-| **v1.1** | Session & Parameter Support | Two-file upload (Mapping XML + Workflow XML) + optional Parameter file; auto-detect file type from XML structure; cross-reference validation (Session must reference uploaded Mapping before pipeline runs); Session config extraction (connections, reject handling, pre/post SQL, commit intervals, error thresholds); parameter file resolution (`$$VARIABLES`); generates `connections.yaml` + `runtime_config.yaml` alongside converted code |
-| **v2.0** | Workflow Conversion | WF → Airflow / Dagster / Prefect DAG; Sessions as task nodes; Worklets as TaskGroups |
-| **v2.1** | Dependency Graph | Cross-mapping lineage, load order, shared staging table awareness |
-| **v3.0** | Portfolio Migration | Bulk processing of full Repository exports; auto-detect + cross-reference engine (built in v1.1) scales to match hundreds of Mappings to their Sessions and Workflows automatically; migration dashboard showing conversion status across the full portfolio; prioritisation queue; progress tracking |
+| Version | Status | Scope |
+|---------|--------|-------|
+| **v1.0** | Shipped | Transformation logic, human review gates, PySpark / dbt / Python code generation |
+| **v1.1** | Current | Three-file upload (Mapping + Workflow + Parameter) + ZIP archive; auto-detect file types; cross-reference validation; session config extraction; $$VAR resolution; YAML artifact generation; 11-step pipeline with dedicated Security Scan step; bandit + YAML + Claude security review; CRITICAL findings gate |
+| **v2.0** | Planned | Multi-mapping batch conversion; Git integration (open PR from UI); incremental re-conversion; scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
+| **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
 ---
 
