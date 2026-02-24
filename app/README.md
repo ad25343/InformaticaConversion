@@ -4,6 +4,10 @@ Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
 10-step agentic pipeline powered by Claude, with two human-in-the-loop review gates.
 
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+
+> Free to use and adapt. Commercial use requires written permission. See [LICENSE](../LICENSE).
+
 ---
 
 ## Install on a New Machine
