@@ -21,32 +21,54 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS jobs (
-    job_id       TEXT PRIMARY KEY,
-    filename     TEXT NOT NULL,
-    xml_content  TEXT,
-    status       TEXT NOT NULL DEFAULT 'pending',
-    current_step INTEGER NOT NULL DEFAULT 0,
-    state_json   TEXT NOT NULL DEFAULT '{}',
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
+    job_id                  TEXT PRIMARY KEY,
+    filename                TEXT NOT NULL,
+    xml_content             TEXT,
+    workflow_xml_content    TEXT,
+    parameter_file_content  TEXT,
+    status                  TEXT NOT NULL DEFAULT 'pending',
+    current_step            INTEGER NOT NULL DEFAULT 0,
+    state_json              TEXT NOT NULL DEFAULT '{}',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
 );
 """
+
+# Columns added in v1.1 — applied via ALTER TABLE so existing DBs keep working
+_V1_1_MIGRATIONS = [
+    "ALTER TABLE jobs ADD COLUMN workflow_xml_content   TEXT",
+    "ALTER TABLE jobs ADD COLUMN parameter_file_content TEXT",
+]
 
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(CREATE_TABLE)
+        # Apply v1.1 migrations idempotently — SQLite raises OperationalError
+        # "duplicate column name" if column already exists; we swallow that.
+        for sql in _V1_1_MIGRATIONS:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # column already present
         await db.commit()
 
 
-async def create_job(filename: str, xml_content: str) -> str:
+async def create_job(
+    filename: str,
+    xml_content: str,
+    workflow_xml_content: Optional[str] = None,
+    parameter_file_content: Optional[str] = None,
+) -> str:
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO jobs (job_id, filename, xml_content, status, current_step, state_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'pending', 0, '{}', ?, ?)",
-            (job_id, filename, xml_content, now, now),
+            "INSERT INTO jobs "
+            "(job_id, filename, xml_content, workflow_xml_content, parameter_file_content, "
+            " status, current_step, state_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?)",
+            (job_id, filename, xml_content, workflow_xml_content, parameter_file_content, now, now),
         )
         await db.commit()
     return job_id
@@ -65,10 +87,36 @@ async def get_job(job_id: str) -> Optional[dict]:
 
 
 async def get_xml(job_id: str) -> Optional[str]:
+    """Return only the primary mapping XML (backward-compatible)."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT xml_content FROM jobs WHERE job_id = ?", (job_id,)) as cur:
             row = await cur.fetchone()
             return row[0] if row else None
+
+
+async def get_session_files(job_id: str) -> Optional[dict]:
+    """Return all three file contents for v1.1 Step 0.
+
+    Returns a dict with keys:
+      - xml_content             (mapping XML — always present)
+      - workflow_xml_content    (workflow XML — may be None)
+      - parameter_file_content  (parameter file — may be None)
+    Returns None if the job does not exist.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT xml_content, workflow_xml_content, parameter_file_content "
+            "FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            return {
+                "xml_content":            row[0],
+                "workflow_xml_content":   row[1],
+                "parameter_file_content": row[2],
+            }
 
 
 async def update_job(job_id: str, status: str, step: int, state_patch: dict):

@@ -8,7 +8,8 @@ import json
 import os
 import anthropic
 
-from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport
+from typing import Optional
+from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport, SessionParseReport
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
@@ -117,21 +118,90 @@ Flag as LINEAGE GAP if trace cannot be completed
 ## Parameters and Variables
 Table: name | datatype | default value | purpose | resolved?
 
-## Workflow Context
-(If workflow data is available)
-- Execution order
-- Dependencies
-- Scheduling
+## Session & Runtime Context
+(Populated from Workflow XML and parameter file when uploaded)
+- Connection names and types for each source/target
+- Pre-session and post-session SQL
+- Reject file configuration
+- Commit interval and error threshold
+- Resolved $$VARIABLES (name → value)
+- Any unresolved $$VARIABLES
 
 ## Ambiguities and Flags
 List every point of uncertainty, with location and description
 """
 
 
+def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
+    """
+    Build a plain-text block describing the session config and resolved parameters
+    so Claude can include them in the documentation.
+    Returns an empty string when no session data is available.
+    """
+    if not spr:
+        return ""
+
+    lines: list[str] = ["## Session & Runtime Context (Step 0 data)"]
+
+    # Cross-reference status
+    cr = spr.cross_ref
+    lines.append(f"Cross-reference validation: {cr.status}")
+    if cr.mapping_name:
+        lines.append(f"  Mapping name: {cr.mapping_name}")
+    if cr.session_name:
+        lines.append(f"  Session name: {cr.session_name}")
+    if cr.workflow_name if hasattr(cr, 'workflow_name') else False:
+        lines.append(f"  Workflow name: {cr.workflow_name}")  # type: ignore
+    if cr.issues:
+        lines.append("  Issues: " + "; ".join(cr.issues))
+
+    # Session config
+    sc = spr.session_config
+    if sc:
+        lines.append(f"\nSession: {sc.session_name}  (Workflow: {sc.workflow_name})")
+        if sc.connections:
+            lines.append("Connections:")
+            for conn in sc.connections:
+                parts = [f"  {conn.role}: {conn.transformation_name}"]
+                if conn.connection_name:
+                    parts.append(f"connection={conn.connection_name}")
+                if conn.connection_type:
+                    parts.append(f"type={conn.connection_type}")
+                if conn.file_name:
+                    parts.append(f"file={conn.file_name}")
+                if conn.file_dir:
+                    parts.append(f"dir={conn.file_dir}")
+                lines.append("  " + "  ".join(parts))
+        if sc.pre_session_sql:
+            lines.append(f"Pre-session SQL: {sc.pre_session_sql[:500]}")
+        if sc.post_session_sql:
+            lines.append(f"Post-session SQL: {sc.post_session_sql[:500]}")
+        if sc.commit_interval is not None:
+            lines.append(f"Commit interval: {sc.commit_interval}")
+        if sc.error_threshold is not None:
+            lines.append(f"Error threshold: {sc.error_threshold}")
+        if sc.reject_filename:
+            lines.append(f"Reject file: {sc.reject_filedir or ''}/{sc.reject_filename}")
+
+    # Resolved parameters
+    if spr.parameters:
+        lines.append("\nResolved parameters ($$VARIABLES):")
+        for p in spr.parameters:
+            lines.append(f"  {p.name} = {p.value}  [{p.scope}]")
+
+    if spr.unresolved_variables:
+        lines.append("\nUnresolved variables (no value in parameter file):")
+        for v in spr.unresolved_variables:
+            lines.append(f"  {v}")
+
+    return "\n".join(lines)
+
+
 async def document(
     parse_report: ParseReport,
     complexity: ComplexityReport,
     graph: dict,
+    session_parse_report: Optional[SessionParseReport] = None,
 ) -> str:
     """Returns the full documentation as a Markdown string.
 
@@ -163,11 +233,18 @@ async def document(
     if len(graph_json) > 80_000:
         graph_json = graph_json[:80_000] + "\n... [truncated for length]"
 
+    # v1.1: inject session context when available
+    session_context_block = _build_session_context_block(session_parse_report)
+
     prompt = DOCUMENTATION_PROMPT.format(
         parse_summary=parse_summary,
         complexity_summary=complexity_summary,
         graph_json=graph_json,
     )
+
+    # Append session context block after the main prompt if present
+    if session_context_block:
+        prompt += f"\n\n{session_context_block}"
 
     # ── Token budget selection ────────────────────────────────────────────────
     # Priority order:

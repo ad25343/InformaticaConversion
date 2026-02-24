@@ -50,6 +50,71 @@ class CodeReviewDecision(str, Enum):
     REGENERATE = "REGENERATE"  # Reject this attempt — re-run conversion (Steps 6–9)
     REJECTED   = "REJECTED"    # Hard stop — code is fundamentally unacceptable
 
+class FileType(str, Enum):
+    """v1.1 — auto-detected type for each uploaded file."""
+    MAPPING   = "MAPPING"    # Contains <MAPPING> element
+    WORKFLOW  = "WORKFLOW"   # Contains <WORKFLOW> element with <SESSION> tasks
+    PARAMETER = "PARAMETER"  # Key=value parameter file ($$VARIABLES)
+    UNKNOWN   = "UNKNOWN"    # Could not be determined
+
+
+# ─────────────────────────────────────────────
+# v1.1 — Session & Parameter schemas
+# ─────────────────────────────────────────────
+
+class UploadedFile(BaseModel):
+    """Metadata for one file uploaded as part of a job."""
+    filename:      str
+    file_type:     FileType
+    detected_at:   str                     # ISO datetime
+
+class CrossRefValidation(BaseModel):
+    """Result of cross-referencing the uploaded files before Step 0 runs."""
+    status:        str                     # VALID | INVALID | WARNINGS
+    mapping_name:  Optional[str] = None    # Mapping name found in Mapping XML
+    session_name:  Optional[str] = None    # Session name found in Workflow XML
+    referenced_mapping: Optional[str] = None  # Mapping name the Session references
+    issues:        List[str] = []          # Error/warning messages
+
+class SessionConnection(BaseModel):
+    """A source or target connection extracted from a Session."""
+    transformation_name: str
+    role:                str          # SOURCE | TARGET
+    connection_name:     Optional[str] = None
+    connection_type:     Optional[str] = None   # RELATIONAL | FILE | FTP etc.
+    file_name:           Optional[str] = None
+    file_dir:            Optional[str] = None
+
+class SessionConfig(BaseModel):
+    """Runtime config extracted from the Session task in the Workflow XML."""
+    session_name:        str
+    mapping_name:        str
+    workflow_name:       str
+    connections:         List[SessionConnection] = []
+    pre_session_sql:     Optional[str] = None
+    post_session_sql:    Optional[str] = None
+    commit_interval:     Optional[int] = None
+    error_threshold:     Optional[int] = None
+    reject_filename:     Optional[str] = None
+    reject_filedir:      Optional[str] = None
+    raw_attributes:      Dict[str, str] = {}   # All other session attributes
+
+class ParameterEntry(BaseModel):
+    """One resolved parameter from a parameter file."""
+    name:    str          # e.g. $$BATCH_DATE
+    value:   str          # Resolved value
+    scope:   str          # GLOBAL | WORKFLOW | SESSION
+
+class SessionParseReport(BaseModel):
+    """Output of Step 0 — Session & Parameter Parser."""
+    uploaded_files:       List[UploadedFile]
+    cross_ref:            CrossRefValidation
+    session_config:       Optional[SessionConfig]  = None
+    parameters:           List[ParameterEntry]     = []
+    unresolved_variables: List[str]                = []   # $$VARs with no value
+    parse_status:         str                             # COMPLETE | PARTIAL | FAILED | MAPPING_ONLY
+    notes:                List[str]                = []
+
 
 # ─────────────────────────────────────────────
 # Parse Report
@@ -253,21 +318,24 @@ class CodeSignOffRecord(BaseModel):
 # ─────────────────────────────────────────────
 
 class ConversionJob(BaseModel):
-    job_id:           str
-    filename:         str
-    created_at:       str
-    updated_at:       str
-    status:           JobStatus
-    current_step:     int           # 1-8
-    parse_report:     Optional[ParseReport]         = None
-    complexity:       Optional[ComplexityReport]    = None
-    documentation_md: Optional[str]                 = None
-    verification:     Optional[VerificationReport]  = None
-    sign_off:         Optional[SignOffRecord]        = None
-    stack_assignment: Optional[StackAssignment]     = None
-    conversion:       Optional[ConversionOutput]    = None
-    reconciliation:   Optional[ReconciliationReport]= None
-    error:            Optional[str]                 = None
+    job_id:               str
+    filename:             str
+    created_at:           str
+    updated_at:           str
+    status:               JobStatus
+    current_step:         int                               # 0-10
+    # v1.1 — session & parameter parse (Step 0)
+    session_parse_report: Optional[SessionParseReport]  = None
+    # Core pipeline (Steps 1-10)
+    parse_report:         Optional[ParseReport]         = None
+    complexity:           Optional[ComplexityReport]    = None
+    documentation_md:     Optional[str]                 = None
+    verification:         Optional[VerificationReport]  = None
+    sign_off:             Optional[SignOffRecord]        = None
+    stack_assignment:     Optional[StackAssignment]     = None
+    conversion:           Optional[ConversionOutput]    = None
+    reconciliation:       Optional[ReconciliationReport]= None
+    error:                Optional[str]                 = None
 
 
 # ─────────────────────────────────────────────

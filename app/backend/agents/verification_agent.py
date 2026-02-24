@@ -12,9 +12,10 @@ import json
 import os
 import anthropic
 
+from typing import Optional
 from ..models.schemas import (
     VerificationReport, VerificationFlag, CheckResult,
-    ComplexityTier, ComplexityReport, ParseReport
+    ComplexityTier, ComplexityReport, ParseReport, SessionParseReport
 )
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
@@ -197,6 +198,7 @@ async def verify(
     complexity: ComplexityReport,
     documentation_md: str,
     graph: dict,
+    session_parse_report: Optional[SessionParseReport] = None,
 ) -> VerificationReport:
     """Run all verification checks and return a complete VerificationReport."""
 
@@ -361,6 +363,28 @@ async def verify(
             f"Parameter: {param}",
             f"Parameter '{param}' has no resolved value. May affect conversion output.",
             blocking=False,
+        ))
+
+    # v1.1: Unresolved $$VARIABLES from session/parameter parse (Step 0)
+    if session_parse_report and session_parse_report.unresolved_variables:
+        for var in session_parse_report.unresolved_variables:
+            flags.append(_make_flag(
+                "UNRESOLVED_VARIABLE",
+                f"Session parameter: {var}",
+                (
+                    f"$$VARIABLE '{var}' is referenced in the session config but has no value "
+                    "in the uploaded parameter file. The generated runtime_config.yaml contains "
+                    "a <fill_in> placeholder. Supply the value before deploying the converted code."
+                ),
+                blocking=False,
+            ))
+        self_checks.append(CheckResult(
+            name="All session $$VARIABLES resolved",
+            passed=False,
+            detail=(
+                f"{len(session_parse_report.unresolved_variables)} unresolved variable(s): "
+                + ", ".join(session_parse_report.unresolved_variables)
+            ),
         ))
 
     # Orphaned output ports — field computed but never sent downstream

@@ -9,10 +9,11 @@ import asyncio
 import traceback
 from typing import AsyncGenerator
 
-from .db.database import get_xml, update_job
+from .db.database import get_xml, get_session_files, update_job
 from .models.schemas import JobStatus
 from .agents import parser_agent, classifier_agent, documentation_agent, \
-    verification_agent, conversion_agent, s2t_agent, review_agent, test_agent
+    verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
+    session_parser_agent
 from .logger import JobLogger
 
 
@@ -26,7 +27,8 @@ def _err(e: Exception) -> dict:
 
 async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator[dict, None]:
     """
-    Run Steps 1–4 automatically, then pause at Step 5 (human review).
+    Run Step 0 (v1.1 session/parameter parse) then Steps 1–4 automatically,
+    then pause at Step 5 (human review).
     Yields progress dicts for SSE streaming to the UI.
     All steps are logged to logs/jobs/<job_id>.log.
     """
@@ -37,6 +39,67 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         patch["pipeline_log"] = log.get_buffer()
         await update_job(job_id, status.value, step, patch)
         return {"step": step, "status": status.value, "message": message}
+
+    # ── STEP 0 — SESSION & PARAMETER PARSE (v1.1) ─────────────
+    log.step_start(0, "Session & Parameter Parse")
+    yield await emit(0, JobStatus.PARSING, "Detecting file types and extracting session config…")
+
+    session_files = await get_session_files(job_id)
+    session_parse_report = None
+
+    if session_files:
+        try:
+            session_parse_report = session_parser_agent.parse(
+                mapping_xml=session_files.get("xml_content"),
+                workflow_xml=session_files.get("workflow_xml_content"),
+                parameter_file=session_files.get("parameter_file_content"),
+            )
+            log.info(
+                f"Step 0 complete — parse_status={session_parse_report.parse_status}, "
+                f"files={len(session_parse_report.uploaded_files)}, "
+                f"cross_ref={session_parse_report.cross_ref.status}, "
+                f"parameters={len(session_parse_report.parameters)}, "
+                f"unresolved={len(session_parse_report.unresolved_variables)}",
+                step=0,
+                data={
+                    "parse_status":    session_parse_report.parse_status,
+                    "cross_ref_status": session_parse_report.cross_ref.status,
+                    "files": [f.model_dump() for f in session_parse_report.uploaded_files],
+                    "unresolved_variables": session_parse_report.unresolved_variables,
+                    "notes": session_parse_report.notes,
+                },
+            )
+            if session_parse_report.parse_status == "FAILED":
+                log.step_failed(0, "Session & Parameter Parse",
+                                "; ".join(session_parse_report.cross_ref.issues
+                                          + session_parse_report.notes))
+                log.finalize("blocked", steps_completed=0)
+                log.close()
+                yield await emit(0, JobStatus.BLOCKED,
+                                 "Step 0 failed — cross-reference validation did not pass. "
+                                 "Check that the Workflow XML references the uploaded Mapping.",
+                                 {"session_parse_report": session_parse_report.model_dump(),
+                                  "error": "; ".join(session_parse_report.cross_ref.issues)})
+                return
+        except Exception as e:
+            # Step 0 failure is non-blocking only when we have no workflow XML
+            # (mapping-only mode).  If a workflow was explicitly uploaded we want
+            # to halt so the user gets useful feedback rather than silent skipping.
+            has_workflow = bool(session_files.get("workflow_xml_content"))
+            log.warning(f"Step 0 error: {e}", step=0)
+            if has_workflow:
+                log.step_failed(0, "Session & Parameter Parse", str(e), exc_info=True)
+                log.finalize("failed", steps_completed=0)
+                log.close()
+                yield await emit(0, JobStatus.FAILED, f"Step 0 error: {e}", _err(e))
+                return
+            # Mapping-only: fall through to Step 1 without session context
+
+        log.step_complete(0, "Session & Parameter Parse",
+                          session_parse_report.parse_status if session_parse_report else "SKIPPED")
+        if session_parse_report:
+            yield await emit(0, JobStatus.PARSING, "Step 0 complete",
+                             {"session_parse_report": session_parse_report.model_dump()})
 
     # ── STEP 1 — PARSE ────────────────────────────────────────
     log.step_start(1, "Parse XML")
@@ -151,7 +214,9 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.claude_call(3, "documentation generation")
     yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation (Claude)…")
     try:
-        documentation_md = await documentation_agent.document(parse_report, complexity, graph)
+        documentation_md = await documentation_agent.document(
+            parse_report, complexity, graph, session_parse_report=session_parse_report
+        )
         doc_len = len(documentation_md)
         log.info(f"Documentation generated — {doc_len} chars", step=3,
                  data={"doc_chars": doc_len})
@@ -173,7 +238,8 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     yield await emit(4, JobStatus.VERIFYING, "Running verification checks…")
     try:
         verification = await verification_agent.verify(
-            parse_report, complexity, documentation_md, graph
+            parse_report, complexity, documentation_md, graph,
+            session_parse_report=session_parse_report,
         )
         log.info(
             f"Verification complete — status={verification.overall_status}, "
@@ -250,10 +316,12 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         documentation_md = state["documentation_md"]
         graph            = state["graph"]
         # Needed for Step 8 review
-        from .models.schemas import VerificationReport
+        from .models.schemas import VerificationReport, SessionParseReport
         _v = state.get("verification")
         verification     = VerificationReport(**_v) if _v else None
         s2t_state        = state.get("s2t", {})
+        _spr = state.get("session_parse_report")
+        session_parse_report = SessionParseReport(**_spr) if _spr else None
     except Exception as e:
         log.step_failed(6, "State reconstruction", str(e), exc_info=True)
         log.close()
@@ -318,6 +386,7 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         conversion_output = await conversion_agent.convert(
             stack_assignment, documentation_md, graph,
             accepted_fixes=accepted_fixes or None,
+            session_parse_report=session_parse_report,
         )
         file_list = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())

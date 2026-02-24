@@ -8,7 +8,7 @@
     :root {
       --bg: #0f1117; --surface: #1a1d27; --surface2: #252836;
       --border: #2e3145; --accent: #6c63ff; --accent2: #4ade80;
-      --warn: #fb923c; --danger: #f87171; --text: #e2e8f0;
+      --warn: #fb923c; --danger: #f87171; --success: #4ade80; --text: #e2e8f0;
       --muted: #94a3b8; --radius: 10px;
       --sev-critical: #f87171; --sev-high: #fb923c;
       --sev-medium: #fbbf24; --sev-low: #60a5fa; --sev-info: #94a3b8;
@@ -244,14 +244,39 @@
     </div>
     <hr/>
 
-    <!-- Upload -->
+    <!-- Upload (v1.1 multi-file) -->
     <div>
       <div class="section-title">New Conversion</div>
+
+      <!-- Mapping XML (required) -->
       <div class="upload-zone" id="dropzone">
         <input type="file" id="fileInput" accept=".xml"/>
         <div class="upload-icon">📂</div>
-        <div class="upload-label" id="fileLabel">Drop Informatica XML here<br/>or click to browse</div>
+        <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
       </div>
+
+      <!-- Workflow XML (optional, v1.1) -->
+      <div style="margin-top:8px">
+        <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
+          Workflow XML <span style="font-weight:400;color:var(--muted)">(optional — session config extraction)</span>
+        </label>
+        <div class="upload-zone" id="dropzoneWF" style="padding:12px 10px">
+          <input type="file" id="workflowInput" accept=".xml"/>
+          <div class="upload-label" id="workflowLabel" style="font-size:12px">Drop Workflow .xml here or click to add</div>
+        </div>
+      </div>
+
+      <!-- Parameter file (optional, v1.1) -->
+      <div style="margin-top:8px">
+        <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
+          Parameter File <span style="font-weight:400;color:var(--muted)">(optional — resolves $$VARIABLES)</span>
+        </label>
+        <div class="upload-zone" id="dropzonePF" style="padding:12px 10px">
+          <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
+          <div class="upload-label" id="paramLabel" style="font-size:12px">Drop parameter file here or click to add</div>
+        </div>
+      </div>
+
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
     </div>
     <hr/>
@@ -317,12 +342,57 @@ const STATUS_BADGE = {
 const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
 
 // ─────────────────────────────────────────────
-// Upload handling
+// Upload handling (v1.1 multi-file)
 // ─────────────────────────────────────────────
-const dropzone = document.getElementById('dropzone');
-const fileInput = document.getElementById('fileInput');
-const fileLabel = document.getElementById('fileLabel');
-const startBtn  = document.getElementById('startBtn');
+const dropzone      = document.getElementById('dropzone');
+const fileInput     = document.getElementById('fileInput');
+const fileLabel     = document.getElementById('fileLabel');
+const startBtn      = document.getElementById('startBtn');
+
+const dropzoneWF    = document.getElementById('dropzoneWF');
+const workflowInput = document.getElementById('workflowInput');
+const workflowLabel = document.getElementById('workflowLabel');
+
+const dropzonePF    = document.getElementById('dropzonePF');
+const paramInput    = document.getElementById('paramInput');
+const paramLabel    = document.getElementById('paramLabel');
+
+let selectedWorkflowFile = null;
+let selectedParamFile    = null;
+
+// Workflow XML dropzone wiring
+dropzoneWF.addEventListener('click', () => workflowInput.click());
+dropzoneWF.addEventListener('dragover', e => { e.preventDefault(); dropzoneWF.classList.add('drag'); });
+dropzoneWF.addEventListener('dragleave', () => dropzoneWF.classList.remove('drag'));
+dropzoneWF.addEventListener('drop', e => {
+  e.preventDefault(); dropzoneWF.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.xml')) setWorkflowFile(f);
+});
+workflowInput.addEventListener('change', () => { if (workflowInput.files[0]) setWorkflowFile(workflowInput.files[0]); });
+
+function setWorkflowFile(f) {
+  selectedWorkflowFile = f;
+  workflowLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024).toFixed(1)} KB)</span>`;
+  dropzoneWF.style.borderColor = 'var(--success)';
+}
+
+// Parameter file dropzone wiring
+dropzonePF.addEventListener('click', () => paramInput.click());
+dropzonePF.addEventListener('dragover', e => { e.preventDefault(); dropzonePF.classList.add('drag'); });
+dropzonePF.addEventListener('dragleave', () => dropzonePF.classList.remove('drag'));
+dropzonePF.addEventListener('drop', e => {
+  e.preventDefault(); dropzonePF.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) setParamFile(f);
+});
+paramInput.addEventListener('change', () => { if (paramInput.files[0]) setParamFile(paramInput.files[0]); });
+
+function setParamFile(f) {
+  selectedParamFile = f;
+  paramLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024).toFixed(1)} KB)</span>`;
+  dropzonePF.style.borderColor = 'var(--success)';
+}
 
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
@@ -345,10 +415,17 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   const fd = new FormData();
   fd.append('file', selectedFile);
+  if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
+  if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
   try {
     const res = await fetch('/api/jobs', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.job_id) {
+      // Reset optional file selections for next upload
+      selectedWorkflowFile = null; selectedParamFile = null;
+      workflowLabel.textContent = 'Drop Workflow .xml here or click to add';
+      paramLabel.textContent    = 'Drop parameter file here or click to add';
+      dropzoneWF.style.borderColor = ''; dropzonePF.style.borderColor = '';
       await loadJobs();
       openJob(data.job_id);
     } else {

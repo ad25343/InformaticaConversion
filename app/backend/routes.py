@@ -7,8 +7,9 @@ import json
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks, Form
 from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
+from typing import Optional as _Opt
 
 from .db import database as db
 from .models.schemas import (
@@ -32,17 +33,52 @@ _progress_queues: dict[str, asyncio.Queue] = {}
 # ─────────────────────────────────────────────
 
 @router.post("/jobs")
-async def create_job(file: UploadFile = File(...)):
-    """Upload an Informatica XML file and start the pipeline."""
-    if not file.filename.endswith(".xml"):
-        raise HTTPException(400, "File must be a .xml Informatica export")
+async def create_job(
+    file:           UploadFile = File(...),
+    workflow_file:  _Opt[UploadFile] = File(default=None),
+    parameter_file: _Opt[UploadFile] = File(default=None),
+):
+    """Upload files and start the conversion pipeline.
 
-    content = await file.read()
-    xml_str = content.decode("utf-8", errors="replace")
-    job_id = await db.create_job(file.filename, xml_str)
+    Required
+    --------
+    file            Informatica Mapping XML (.xml)
 
-    logger.info("Job created: job_id=%s filename=%s size=%d bytes",
-                job_id, file.filename, len(content))
+    Optional (v1.1)
+    ---------------
+    workflow_file   Informatica Workflow XML (.xml) — enables Step 0 session extraction
+    parameter_file  Informatica parameter file (.txt / .par) — enables $$VAR resolution
+    """
+    if not file.filename.lower().endswith(".xml"):
+        raise HTTPException(400, "Mapping file must be a .xml Informatica export")
+
+    mapping_content = await file.read()
+    xml_str = mapping_content.decode("utf-8", errors="replace")
+
+    workflow_str: _Opt[str] = None
+    if workflow_file and workflow_file.filename:
+        wf_content = await workflow_file.read()
+        workflow_str = wf_content.decode("utf-8", errors="replace")
+        logger.info("Workflow file uploaded: filename=%s size=%d bytes",
+                    workflow_file.filename, len(wf_content))
+
+    param_str: _Opt[str] = None
+    if parameter_file and parameter_file.filename:
+        pf_content = await parameter_file.read()
+        param_str = pf_content.decode("utf-8", errors="replace")
+        logger.info("Parameter file uploaded: filename=%s size=%d bytes",
+                    parameter_file.filename, len(pf_content))
+
+    job_id = await db.create_job(
+        file.filename,
+        xml_str,
+        workflow_xml_content=workflow_str,
+        parameter_file_content=param_str,
+    )
+
+    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s",
+                job_id, file.filename, len(mapping_content),
+                workflow_str is not None, param_str is not None)
 
     queue: asyncio.Queue = asyncio.Queue()
     _progress_queues[job_id] = queue
@@ -55,7 +91,13 @@ async def create_job(file: UploadFile = File(...)):
     task = asyncio.create_task(_run())
     _active_tasks[job_id] = task
 
-    return {"job_id": job_id, "filename": file.filename, "status": "started"}
+    return {
+        "job_id":        job_id,
+        "filename":      file.filename,
+        "has_workflow":  workflow_str is not None,
+        "has_params":    param_str is not None,
+        "status":        "started",
+    }
 
 
 # ─────────────────────────────────────────────
