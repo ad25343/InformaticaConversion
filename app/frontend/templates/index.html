@@ -323,7 +323,7 @@
     <div class="empty">
       <div class="empty-icon">🔄</div>
       <div class="empty-title">Informatica Conversion Tool</div>
-      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 10-step pipeline will parse, document, verify, convert,<br/>generate tests, and deliver reviewed, production-ready code.</div>
+      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 11-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
     </div>
   </main>
 </div>
@@ -347,6 +347,7 @@ const STEPS = [
   { n:8,  label:"Security" },
   { n:9,  label:"Quality" },
   { n:10, label:"Tests" },
+  { n:11, label:"Sign-Off" },
 ];
 
 const STATUS_BADGE = {
@@ -583,12 +584,12 @@ function renderJobItem(j) {
   const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
   const isActive    = j.job_id === currentJobId;
   const isComplete  = j.status === 'complete';
-  const stepDisplay = Math.min(j.current_step, 10);
+  const stepDisplay = Math.min(j.current_step, 11);
   return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
       <div style="min-width:0">
         <div class="job-name">${esc(j.filename)}</div>
-        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/10 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
+        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/11 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
       </div>
       <button
         title="Delete job"
