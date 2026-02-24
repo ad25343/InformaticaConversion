@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 1.1
+**Version:** 1.2
 **Author:** ad25343
 **Last Updated:** 2026-02-24
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -18,8 +18,8 @@ found in the same engineer.
 
 The Informatica Conversion Tool automates this migration using Claude as the conversion
 engine, structured human review gates to catch errors before code ships, and a bandit +
-Claude security scan to ensure generated code does not inherit bad patterns from legacy
-Informatica designs.
+Claude security scan with a human security review gate to ensure generated code does not
+inherit bad patterns from legacy Informatica designs.
 
 ---
 
@@ -32,8 +32,8 @@ field mappings, filter logic, and business rules — not about writing boilerpla
 
 **Secondary: Data Engineering Lead / Reviewer**
 Approves the generated code before it enters a CI pipeline. Needs a structured review
-checklist, a Source-to-Target field mapping document, and a security scan report — not a
-wall of generated code with no summary.
+checklist, a Source-to-Target field mapping document, a security scan report with a
+human decision gate, and a final code sign-off — not a wall of generated code with no summary.
 
 **Tertiary: DevOps / Platform Engineer**
 Deploying the tool inside a corporate network. Cares about CVE-free dependencies, no
@@ -46,7 +46,7 @@ plaintext secrets in generated code, and configurable upload size limits.
 ### v1.0 — MVP (shipped)
 
 The single-file conversion pipeline. Accepts one Informatica Mapping XML export and
-produces converted code through a 10-step agentic pipeline with two human review gates.
+produces converted code through an agentic pipeline with two human review gates.
 
 Steps:
 1. XML parse and structural analysis
@@ -64,10 +64,11 @@ Delivered: single-file upload, SSE progress stream, per-job structured logging, 
 job persistence, session-cookie authentication, sample mappings across three complexity
 tiers.
 
-### v1.1 — Session & Parameter Support (current)
+### v1.1 — Session & Parameter Support (shipped)
 
 Extends the pipeline with a new Step 0 that processes Workflow XML and parameter files
-alongside the Mapping XML. Adds ZIP upload as a convenience upload path.
+alongside the Mapping XML. Adds ZIP upload as a convenience upload path. Introduces a
+dedicated Security Scan step (Step 8) with bandit + YAML regex + Claude review.
 
 New features:
 - Step 0 — file-type auto-detection, cross-reference validation, session config extraction, $$VAR resolution
@@ -75,8 +76,28 @@ New features:
 - YAML artifact generation (connections.yaml, runtime_config.yaml) from session config
 - UNRESOLVED_VARIABLE flags when $$VARs have no value in the parameter file
 - Security-hardened infrastructure: XXE protection, Zip Slip / Zip Bomb / symlink defense, 7 CVEs patched, CORS middleware, startup secret-key warning, per-upload file size enforcement
-- Step 8 — Security Scan (dedicated step): bandit (Python/PySpark), YAML regex secrets check, Claude review for all stacks; CRITICAL findings block the pipeline before code review reaches the reviewer; test files re-scanned after Step 10
+- Step 8 — Security Scan (dedicated step): bandit (Python/PySpark), YAML regex secrets check, Claude review for all stacks
 - Paired sample files for all 9 sample mappings (simple / medium / complex)
+- Collapsable job history in the UI with smart default (open when no active jobs)
+- Downloadable report as Markdown and PDF (print dialog)
+
+### v1.2 — Human Security Review Gate (current)
+
+Replaces the automatic CRITICAL-block gate after the security scan with a human decision
+gate. Reviewers now make an informed choice — they can see the full scan findings in the UI
+and decide to approve, acknowledge risk, or fail the job. This extends the pipeline from
+11 to 12 steps and adds a third human-in-the-loop gate.
+
+New features:
+- Step 9 — Human Security Review Gate: pipeline pauses when scan recommendation is
+  REVIEW_RECOMMENDED or REQUIRES_FIXES; reviewers choose APPROVED / ACKNOWLEDGED / FAILED
+- Three-decision security review: APPROVED (clean or no action needed), ACKNOWLEDGED
+  (issues noted and accepted as known risk), FAILED (block pipeline permanently)
+- Clean scans (APPROVED recommendation) auto-proceed without pausing the pipeline
+- Security review record stored on the job (reviewer name, role, decision, notes, date)
+- POST `/api/jobs/{id}/security-review` endpoint
+- 12-dot stepper in the UI with "Sec Rev" dot at Step 9
+- All downstream step numbers updated: Quality Review → 10, Tests → 11, Code Sign-Off → 12
 
 ### v2.0 — Planned
 
@@ -126,19 +147,24 @@ Step 7   Code Generation               [Claude, multi-file output]
     │
     ▼
 Step 8   Security Scan                 [bandit (Python) + YAML regex + Claude review]
-         → CRITICAL finding → BLOCKED (terminal — fix source and re-upload)
-         → HIGH/MEDIUM      → REVIEW_RECOMMENDED (continues, flagged for reviewer)
-         → clean            → APPROVED
+         → Produces: APPROVED / REVIEW_RECOMMENDED / REQUIRES_FIXES
     │
     ▼
-Step 9   Code Quality Review           [Claude cross-check vs. docs, S2T, parse flags]
-Step 10  Test Generation               [Claude, pytest / dbt test stubs]
+Step 9   ◼ Gate 2 — Human Security Review
+         APPROVED     → auto-proceed to Step 10 (scan was clean)
+         ACKNOWLEDGED → proceed to Step 10 (issues noted, risk accepted)
+         FAILED       → BLOCKED (terminal)
+         [Pauses only when scan is not APPROVED]
+    │
+    ▼
+Step 10  Code Quality Review           [Claude cross-check vs. docs, S2T, parse flags]
+Step 11  Test Generation               [Claude, pytest / dbt test stubs]
          → Security re-scan of generated test files (merged into Step 8 report)
     │
     ▼
-Step 11  ◼ Gate 2 — Code Review Sign-off
+Step 12  ◼ Gate 3 — Code Review Sign-off
          APPROVE     → COMPLETE
-         REGENERATE  → re-run Steps 7–10
+         REGENERATE  → FAILED (re-run from Step 6)
          REJECT      → BLOCKED (terminal)
 ```
 
@@ -161,8 +187,9 @@ flows through `backend/security.py`.
 | Unauthenticated access | Session-cookie middleware enforces login on all non-static routes |
 | CORS misconfiguration | No CORS headers emitted by default (same-origin only); opt-in via `CORS_ORIGINS` env var |
 | Credentials in uploaded XML | `scan_xml_for_secrets()` — checks CONNECTION/SESSION attrs for non-placeholder passwords at Step 0 |
-| Insecure generated code | Step 8 — bandit (Python), YAML regex secrets scan, Claude review (all stacks); CRITICAL findings block pipeline |
-| Secrets in generated test code | Step 10 test files re-scanned and merged into Step 8 security report before Gate 2 |
+| Insecure generated code | Step 8 — bandit (Python), YAML regex secrets scan, Claude review (all stacks) |
+| Security gate bypass | Step 9 — human reviewer must explicitly approve, acknowledge, or fail before pipeline continues |
+| Secrets in generated test code | Step 11 test files re-scanned and merged into Step 8 security report before Gate 3 |
 
 ---
 
@@ -177,7 +204,8 @@ flows through `backend/security.py`.
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
 | `DELETE` | `/api/jobs/{id}` | Delete job and associated files |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (APPROVE / REJECT) |
-| `POST` | `/api/jobs/{id}/code-signoff` | Gate 2 decision (APPROVE / REGENERATE / REJECT) |
+| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / FAILED) |
+| `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVE / REGENERATE / REJECT) |
 | `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text) |
 | `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
 | `GET` | `/api/jobs/{id}/s2t/download` | Download S2T Excel workbook |
@@ -194,7 +222,7 @@ Job
 ├── job_id             UUID
 ├── filename           Original mapping filename
 ├── status             JobStatus enum (PARSING → COMPLETE / BLOCKED / FAILED)
-├── current_step       0–10
+├── current_step       0–12
 ├── xml_content        Mapping XML (stored in SQLite)
 ├── workflow_xml_content   Workflow XML (v1.1, nullable)
 ├── parameter_file_content Parameter file (v1.1, nullable)
@@ -204,13 +232,14 @@ Job
     ├── s2t                    Step 2
     ├── documentation_md       Step 3
     ├── verification           Step 4
-    ├── sign_off               Step 5
+    ├── sign_off               Step 5  (Gate 1)
     ├── stack_assignment       Step 6
     ├── conversion             Step 7  (files dict: filename → code)
     ├── security_scan          Step 8
-    ├── code_review            Step 9
-    ├── test_report            Step 10
-    └── code_sign_off          Step 11
+    ├── security_sign_off      Step 9  (Gate 2)
+    ├── code_review            Step 10
+    ├── test_report            Step 11
+    └── code_sign_off          Step 12 (Gate 3)
 ```
 
 ---
@@ -234,14 +263,15 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 9. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target |
-|---|---|---|
-| End-to-end pipeline completion rate | > 85% (no BLOCKED/FAILED) | > 90% |
-| S2T field coverage | ≥ 95% of target fields mapped | ≥ 95% |
-| Code review pass rate (Gate 2 APPROVE on first attempt) | > 70% | > 75% |
-| Security scan false-positive rate | — | < 10% of findings require no action |
-| CVE count in dependencies | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% of known vars resolved |
+| Metric | v1.0 Target | v1.1 Target | v1.2 Target |
+|---|---|---|---|
+| End-to-end pipeline completion rate | > 85% (no BLOCKED/FAILED) | > 90% | > 90% |
+| S2T field coverage | ≥ 95% of target fields mapped | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 APPROVE on first attempt) | > 70% | > 75% | > 75% |
+| Security scan false-positive rate | — | < 10% of findings require no action | < 10% |
+| Security gate review time (median) | — | — | < 5 minutes per job |
+| CVE count in dependencies | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | — | 100% of known vars resolved | 100% |
 
 ---
 
@@ -251,7 +281,7 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
   use `X | Y` union syntax
 - **SQLite** — sufficient for single-instance MVP; PostgreSQL migration path via SQLAlchemy
   in v2.0
-- **Claude API required** — Steps 2–4, 6–9 call the Anthropic API; no offline mode
+- **Claude API required** — Steps 3–4, 6–7, 8, 10–11 call the Anthropic API; no offline mode
 - **bandit** — optional but strongly recommended; scan step degrades gracefully if not
   installed (pip install bandit)
 - **No Docker required** — plain Python venv deployment; Dockerfile optional

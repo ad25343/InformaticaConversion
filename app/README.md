@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-11-step agentic pipeline powered by Claude, with security scanning and two human-in-the-loop review gates.
+12-step agentic pipeline powered by Claude, with security scanning, a human security review gate, and two code review gates.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -59,13 +59,30 @@ bash start.sh
 | S2T | Source-to-Target Map | Rule-based | Excel workbook generated |
 | 3 | Generate Documentation | Claude | Full transformation specs in Markdown |
 | 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
-| **5** | **Human Review Gate 1** | UI sign-off | **Hard gate — APPROVED / REJECTED** |
+| **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
 | 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
-| **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections; **CRITICAL findings block pipeline** |
-| 9 | Code Quality Review | Claude | Static analysis, 10+ checks against docs and S2T |
-| 10 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
-| **11** | **Human Review Gate 2** | UI sign-off | **APPROVED / REGENERATE / REJECTED** |
+| **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections |
+| **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist |
+| 10 | Code Quality Review | Claude | Static analysis, 10+ checks against docs and S2T |
+| 11 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
+| **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REGENERATE / REJECTED** |
+
+### Human Gates
+
+**Gate 1 (Step 5 — Human Review):** Reviewer sees the full Verification Report before any code is generated.
+- APPROVE → pipeline continues to stack assignment and code generation
+- REJECT → job blocked permanently
+
+**Gate 2 (Step 9 — Security Review):** Reviewer sees the full security scan findings and makes an informed decision. Pipeline pauses only when the scan is not clean (REVIEW_RECOMMENDED or REQUIRES_FIXES). Clean scans auto-proceed.
+- APPROVED → proceed to code quality review (scan was clean, or reviewer confirmed no action needed)
+- ACKNOWLEDGED → proceed with a note on record (known risk accepted)
+- FAILED → job blocked permanently
+
+**Gate 3 (Step 12 — Code Review):** Reviewer sees converted code, test coverage, and the security report.
+- APPROVED → job marked COMPLETE
+- REGENERATE → job marked FAILED; reviewer re-runs from Step 6
+- REJECTED → job blocked permanently
 
 ---
 
@@ -79,7 +96,7 @@ app/
 ├── .env.example                   Copy to .env and fill in secrets
 │
 ├── backend/
-│   ├── orchestrator.py            Pipeline state machine (11 steps + 2 gates)
+│   ├── orchestrator.py            Pipeline state machine (12 steps + 3 gates)
 │   ├── routes.py                  REST API endpoints (single-file + ZIP upload)
 │   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
 │   │                              credential scan, YAML secrets scan, bandit wrapper)
@@ -87,16 +104,16 @@ app/
 │   ├── auth.py                    Session auth
 │   ├── logger.py                  Structured per-job logging
 │   ├── agents/
-│   │   ├── session_parser_agent.py Step 0 — Session & parameter parse
+│   │   ├── session_parser_agent.py Step 0  — Session & parameter parse
 │   │   ├── parser_agent.py        Step 1  — XML parser (lxml, XXE-hardened)
 │   │   ├── classifier_agent.py    Step 2  — Complexity classifier
 │   │   ├── s2t_agent.py           Step S2T — Source-to-Target Excel
 │   │   ├── documentation_agent.py Step 3  — Documentation (Claude)
 │   │   ├── verification_agent.py  Step 4  — Verification
-│   │   ├── conversion_agent.py    Steps 6-7 — Stack assignment + code generation
+│   │   ├── conversion_agent.py    Steps 6–7 — Stack assignment + code generation
 │   │   ├── security_agent.py      Step 8  — Security scan (bandit + YAML + Claude)
-│   │   ├── review_agent.py        Step 9  — Code quality review
-│   │   └── test_agent.py          Step 10 — Test generation
+│   │   ├── review_agent.py        Step 10 — Code quality review
+│   │   └── test_agent.py          Step 11 — Test generation
 │   ├── models/
 │   │   └── schemas.py             Pydantic models for all pipeline artifacts
 │   └── db/
@@ -131,8 +148,8 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | Oversized uploads | `validate_upload_size()` called on every upload stream before processing |
 | Credentials in uploaded XML | `scan_xml_for_secrets()` — checks CONNECTION/SESSION attrs at Step 0 |
 | Insecure generated code | Step 8 — bandit (Python), YAML regex scan, Claude review (all stacks) |
-| CRITICAL generated-code issue | Step 8 CRITICAL gate — pipeline blocked before code reaches reviewer |
-| Secrets in generated test code | Step 10 test files re-scanned and merged into Step 8 report |
+| Security gate | Step 9 — human reviewer must explicitly approve, acknowledge, or fail findings before code review begins |
+| Secrets in generated test code | Step 11 test files re-scanned and merged into Step 8 report before Gate 3 |
 
 ---
 
@@ -190,7 +207,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | Version | Status | Scope |
 |---------|--------|-------|
 | **v1.0** | Shipped | Transformation logic, human review gates, PySpark / dbt / Python code generation |
-| **v1.1** | Current | Three-file upload (Mapping + Workflow + Parameter) + ZIP archive; auto-detect file types; cross-reference validation; session config extraction; $$VAR resolution; YAML artifact generation; 11-step pipeline with dedicated Security Scan step; bandit + YAML + Claude security review; CRITICAL findings gate |
+| **v1.1** | Shipped | Three-file upload + ZIP archive; session config extraction; $$VAR resolution; YAML artifact generation; dedicated Security Scan step (Step 8); bandit + YAML + Claude security review |
+| **v1.2** | Current | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
 | **v2.0** | Planned | Multi-mapping batch conversion; Git integration (open PR from UI); incremental re-conversion; scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 

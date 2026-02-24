@@ -31,6 +31,7 @@ The following are **in scope** for this policy:
 | Secrets exposure | Hardcoded credentials in source code or generated output |
 | Rate limiting | Endpoints that could be abused to incur API costs |
 | Generated code | Security issues Claude introduces into PySpark/dbt/Python output |
+| Security gate bypass | Logic flaws that allow the security review gate (Step 9) to be skipped |
 
 The following are **out of scope**:
 
@@ -53,10 +54,25 @@ Key protections implemented in this version:
 | Upload abuse | `validate_upload_size()` — HTTP 413 on every upload stream; configurable via `MAX_UPLOAD_MB` |
 | Credentials in XML | `scan_xml_for_secrets()` — scans uploaded Informatica XML for plaintext passwords before processing |
 | Rate limiting | `slowapi` — `POST /api/jobs`, `POST /api/jobs/zip`, `POST /login` rate-limited per IP |
-| Insecure generated code | Step 8 security scan — bandit (Python), YAML regex scan, Claude review; CRITICAL gate blocks pipeline |
-| Secrets in generated tests | Step 10 test files re-scanned; findings merged into Step 8 security report |
+| Insecure generated code | Step 8 security scan — bandit (Python), YAML regex scan, Claude review (all stacks) |
+| Security gate | Step 9 human review — reviewer must explicitly APPROVE, ACKNOWLEDGE, or FAIL before pipeline continues; auto-proceeds only when scan is fully clean (APPROVED recommendation) |
+| Secrets in generated tests | Step 11 test files re-scanned; findings merged into Step 8 security report before Gate 3 |
 | Default credentials | Startup warnings logged if `SECRET_KEY` or `APP_PASSWORD` are not set |
 | Session security | `httponly` + `samesite=lax` cookies; `secure` flag enabled when `HTTPS=true` |
+
+### Security Review Decisions (Step 9)
+
+When the automated security scan (Step 8) finds issues, the pipeline pauses at Step 9
+and waits for a human decision. Three outcomes are possible:
+
+| Decision | Meaning | Pipeline Effect |
+|----------|---------|----------------|
+| APPROVED | Scan was clean, or reviewer confirms no action needed | Proceeds to Step 10 |
+| ACKNOWLEDGED | Issues noted; risk accepted with documented rationale | Proceeds to Step 10 with finding on record |
+| FAILED | Findings are unacceptable for this mapping | Job blocked permanently |
+
+The reviewer, their role, their decision, and any notes are stored in the job record
+(`security_sign_off`) and included in the downloadable Markdown and PDF reports.
 
 ---
 
