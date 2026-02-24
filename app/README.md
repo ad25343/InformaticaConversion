@@ -115,6 +115,35 @@ Documentation token budget auto-scales: `max(tier_floor, num_transformations × 
 
 ---
 
+## Current Scope
+
+This tool currently handles **Mapping-level conversion only**.
+
+Given an Informatica PowerCenter XML export, it converts the transformation logic (Source Qualifiers, Expressions, Joiners, Lookups, Routers, Aggregators, etc.) into production-ready PySpark, dbt, or Python code.
+
+The following are **not yet in scope**:
+- Workflows (WF) and Worklets
+- Sessions (runtime config, reject handling, pre/post SQL, commit intervals)
+- Parameter files (`$$VARIABLES`)
+- Source/Target definitions
+- Cross-mapping dependency graphs
+
+See the Roadmap below for planned versions that address these gaps.
+
+---
+
+## Roadmap
+
+| Version | Name | Scope |
+|---------|------|-------|
+| **v1.0** | Mapping Conversion | Transformation logic, human review gates, PySpark / dbt / Python code generation |
+| **v1.1** | Session & Parameter Support | Session config extraction (connections, reject handling, pre/post SQL), parameter file resolution (`$$VARIABLES`) |
+| **v2.0** | Workflow Conversion | WF → Airflow / Dagster / Prefect DAG; Sessions as task nodes; Worklets as TaskGroups |
+| **v2.1** | Dependency Graph | Cross-mapping lineage, load order, shared staging table awareness |
+| **v3.0** | Portfolio Migration | Bulk processing, migration dashboard, repository-level export, progress tracking across a full Informatica portfolio |
+
+---
+
 ## Database
 
 SQLite by default (`app/data/jobs.db`). To switch to PostgreSQL, change `DATABASE_URL` in `backend/db/database.py`.
