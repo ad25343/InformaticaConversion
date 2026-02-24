@@ -45,6 +45,9 @@
     /* ── Job list ── */
     .section-title { font-size: 11px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
     .job-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1; }
+    .history-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 6px 4px; border-radius: 6px; margin-top: 10px; user-select: none; }
+    .history-header:hover { background: var(--surface2); }
+    .history-chevron { font-size: 10px; color: var(--muted); transition: transform 0.2s ease; }
     .job-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; transition: background .15s, border-color .15s; }
     .job-item:hover { background: var(--surface2); }
     .job-item.active { background: var(--surface2); border-color: var(--accent); }
@@ -306,7 +309,7 @@
     <hr/>
 
     <!-- Job list -->
-    <div class="section-title">Recent Jobs</div>
+    <div class="section-title">Jobs</div>
     <div class="job-list" id="jobList">
       <div class="empty" style="padding:20px 0">
         <div style="font-size:24px">📋</div>
@@ -341,7 +344,7 @@ const STEPS = [
   { n:5,  label:"Review" },
   { n:6,  label:"Stack" },
   { n:7,  label:"Convert" },
-  { n:8,  label:"Validate" },
+  { n:8,  label:"Security" },
   { n:9,  label:"Tests" },
   { n:10, label:"Sign-Off" },
 ];
@@ -355,7 +358,7 @@ const STATUS_BADGE = {
   awaiting_review: ['badge-waiting','Awaiting Review'],
   assigning_stack: ['badge-running','Assigning Stack'],
   converting:      ['badge-running','Converting'],
-  validating:      ['badge-running','Validating'],
+  validating:      ['badge-running','Security Scan'],
   testing:              ['badge-running','Testing'],
   awaiting_code_review: ['badge-waiting','Code Review'],
   complete:             ['badge-complete','Complete'],
@@ -546,29 +549,82 @@ async function loadJobs() {
   } catch(e) { /* ignore poll errors */ }
 }
 
+// Statuses that mean a job is still running / waiting for action
+const _ACTIVE_STATUSES = new Set([
+  'pending','parsing','classifying','documenting','verifying',
+  'awaiting_review','assigning_stack','converting','validating',
+  'testing','awaiting_code_review'
+]);
+
+// Persists across re-renders so toggle state survives polling
+let historyOpen = false;
+
+function toggleHistory() {
+  historyOpen = !historyOpen;
+  const list    = document.getElementById('historyList');
+  const chevron = document.getElementById('historyChevron');
+  if (list)    list.style.display = historyOpen ? 'flex' : 'none';
+  if (chevron) chevron.style.transform = historyOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+}
+
+function renderJobItem(j) {
+  const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+  const isActive   = j.job_id === currentJobId;
+  const isComplete = j.status === 'complete';
+  return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
+      <div style="min-width:0">
+        <div class="job-name">${esc(j.filename)}</div>
+        <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${j.current_step}/10 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
+      </div>
+      <button
+        title="Delete job"
+        onclick="event.stopPropagation(); deleteJob('${j.job_id}', '${esc(j.filename)}')"
+        style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:2px 5px;border-radius:4px;color:var(--muted);font-size:14px;line-height:1;opacity:0.5;transition:opacity .15s,color .15s"
+        onmouseenter="this.style.opacity='1';this.style.color='var(--danger)'"
+        onmouseleave="this.style.opacity='0.5';this.style.color='var(--muted)'">🗑</button>
+    </div>
+  </div>`;
+}
+
 function renderJobList(jobs) {
   const el = document.getElementById('jobList');
   if (!jobs.length) {
     el.innerHTML = '<div class="empty" style="padding:20px 0"><div style="font-size:24px">📋</div><div style="font-size:12px;margin-top:8px">No jobs yet</div></div>';
     return;
   }
-  el.innerHTML = jobs.map(j => {
-    const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
-    return `<div class="job-item ${j.job_id === currentJobId ? 'active':''} ${j.status === 'complete' ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
-        <div style="min-width:0">
-          <div class="job-name">${esc(j.filename)}</div>
-          <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${j.current_step}/8 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
-        </div>
-        <button
-          title="Delete job"
-          onclick="event.stopPropagation(); deleteJob('${j.job_id}', '${esc(j.filename)}')"
-          style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:2px 5px;border-radius:4px;color:var(--muted);font-size:14px;line-height:1;opacity:0.5;transition:opacity .15s,color .15s"
-          onmouseenter="this.style.opacity='1';this.style.color='var(--danger)'"
-          onmouseleave="this.style.opacity='0.5';this.style.color='var(--muted)'">🗑</button>
+
+  const active = jobs.filter(j =>  _ACTIVE_STATUSES.has(j.status));
+  const past   = jobs.filter(j => !_ACTIVE_STATUSES.has(j.status));
+
+  let html = '';
+
+  // ── Active / in-progress jobs ────────────────────────────────────────────
+  // Always shown at the top without any collapse
+  if (active.length) {
+    html += active.map(renderJobItem).join('');
+  }
+
+  // ── Past jobs (complete / failed / blocked) ──────────────────────────────
+  if (past.length) {
+    if (active.length) {
+      // When something is actively running, collapse history by default so
+      // the running job stays front-and-center.
+      html += `
+      <div class="history-header" onclick="toggleHistory()">
+        <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">History (${past.length})</span>
+        <span id="historyChevron" class="history-chevron" style="transform:${historyOpen?'rotate(0deg)':'rotate(-90deg)'}">▼</span>
       </div>
-    </div>`;
-  }).join('');
+      <div id="historyList" style="display:${historyOpen?'flex':'none'};flex-direction:column;gap:6px">
+        ${past.map(renderJobItem).join('')}
+      </div>`;
+    } else {
+      // No active jobs — show past jobs directly (nothing to push aside)
+      html += past.map(renderJobItem).join('');
+    }
+  }
+
+  el.innerHTML = html;
 }
 
 // ─────────────────────────────────────────────
