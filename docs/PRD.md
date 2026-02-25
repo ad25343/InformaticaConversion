@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 1.2
+**Version:** 1.3
 **Author:** ad25343
-**Last Updated:** 2026-02-24
+**Last Updated:** 2026-02-25
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -99,6 +99,24 @@ New features:
 - 12-dot stepper in the UI with "Sec Rev" dot at Step 9
 - All downstream step numbers updated: Quality Review → 10, Tests → 11, Code Sign-Off → 12
 
+### v1.3 — Logic Equivalence Check (current)
+
+Upgrades Step 10 (Code Quality Review) with a new Logic Equivalence stage that goes
+back to the original Informatica XML as the ground truth and verifies rule-by-rule
+that the generated code correctly implements every transformation, expression, filter,
+join, and null-handling pattern. This is a cross-check of Claude's own output against
+the source XML — not against Claude's documentation of it.
+
+New features:
+- Stage A — Logic Equivalence: per-rule verdicts (VERIFIED / NEEDS_REVIEW / MISMATCH)
+  comparing generated code directly against the original Informatica XML
+- Stage B — Code Quality: existing 10-check static review (unchanged)
+- Equivalence stats shown at Gate 3: X VERIFIED / Y NEEDS REVIEW / Z MISMATCHES + coverage %
+- Per-rule detail in Gate 3 card: rule type, XML rule verbatim, generated implementation, note
+- Mismatches detected by equivalence check cap code review recommendation at REVIEW_RECOMMENDED
+- Logic Equivalence section added to downloadable Markdown and PDF reports
+- `LogicEquivalenceCheck` and `LogicEquivalenceReport` added to data model
+
 ### v2.0 — Planned
 
 - Multi-mapping batch conversion (one ZIP → multiple output packages)
@@ -157,7 +175,8 @@ Step 9   ◼ Gate 2 — Human Security Review
          [Pauses only when scan is not APPROVED]
     │
     ▼
-Step 10  Code Quality Review           [Claude cross-check vs. docs, S2T, parse flags]
+Step 10  Logic Equivalence Check       [Stage A: Claude, XML → code rule-by-rule comparison]
+         Code Quality Review           [Stage B: Claude cross-check vs. docs, S2T, parse flags]
 Step 11  Test Generation               [Claude, pytest / dbt test stubs]
          → Security re-scan of generated test files (merged into Step 8 report)
     │
@@ -262,15 +281,17 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 9. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target | v1.2 Target |
-|---|---|---|---|
-| End-to-end pipeline completion rate | > 85% (no BLOCKED/FAILED) | > 90% | > 90% |
-| S2T field coverage | ≥ 95% of target fields mapped | ≥ 95% | ≥ 95% |
-| Code review pass rate (Gate 3 APPROVE on first attempt) | > 70% | > 75% | > 75% |
-| Security scan false-positive rate | — | < 10% of findings require no action | < 10% |
-| Security gate review time (median) | — | — | < 5 minutes per job |
-| CVE count in dependencies | 0 | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% of known vars resolved | 100% |
+| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target |
+|---|---|---|---|---|
+| End-to-end pipeline completion rate | > 85% (no BLOCKED/FAILED) | > 90% | > 90% | > 90% |
+| S2T field coverage | ≥ 95% of target fields mapped | ≥ 95% | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 APPROVE on first attempt) | > 70% | > 75% | > 75% | > 75% |
+| Security scan false-positive rate | — | < 10% of findings require no action | < 10% | < 10% |
+| Security gate review time (median) | — | — | < 5 minutes per job | < 5 minutes |
+| Logic equivalence MISMATCH rate | — | — | — | < 5% of rules flagged MISMATCH |
+| Logic equivalence VERIFIED rate | — | — | — | > 80% of rules VERIFIED |
+| CVE count in dependencies | 0 | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | — | 100% of known vars resolved | 100% | 100% |
 
 ---
 

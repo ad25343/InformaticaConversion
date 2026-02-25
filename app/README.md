@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-12-step agentic pipeline powered by Claude, with security scanning, a human security review gate, and two code review gates.
+12-step agentic pipeline powered by Claude, with security scanning, a human security review gate, XML-grounded logic equivalence checking, and two code review gates.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -64,7 +64,7 @@ bash start.sh
 | 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
 | **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections |
 | **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist |
-| 10 | Code Quality Review | Claude | Static analysis, 10+ checks against docs and S2T |
+| 10 | Logic Equivalence + Code Quality | Claude | Stage A: rule-by-rule XML→code comparison (VERIFIED/NEEDS_REVIEW/MISMATCH); Stage B: 10+ static quality checks |
 | 11 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
 | **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REJECTED** |
 
@@ -207,8 +207,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 |---------|--------|-------|
 | **v1.0** | Shipped | Transformation logic, human review gates, PySpark / dbt / Python code generation |
 | **v1.1** | Shipped | Three-file upload + ZIP archive; session config extraction; $$VAR resolution; YAML artifact generation; dedicated Security Scan step (Step 8); bandit + YAML + Claude security review |
-| **v1.2** | Current | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
-| **v2.0** | Planned | Multi-mapping batch conversion; Git integration (open PR from UI); incremental re-conversion; scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
+| **v1.2** | Shipped | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
+| **v1.3** | Current | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
+| **v2.0** | Planned | Multi-mapping batch conversion; Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
 ---

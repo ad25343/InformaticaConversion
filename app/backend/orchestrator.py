@@ -538,16 +538,22 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
             verification=verification_dict,
             s2t=s2t_dict,
             parse_report=parse_report,
+            xml_content=xml_content,   # v1.3 — logic equivalence check against original XML
         )
         rec = code_review.recommendation
+        eq  = code_review.equivalence_report
         log.info(
             f"Code review complete — {code_review.total_passed}/{len(code_review.checks)} checks passed, "
-            f"recommendation: {rec}",
+            f"recommendation: {rec}"
+            + (f"; equivalence: {eq.total_verified}V/{eq.total_needs_review}NR/{eq.total_mismatches}M" if eq else ""),
             step=10,
             data={
                 "recommendation": rec,
                 "total_passed": code_review.total_passed,
                 "total_failed": code_review.total_failed,
+                "equivalence_verified": eq.total_verified if eq else None,
+                "equivalence_needs_review": eq.total_needs_review if eq else None,
+                "equivalence_mismatches": eq.total_mismatches if eq else None,
             },
         )
         log.step_complete(10, "Code Quality Review", rec)
@@ -706,6 +712,9 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         yield await emit(10, JobStatus.FAILED, f"State reconstruction failed: {e}", _err(e))
         return
 
+    # Load original XML for logic equivalence check (v1.3)
+    xml_content_for_review = await get_xml(job_id) or ""
+
     verification_dict = (verification.model_dump()
                          if verification and hasattr(verification, "model_dump")
                          else {})
@@ -726,16 +735,22 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
             verification=verification_dict,
             s2t=s2t_dict,
             parse_report=parse_report,
+            xml_content=xml_content_for_review,   # v1.3 — logic equivalence check against original XML
         )
         rec = code_review.recommendation
+        eq  = code_review.equivalence_report
         log.info(
             f"Code review complete — {code_review.total_passed}/{len(code_review.checks)} checks passed, "
-            f"recommendation: {rec}",
+            f"recommendation: {rec}"
+            + (f"; equivalence: {eq.total_verified}V/{eq.total_needs_review}NR/{eq.total_mismatches}M" if eq else ""),
             step=10,
             data={
                 "recommendation": rec,
                 "total_passed": code_review.total_passed,
                 "total_failed": code_review.total_failed,
+                "equivalence_verified": eq.total_verified if eq else None,
+                "equivalence_needs_review": eq.total_needs_review if eq else None,
+                "equivalence_mismatches": eq.total_mismatches if eq else None,
             },
         )
         log.step_complete(10, "Code Quality Review", rec)

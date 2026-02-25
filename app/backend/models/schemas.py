@@ -289,7 +289,28 @@ class SecurityScanReport(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# Code Review Report (Step 8)
+# Logic Equivalence Report (Step 10 — v1.3)
+# ─────────────────────────────────────────────
+
+class LogicEquivalenceCheck(BaseModel):
+    rule_type:       str   # FIELD | EXPRESSION | FILTER | JOIN | NULL_HANDLING | CHAIN
+    rule_id:         str   # Short identifier (e.g. field name or expression summary)
+    verdict:         str   # VERIFIED | NEEDS_REVIEW | MISMATCH
+    xml_rule:        str   # The original rule from the Informatica XML (verbatim or summarised)
+    generated_impl:  str   # What the generated code does (or "NOT FOUND")
+    note:            str = ""
+
+class LogicEquivalenceReport(BaseModel):
+    total_verified:      int
+    total_needs_review:  int
+    total_mismatches:    int
+    coverage_pct:        float   # (verified + needs_review) / total * 100
+    checks:              List[LogicEquivalenceCheck]
+    summary:             str
+
+
+# ─────────────────────────────────────────────
+# Code Review Report (Step 10)
 # ─────────────────────────────────────────────
 
 class CodeReviewCheck(BaseModel):
@@ -299,14 +320,15 @@ class CodeReviewCheck(BaseModel):
     note:     str = ""
 
 class CodeReviewReport(BaseModel):
-    mapping_name:    str
-    target_stack:    str
-    checks:          List[CodeReviewCheck]
-    total_passed:    int
-    total_failed:    int
-    recommendation:  str   # APPROVED | REVIEW_RECOMMENDED | REQUIRES_FIXES
-    summary:         str
-    parse_degraded:  bool = False   # True if Step 7 output was degraded
+    mapping_name:       str
+    target_stack:       str
+    checks:             List[CodeReviewCheck]
+    total_passed:       int
+    total_failed:       int
+    recommendation:     str   # APPROVED | REVIEW_RECOMMENDED | REQUIRES_FIXES
+    summary:            str
+    parse_degraded:     bool = False   # True if Step 7 output was degraded
+    equivalence_report: Optional[LogicEquivalenceReport] = None  # v1.3 — XML-grounded check
 
 
 # ─────────────────────────────────────────────

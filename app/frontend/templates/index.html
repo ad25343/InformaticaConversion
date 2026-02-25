@@ -1285,8 +1285,51 @@ function renderJobPanel(job) {
         ${esc(cr.summary)}
       </div>` : ''}
 
+      ${(() => {
+        const eq = cr.equivalence_report;
+        if (!eq) return '';
+        const total = eq.total_verified + eq.total_needs_review + eq.total_mismatches;
+        if (total === 0 && !eq.summary) return '';
+        const hasMismatches = eq.total_mismatches > 0;
+        const borderCol = hasMismatches ? 'var(--danger)' : eq.total_needs_review > 0 ? 'var(--warn)' : 'var(--accent2)';
+        const VERDICT_ICON   = { VERIFIED:'✅', NEEDS_REVIEW:'⚠️', MISMATCH:'❌' };
+        const VERDICT_COLOR  = { VERIFIED:'var(--accent2)', NEEDS_REVIEW:'var(--warn)', MISMATCH:'var(--danger)' };
+        const VERDICT_BG     = { VERIFIED:'rgba(34,197,94,.04)', NEEDS_REVIEW:'rgba(251,191,36,.07)', MISMATCH:'rgba(248,113,113,.08)' };
+        const RULE_ICON      = { FIELD:'📋', EXPRESSION:'🔣', FILTER:'🔽', JOIN:'🔗', NULL_HANDLING:'⬜', CHAIN:'⛓️' };
+        const mismatchRows   = (eq.checks||[]).filter(c => c.verdict === 'MISMATCH');
+        const needsRevRows   = (eq.checks||[]).filter(c => c.verdict === 'NEEDS_REVIEW');
+        const verifiedRows   = (eq.checks||[]).filter(c => c.verdict === 'VERIFIED');
+        const orderedChecks  = [...mismatchRows, ...needsRevRows, ...verifiedRows];
+        return `
+        <div style="margin-bottom:14px;border:1px solid ${borderCol};border-radius:8px;overflow:hidden">
+          <div style="padding:10px 14px;background:${hasMismatches?'rgba(248,113,113,.07)':eq.total_needs_review>0?'rgba(251,191,36,.06)':'rgba(34,197,94,.05)'};display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.05em">LOGIC EQUIVALENCE CHECK</span>
+            <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,.12);color:var(--accent2);font-weight:600">${eq.total_verified} VERIFIED</span>
+            <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(251,191,36,.15);color:var(--warn);font-weight:600">${eq.total_needs_review} NEEDS REVIEW</span>
+            <span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(248,113,113,.15);color:var(--danger);font-weight:600">${eq.total_mismatches} MISMATCHES</span>
+            <span style="font-size:11px;color:var(--muted);margin-left:auto">${eq.coverage_pct}% coverage</span>
+          </div>
+          ${eq.summary ? `<div style="padding:8px 14px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border)">${esc(eq.summary)}</div>` : ''}
+          ${orderedChecks.length ? `<div style="padding:8px;display:flex;flex-direction:column;gap:4px">
+            ${orderedChecks.map(c => `
+            <div style="display:flex;gap:8px;align-items:flex-start;padding:7px 10px;background:${VERDICT_BG[c.verdict]||'transparent'};border-radius:6px;border-left:3px solid ${VERDICT_COLOR[c.verdict]||'var(--muted)'}">
+              <span style="font-size:13px;flex-shrink:0">${VERDICT_ICON[c.verdict]||'?'}</span>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:2px">
+                  <span style="font-size:10px;font-weight:700;color:var(--muted)">${RULE_ICON[c.rule_type]||''} ${esc(c.rule_type)}</span>
+                  <span style="font-size:12px;font-weight:600">${esc(c.rule_id)}</span>
+                </div>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:2px"><strong>XML:</strong> ${esc(c.xml_rule)}</div>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:${c.note?'2px':'0'}"><strong>Code:</strong> ${esc(c.generated_impl)}</div>
+                ${c.note ? `<div style="font-size:11px;color:${VERDICT_COLOR[c.verdict]||'var(--muted)'}">${esc(c.note)}</div>` : ''}
+              </div>
+            </div>`).join('')}
+          </div>` : ''}
+        </div>`;
+      })()}
+
       ${sortedChecks.length ? `
-      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px">CHECK RESULTS</div>
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px">CODE QUALITY CHECKS</div>
       <div style="display:flex;flex-direction:column;gap:6px">
         ${sortedChecks.map(c => {
           const sevCols = { CRITICAL:'var(--danger)', HIGH:'#f97316', MEDIUM:'var(--warn)', LOW:'var(--muted)' };
@@ -1461,7 +1504,8 @@ function renderJobPanel(job) {
         </div>
         <div class="card-body">
           <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
-            Review the generated code (Step 7), security scan (Step 8), security review (Step 9), quality report (Step 10), and test coverage (Step 11).
+            Review the generated code (Step 7), security scan (Step 8), security review (Step 9),
+            logic equivalence + quality report (Step 10), and test coverage (Step 11).
             Then record your decision below.
           </div>
           <div class="form-group">
@@ -2133,7 +2177,7 @@ function buildReportMarkdown(job) {
     if (sso.notes) p(sso.notes);
   }
 
-  // ── Step 10 — Code Quality Review ─────────────────────────────────────────
+  // ── Step 10 — Code Quality Review (+ Logic Equivalence) ──────────────────
   const cr = state.code_review;
   if (cr) {
     h2('Step 10 — Code Quality Review');
@@ -2141,8 +2185,31 @@ function buildReportMarkdown(job) {
     kv('Passed', cr.total_passed ?? 0);
     kv('Failed', cr.total_failed ?? 0);
     if (cr.summary) p(cr.summary);
+
+    // Logic Equivalence sub-section
+    const eq = cr.equivalence_report;
+    if (eq) {
+      L.push('', '**Logic Equivalence Check (XML → Generated Code):**', '');
+      kv('Verified', eq.total_verified ?? 0);
+      kv('Needs Review', eq.total_needs_review ?? 0);
+      kv('Mismatches', eq.total_mismatches ?? 0);
+      kv('Coverage', `${eq.coverage_pct ?? 0}%`);
+      if (eq.summary) p(eq.summary);
+      if (eq.checks?.length) {
+        L.push('');
+        eq.checks.forEach(c => {
+          const icon = { VERIFIED:'✅', NEEDS_REVIEW:'⚠️', MISMATCH:'❌' }[c.verdict] || '?';
+          L.push(`- ${icon} **[${c.rule_type}] ${c.rule_id}** — _${c.verdict}_`);
+          L.push(`  - XML: \`${c.xml_rule}\``);
+          L.push(`  - Code: ${c.generated_impl}`);
+          if (c.note) L.push(`  - Note: ${c.note}`);
+        });
+        L.push('');
+      }
+    }
+
     if (cr.checks?.length) {
-      L.push('**Checks:**', '');
+      L.push('**Code Quality Checks:**', '');
       cr.checks.forEach(c => {
         const icon = c.passed ? '✅' : '❌';
         L.push(`- ${icon} **${c.name?.replace(/_/g,' ')}**${c.passed ? '' : ` [${c.severity}]`}${c.note ? ` — ${c.note}` : ''}`);
