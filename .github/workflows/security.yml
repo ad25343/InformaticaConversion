@@ -3,8 +3,17 @@ name: Security Scan
 on:
   push:
     branches: ["main"]
+    # Only trigger when code or dependencies actually change.
+    # Doc-only, config-only, and workflow-only pushes are skipped — no email.
+    paths:
+      - "app/**/*.py"
+      - "app/requirements.txt"
+      - ".github/workflows/security.yml"
   pull_request:
     branches: ["main"]
+    paths:
+      - "app/**/*.py"
+      - "app/requirements.txt"
   schedule:
     # Run weekly on Mondays at 07:00 UTC — catches newly disclosed CVEs
     # even when there are no code changes
@@ -136,3 +145,33 @@ jobs:
           base: ${{ github.event.repository.default_branch }}
           head: HEAD
           extra_args: --only-verified
+
+  # ── 5. Failure summary — only runs when a prior job failed ──────────────────
+  # GitHub sends email for every completed workflow run.  By watching only this
+  # job's result you can filter your inbox: "Security Scan / Failure Summary"
+  # only appears when something actually broke.
+  notify-on-failure:
+    name: Failure Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-audit, bandit-scan, security-unit-tests, secrets-scan]
+    if: |
+      always() && (
+        needs.dependency-audit.result   == 'failure' ||
+        needs.bandit-scan.result        == 'failure' ||
+        needs.security-unit-tests.result == 'failure' ||
+        needs.secrets-scan.result       == 'failure'
+      )
+    steps:
+      - name: Summarise failures
+        run: |
+          echo "## Security Scan — FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependency Audit  | ${{ needs.dependency-audit.result }}    |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bandit Scan       | ${{ needs.bandit-scan.result }}         |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Tests    | ${{ needs.security-unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets Scan      | ${{ needs.secrets-scan.result }}        |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the failed job's logs above for details." >> $GITHUB_STEP_SUMMARY
+          exit 1   # Fail this job so the overall workflow is marked red
