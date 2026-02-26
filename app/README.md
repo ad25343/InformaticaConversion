@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-12-step agentic pipeline powered by Claude, with security scanning, a human security review gate, XML-grounded logic equivalence checking, and two code review gates.
+12-step agentic pipeline powered by Claude with security scanning, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -46,6 +46,18 @@ bash start.sh
 - Parameter file `.txt` or `.param` (optional — resolves all `$$VARIABLE` references)
 
 **ZIP archive** — drop a ZIP containing any combination of the above; file types are auto-detected from XML structure (not filename).
+
+**Batch ZIP** *(v2.0)* — drop a ZIP with one subfolder per mapping; all mappings are converted concurrently (up to 3 at a time). Each mapping runs through the full 12-step pipeline with independent review gates.
+
+```
+batch.zip/
+  mapping_a/
+    mapping.xml       ← required
+    workflow.xml      ← optional
+    params.txt        ← optional
+  mapping_b/
+    mapping.xml
+```
 
 ---
 
@@ -96,10 +108,10 @@ app/
 │
 ├── backend/
 │   ├── orchestrator.py            Pipeline state machine (12 steps + 3 gates)
-│   ├── routes.py                  REST API endpoints (single-file + ZIP upload)
+│   ├── routes.py                  REST API endpoints (single-file + ZIP + batch upload)
 │   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
 │   │                              credential scan, YAML secrets scan, bandit wrapper)
-│   ├── zip_extractor.py           ZIP upload handler (auto-detect file types)
+│   ├── zip_extractor.py           ZIP upload handler (single-mapping + batch extraction)
 │   ├── auth.py                    Session auth
 │   ├── logger.py                  Structured per-job logging
 │   ├── agents/
@@ -120,7 +132,7 @@ app/
 │
 ├── frontend/
 │   └── templates/
-│       ├── index.html             Main pipeline UI (individual files + ZIP toggle)
+│       ├── index.html             Main pipeline UI (individual files + ZIP + Batch tabs)
 │       └── login.html             Login screen
 │
 └── sample_xml/
@@ -208,8 +220,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v1.0** | Shipped | Transformation logic, human review gates, PySpark / dbt / Python code generation |
 | **v1.1** | Shipped | Three-file upload + ZIP archive; session config extraction; $$VAR resolution; YAML artifact generation; dedicated Security Scan step (Step 8); bandit + YAML + Claude security review |
 | **v1.2** | Shipped | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
-| **v1.3** | Current | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
-| **v2.0** | Planned | Multi-mapping batch conversion; Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
+| **v1.3** | Shipped | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
+| **v2.0** | Current | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
+| **v2.1** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
 ---

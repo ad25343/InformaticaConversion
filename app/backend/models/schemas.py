@@ -442,3 +442,33 @@ class JobSummary(BaseModel):
     created_at:   str
     updated_at:   str
     complexity:   Optional[str] = None
+    batch_id:     Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Batch Conversion (v2.0)
+# ─────────────────────────────────────────────
+
+class BatchStatus(str, Enum):
+    """Overall status of a batch, computed from its constituent job statuses."""
+    RUNNING  = "running"   # At least one job is still in-flight
+    COMPLETE = "complete"  # All jobs reached COMPLETE
+    PARTIAL  = "partial"   # Some complete, some blocked/failed
+    FAILED   = "failed"    # All jobs failed or blocked
+
+class BatchRecord(BaseModel):
+    """Top-level batch record returned by GET /api/batches/{batch_id}."""
+    batch_id:      str
+    source_zip:    str
+    mapping_count: int
+    status:        BatchStatus
+    created_at:    str
+    updated_at:    str
+    jobs:          List[JobSummary] = []
+
+class BatchCreateResponse(BaseModel):
+    """Response body from POST /api/jobs/batch."""
+    batch_id:      str
+    mapping_count: int
+    jobs:          List[dict]   # [{job_id, filename}]
+    status:        str = "running"

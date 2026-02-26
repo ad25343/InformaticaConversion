@@ -17,12 +17,13 @@ from .models.schemas import (
     SignOffRecord, SignOffRequest, ReviewDecision, JobStatus,
     CodeSignOffRequest, CodeSignOffRecord, CodeReviewDecision,
     SecuritySignOffRecord, SecuritySignOffRequest, SecurityReviewDecision,
+    BatchStatus,
 )
 from . import orchestrator
 from .logger import read_job_log, read_job_log_raw, job_log_path, list_log_registry
 from .agents.s2t_agent import s2t_excel_path
 from .security import validate_upload_size, ZipExtractionError
-from .zip_extractor import extract_informatica_zip
+from .zip_extractor import extract_informatica_zip, extract_batch_zip
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
@@ -584,3 +585,130 @@ async def create_job_from_zip(
         "warnings":          warnings,
         "status":            "started",
     }
+
+
+# ─────────────────────────────────────────────
+# Batch Upload (v2.0)
+# ─────────────────────────────────────────────
+
+# Semaphore: cap at 3 concurrent mapping pipelines to respect Claude API limits
+_batch_semaphore = asyncio.Semaphore(3)
+
+
+def _compute_batch_status(job_statuses: list[str]) -> str:
+    """Derive a BatchStatus string from a list of individual job status strings."""
+    if not job_statuses:
+        return BatchStatus.FAILED.value
+    terminal = {JobStatus.COMPLETE.value, JobStatus.FAILED.value, JobStatus.BLOCKED.value}
+    complete_set = {JobStatus.COMPLETE.value}
+    in_flight = [s for s in job_statuses if s not in terminal]
+    if in_flight:
+        return BatchStatus.RUNNING.value
+    completed = [s for s in job_statuses if s in complete_set]
+    if len(completed) == len(job_statuses):
+        return BatchStatus.COMPLETE.value
+    if completed:
+        return BatchStatus.PARTIAL.value
+    return BatchStatus.FAILED.value
+
+
+@router.post("/jobs/batch")
+async def create_batch_jobs(
+    file: UploadFile = File(...),
+    _rl:  None = Depends(jobs_limiter),
+):
+    """
+    Upload a batch ZIP archive and start a parallel conversion pipeline for
+    each mapping folder.
+
+    Expected ZIP structure::
+
+        batch.zip/
+          mapping_a/
+            mapping.xml         ← required
+            workflow.xml        ← optional
+            params.txt          ← optional
+          mapping_b/
+            mapping.xml
+          ...
+
+    Each mapping folder is processed as an independent job with the full 12-step
+    pipeline and its own human review gates.  Up to 3 mappings run concurrently.
+    """
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "Batch upload must be a .zip archive")
+
+    zip_bytes = await file.read()
+    validate_upload_size(zip_bytes, label=file.filename)
+
+    try:
+        mapping_results = extract_batch_zip(zip_bytes)
+    except ZipExtractionError as exc:
+        raise HTTPException(400, str(exc))
+
+    if not mapping_results:
+        raise HTTPException(400, "No valid mapping folders found in the batch ZIP.")
+
+    # Create a batch record
+    batch_id = await db.create_batch(file.filename, len(mapping_results))
+    logger.info(
+        "Batch created: batch_id=%s source_zip=%s mapping_count=%d",
+        batch_id, file.filename, len(mapping_results),
+    )
+
+    # Create all job records up-front so callers can track them immediately
+    job_entries: list[dict] = []
+    for parsed in mapping_results:
+        mapping_fname = parsed.mapping_filename or file.filename
+        job_id = await db.create_job(
+            mapping_fname,
+            parsed.mapping_xml,
+            workflow_xml_content=parsed.workflow_xml,
+            parameter_file_content=parsed.parameter_file,
+            batch_id=batch_id,
+        )
+        queue: asyncio.Queue = asyncio.Queue()
+        _progress_queues[job_id] = queue
+        job_entries.append({"job_id": job_id, "filename": mapping_fname, "parsed": parsed})
+
+    # Launch all pipelines concurrently (semaphore caps at 3 in-flight)
+    async def _run_with_semaphore(j_id: str, fname: str):
+        async with _batch_semaphore:
+            async for progress in orchestrator.run_pipeline(j_id, fname):
+                await _progress_queues[j_id].put(progress)
+            await _progress_queues[j_id].put(None)  # sentinel
+
+    for entry in job_entries:
+        task = asyncio.create_task(
+            _run_with_semaphore(entry["job_id"], entry["filename"])
+        )
+        _active_tasks[entry["job_id"]] = task
+        logger.info("Batch job started: batch_id=%s job_id=%s filename=%s",
+                    batch_id, entry["job_id"], entry["filename"])
+
+    return {
+        "batch_id":      batch_id,
+        "mapping_count": len(job_entries),
+        "jobs": [{"job_id": e["job_id"], "filename": e["filename"]} for e in job_entries],
+        "status":        "running",
+    }
+
+
+@router.get("/batches/{batch_id}")
+async def get_batch(batch_id: str):
+    """
+    Return the batch record and a summary of all its constituent jobs.
+
+    Response includes:
+      - batch_id, source_zip, mapping_count
+      - status  — computed from job statuses: running / complete / partial / failed
+      - jobs    — list of job summaries (job_id, filename, status, current_step, etc.)
+    """
+    batch = await db.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(404, f"Batch '{batch_id}' not found")
+
+    jobs = await db.get_batch_jobs(batch_id)
+    batch["status"] = _compute_batch_status([j["status"] for j in jobs])
+    batch["jobs"] = jobs
+    return batch

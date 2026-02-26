@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 1.3
+**Version:** 2.0
 **Author:** ad25343
-**Last Updated:** 2026-02-25
+**Last Updated:** 2026-02-26
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -118,9 +118,28 @@ New features:
 - Logic Equivalence section added to downloadable Markdown and PDF reports
 - `LogicEquivalenceCheck` and `LogicEquivalenceReport` added to data model
 
-### v2.0 — Planned
+### v2.0 — Batch Conversion (current)
 
-- Multi-mapping batch conversion (one ZIP → multiple output packages)
+Introduces multi-mapping batch conversion so an entire set of Informatica exports can be
+submitted in one upload and processed concurrently.
+
+New features:
+- Batch ZIP upload: one subfolder per mapping inside the ZIP; Workflow XML and parameter
+  file are optional per folder and auto-detected from content
+- `POST /api/jobs/batch` endpoint: validates the ZIP, creates a batch record, spawns an
+  independent 12-step pipeline job for each mapping folder
+- Up to 3 mapping pipelines run concurrently (asyncio Semaphore); rate-limited against the
+  Claude API by the same semaphore
+- Each job retains all existing human review gates independently (Gate 1, Gate 2, Gate 3)
+- Batch tracking: `batches` DB table + `batch_id` on job records; `GET /api/batches/{id}`
+  returns batch record + per-job summaries with a computed status
+  (running / complete / partial / failed)
+- Batch UI: "Batch" upload tab alongside "Individual Files" and "ZIP Archive"; uploaded
+  jobs grouped under a batch header card in the sidebar with live summary stats
+  (X complete · Y awaiting review · Z running · N blocked)
+
+### v2.1 — Planned
+
 - Git integration: open a pull request with generated code directly from the UI
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 - Team mode: multiple reviewers, comment threads on individual flags
@@ -217,7 +236,9 @@ flows through `backend/security.py`.
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/jobs` | Upload Mapping (+ optional Workflow + Parameter) and start pipeline |
-| `POST` | `/api/jobs/zip` | Upload a ZIP archive — files auto-detected |
+| `POST` | `/api/jobs/zip` | Upload a single-mapping ZIP archive — files auto-detected |
+| `POST` | `/api/jobs/batch` | Upload a batch ZIP (one subfolder per mapping) — starts all pipelines |
+| `GET` | `/api/batches/{id}` | Get batch record + per-job summaries and computed batch status |
 | `GET` | `/api/jobs` | List all jobs |
 | `GET` | `/api/jobs/{id}` | Get job state |
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
@@ -237,9 +258,17 @@ flows through `backend/security.py`.
 ## 7. Data Model (Key Fields)
 
 ```
+Batch  (v2.0)
+├── batch_id       UUID
+├── source_zip     Original ZIP filename
+├── mapping_count  Number of mapping folders detected in the ZIP
+├── created_at / updated_at
+└── [status]       Computed from job statuses: running / complete / partial / failed
+
 Job
 ├── job_id             UUID
 ├── filename           Original mapping filename
+├── batch_id           UUID of parent batch (v2.0, nullable — null for standalone jobs)
 ├── status             JobStatus enum (PARSING → COMPLETE / BLOCKED / FAILED)
 ├── current_step       0–12
 ├── xml_content        Mapping XML (stored in SQLite)
@@ -283,17 +312,18 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 9. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target |
-|---|---|---|---|---|
-| End-to-end pipeline completion rate | > 85% (no BLOCKED/FAILED) | > 90% | > 90% | > 90% |
-| S2T field coverage | ≥ 95% of target fields mapped | ≥ 95% | ≥ 95% | ≥ 95% |
-| Code review pass rate (Gate 3 APPROVE on first attempt) | > 70% | > 75% | > 75% | > 75% |
-| Security scan false-positive rate | — | < 10% of findings require no action | < 10% | < 10% |
-| Security gate review time (median) | — | — | < 5 minutes per job | < 5 minutes |
-| Logic equivalence MISMATCH rate | — | — | — | < 5% of rules flagged MISMATCH |
-| Logic equivalence VERIFIED rate | — | — | — | > 80% of rules VERIFIED |
-| CVE count in dependencies | 0 | 0 | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% of known vars resolved | 100% | 100% |
+| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target |
+|---|---|---|---|---|---|
+| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job |
+| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% |
+| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% |
+| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min |
+| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% |
+| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% |
+| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% |
+| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent |
 
 ---
 

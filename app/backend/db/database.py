@@ -30,7 +30,18 @@ CREATE TABLE IF NOT EXISTS jobs (
     current_step            INTEGER NOT NULL DEFAULT 0,
     state_json              TEXT NOT NULL DEFAULT '{}',
     created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
+    updated_at              TEXT NOT NULL,
+    batch_id                TEXT
+);
+"""
+
+CREATE_BATCH_TABLE = """
+CREATE TABLE IF NOT EXISTS batches (
+    batch_id        TEXT PRIMARY KEY,
+    source_zip      TEXT NOT NULL,
+    mapping_count   INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
 );
 """
 
@@ -40,10 +51,17 @@ _V1_1_MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN parameter_file_content TEXT",
 ]
 
+# Columns / tables added in v2.0 — batch conversion support
+_V2_0_MIGRATIONS = [
+    "ALTER TABLE jobs ADD COLUMN batch_id TEXT",
+    CREATE_BATCH_TABLE.strip(),
+]
+
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(CREATE_TABLE)
+        await db.execute(CREATE_BATCH_TABLE)
         # Apply v1.1 migrations idempotently — SQLite raises OperationalError
         # "duplicate column name" if column already exists; we swallow that.
         for sql in _V1_1_MIGRATIONS:
@@ -51,6 +69,12 @@ async def init_db():
                 await db.execute(sql)
             except Exception:
                 pass  # column already present
+        # Apply v2.0 migrations idempotently
+        for sql in _V2_0_MIGRATIONS:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # column/table already present
         await db.commit()
 
 
@@ -59,6 +83,7 @@ async def create_job(
     xml_content: str,
     workflow_xml_content: Optional[str] = None,
     parameter_file_content: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> str:
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -66,9 +91,9 @@ async def create_job(
         await db.execute(
             "INSERT INTO jobs "
             "(job_id, filename, xml_content, workflow_xml_content, parameter_file_content, "
-            " status, current_step, state_json, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?)",
-            (job_id, filename, xml_content, workflow_xml_content, parameter_file_content, now, now),
+            " status, current_step, state_json, created_at, updated_at, batch_id) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?)",
+            (job_id, filename, xml_content, workflow_xml_content, parameter_file_content, now, now, batch_id),
         )
         await db.commit()
     return job_id
@@ -133,6 +158,51 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
         await db.commit()
 
 
+async def create_batch(source_zip: str, mapping_count: int) -> str:
+    """Create a batch record and return its batch_id."""
+    batch_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO batches (batch_id, source_zip, mapping_count, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (batch_id, source_zip, mapping_count, now, now),
+        )
+        await db.commit()
+    return batch_id
+
+
+async def get_batch(batch_id: str) -> Optional[dict]:
+    """Return the batch record (without jobs). Returns None if not found."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM batches WHERE batch_id = ?", (batch_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_batch_jobs(batch_id: str) -> List[dict]:
+    """Return all jobs belonging to a batch, minimal fields only."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json "
+            "FROM jobs WHERE batch_id = ? ORDER BY created_at ASC",
+            (batch_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                state = json.loads(d.pop("state_json", "{}"))
+                d["complexity"] = state.get("complexity", {}).get("tier") if state.get("complexity") else None
+                d["batch_id"] = batch_id
+                result.append(d)
+            return result
+
+
 async def delete_job(job_id: str) -> bool:
     """Delete a job record and its XML content. Returns True if a row was deleted."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -188,7 +258,7 @@ async def list_jobs() -> List[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json "
+            "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json, batch_id "
             "FROM jobs ORDER BY created_at DESC LIMIT 50"
         ) as cur:
             rows = await cur.fetchall()

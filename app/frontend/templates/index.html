@@ -53,6 +53,8 @@
     .job-item.active { background: var(--surface2); border-color: var(--accent); }
     .job-item.status-complete { border-left: 3px solid #22c55e; background: rgba(34,197,94,.05); }
     .job-item.status-complete.active { border-color: #22c55e; border-left-width: 3px; }
+    .job-item.batch-child { padding: 7px 10px; border-radius: 6px; }
+    .batch-group { margin-bottom: 4px; }
     .job-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .job-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
@@ -289,6 +291,8 @@
                 onclick="setUploadMode('files')">📄 Individual Files</button>
         <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                 onclick="setUploadMode('zip')">🗜 ZIP Archive</button>
+        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+                onclick="setUploadMode('batch')">📦 Batch</button>
       </div>
 
       <!-- ── Individual files panel ── -->
@@ -334,6 +338,25 @@
           </div>
         </div>
         <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
+      </div>
+
+      <!-- ── Batch ZIP panel (v2.0) ── -->
+      <div id="panelBatch" style="display:none">
+        <div class="upload-zone" id="dropzoneBatch">
+          <input type="file" id="batchInput" accept=".zip"/>
+          <div class="upload-icon">📦</div>
+          <div class="upload-label" id="batchLabel">
+            Drop batch .zip here or click to browse<br/>
+            <span style="font-size:11px;color:var(--muted)">One subfolder per mapping — up to 3 run concurrently</span>
+          </div>
+        </div>
+        <div style="margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.6">
+          <strong style="color:var(--text)">ZIP structure:</strong><br/>
+          batch.zip / mapping_a / mapping.xml<br/>
+          batch.zip / mapping_a / workflow.xml <em>(optional)</em><br/>
+          batch.zip / mapping_b / mapping.xml &nbsp;…
+        </div>
+        <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
       </div>
 
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
@@ -406,7 +429,7 @@ const STATUS_BADGE = {
 const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
 
 // ─────────────────────────────────────────────
-// Upload handling (v1.1 multi-file + ZIP)
+// Upload handling (v1.1 multi-file + ZIP; v2.0 batch)
 // ─────────────────────────────────────────────
 const dropzone      = document.getElementById('dropzone');
 const fileInput     = document.getElementById('fileInput');
@@ -426,27 +449,33 @@ const zipInput      = document.getElementById('zipInput');
 const zipLabel      = document.getElementById('zipLabel');
 const zipWarnings   = document.getElementById('zipWarnings');
 
+// v2.0 batch elements
+const dropzoneBatch = document.getElementById('dropzoneBatch');
+const batchInput    = document.getElementById('batchInput');
+const batchLabel    = document.getElementById('batchLabel');
+const batchWarnings = document.getElementById('batchWarnings');
+
 let selectedWorkflowFile = null;
 let selectedParamFile    = null;
 let selectedZipFile      = null;
-let uploadMode           = 'files';  // 'files' | 'zip'
+let selectedBatchFile    = null;          // v2.0
+let uploadMode           = 'files';       // 'files' | 'zip' | 'batch'
 
 // ── Upload mode toggle ────────────────────────
 function setUploadMode(mode) {
   uploadMode = mode;
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
   document.getElementById('panelZip').style.display   = mode === 'zip'   ? '' : 'none';
+  document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
   const tabFiles = document.getElementById('tabFiles');
   const tabZip   = document.getElementById('tabZip');
-  if (mode === 'files') {
-    tabFiles.className = 'btn btn-sm btn-primary';
-    tabZip.className   = 'btn btn-sm btn-ghost';
-    startBtn.disabled  = !selectedFile;
-  } else {
-    tabFiles.className = 'btn btn-sm btn-ghost';
-    tabZip.className   = 'btn btn-sm btn-primary';
-    startBtn.disabled  = !selectedZipFile;
-  }
+  const tabBatch = document.getElementById('tabBatch');
+  tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  tabZip.className   = mode === 'zip'   ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  if (mode === 'files')  startBtn.disabled = !selectedFile;
+  if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
+  if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
 }
 
 // Workflow XML dropzone wiring
@@ -519,11 +548,54 @@ function setZipFile(f) {
   if (uploadMode === 'zip') startBtn.disabled = false;
 }
 
+// Batch ZIP dropzone wiring (v2.0)
+dropzoneBatch.addEventListener('click', () => batchInput.click());
+dropzoneBatch.addEventListener('dragover', e => { e.preventDefault(); dropzoneBatch.classList.add('drag'); });
+dropzoneBatch.addEventListener('dragleave', () => dropzoneBatch.classList.remove('drag'));
+dropzoneBatch.addEventListener('drop', e => {
+  e.preventDefault(); dropzoneBatch.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.zip')) setBatchFile(f);
+});
+batchInput.addEventListener('change', () => { if (batchInput.files[0]) setBatchFile(batchInput.files[0]); });
+
+function setBatchFile(f) {
+  selectedBatchFile = f;
+  batchLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024/1024).toFixed(2)} MB)</span>`;
+  dropzoneBatch.style.borderColor = 'var(--success)';
+  batchWarnings.style.display = 'none';
+  if (uploadMode === 'batch') startBtn.disabled = false;
+}
+
 // ── Start button ─────────────────────────────
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
 
-  if (uploadMode === 'zip') {
+  if (uploadMode === 'batch') {
+    // ── Batch upload path (v2.0) ─────────────
+    if (!selectedBatchFile) { startBtn.disabled = false; return; }
+    const fd = new FormData();
+    fd.append('file', selectedBatchFile);
+    try {
+      const res  = await fetch('/api/jobs/batch', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.batch_id) {
+        if (data.warnings && data.warnings.length) {
+          batchWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
+          batchWarnings.style.display = 'block';
+        }
+        await loadJobs();
+        // Open first job in the batch to give immediate feedback
+        if (data.jobs && data.jobs.length) openJob(data.jobs[0].job_id);
+      } else {
+        alert('Batch upload failed: ' + JSON.stringify(data));
+        startBtn.disabled = false;
+      }
+    } catch(e) {
+      alert('Batch upload error: ' + e.message);
+      startBtn.disabled = false;
+    }
+  } else if (uploadMode === 'zip') {
     // ── ZIP upload path ──────────────────────
     if (!selectedZipFile) { startBtn.disabled = false; return; }
     const fd = new FormData();
@@ -614,15 +686,17 @@ function toggleHistory() {
   if (chevron) chevron.style.transform = historyOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
 }
 
-function renderJobItem(j) {
+function renderJobItem(j, inBatch = false) {
   const [cls, label] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
   const isActive    = j.job_id === currentJobId;
   const isComplete  = j.status === 'complete';
   const stepDisplay = Math.min(j.current_step, 12);
-  return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''}" onclick="openJob('${j.job_id}')">
+  // Strip folder prefix for batch items (show just the folder name)
+  const displayName = inBatch ? esc(j.filename).replace(/^[^/]+\//, '') : esc(j.filename);
+  return `<div class="job-item ${isActive ? 'active':''} ${isComplete ? 'status-complete' : ''} ${inBatch ? 'batch-child' : ''}" onclick="openJob('${j.job_id}')">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
       <div style="min-width:0">
-        <div class="job-name">${esc(j.filename)}</div>
+        <div class="job-name">${displayName}</div>
         <div class="job-meta"><span class="badge ${cls}">${label}</span> &nbsp; Step ${stepDisplay}/12 ${j.complexity ? '· <strong>'+j.complexity+'</strong>' : ''}</div>
       </div>
       <button
@@ -635,6 +709,37 @@ function renderJobItem(j) {
   </div>`;
 }
 
+function _batchSummaryLabel(jobs) {
+  const total    = jobs.length;
+  const complete = jobs.filter(j => j.status === 'complete').length;
+  const blocked  = jobs.filter(j => j.status === 'blocked' || j.status === 'failed').length;
+  const waiting  = jobs.filter(j => ['awaiting_review','awaiting_security_review','awaiting_code_review'].includes(j.status)).length;
+  const running  = total - complete - blocked - waiting;
+  const parts = [];
+  if (complete) parts.push(`${complete} complete`);
+  if (waiting)  parts.push(`${waiting} awaiting review`);
+  if (running)  parts.push(`${running} running`);
+  if (blocked)  parts.push(`${blocked} blocked`);
+  return parts.join(' · ') || `${total} jobs`;
+}
+
+function renderBatchGroup(batchId, jobs) {
+  const summaryLabel = _batchSummaryLabel(jobs);
+  const allDone = jobs.every(j => !_ACTIVE_STATUSES.has(j.status));
+  const anyComplete = jobs.some(j => j.status === 'complete');
+  const borderColor = allDone ? (anyComplete ? 'rgba(34,197,94,.4)' : 'rgba(239,68,68,.3)') : 'var(--accent)';
+  return `
+  <div class="batch-group" style="border:1px solid ${borderColor};border-radius:8px;padding:8px;margin-bottom:2px;background:rgba(255,255,255,.02)">
+    <div style="font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;gap:6px">
+      <span>📦 Batch · ${jobs.length} mappings</span>
+      <span style="font-weight:400;font-size:10px;color:var(--muted)">${summaryLabel}</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      ${jobs.map(j => renderJobItem(j, true)).join('')}
+    </div>
+  </div>`;
+}
+
 function renderJobList(jobs) {
   const el = document.getElementById('jobList');
   if (!jobs.length) {
@@ -642,30 +747,47 @@ function renderJobList(jobs) {
     return;
   }
 
-  const active = jobs.filter(j =>  _ACTIVE_STATUSES.has(j.status));
-  const past   = jobs.filter(j => !_ACTIVE_STATUSES.has(j.status));
+  // ── Separate batch vs standalone jobs ──────────────────────────────────
+  const batchMap = {};   // batch_id -> [jobs]
+  const standalone = [];
+  for (const j of jobs) {
+    if (j.batch_id) {
+      (batchMap[j.batch_id] = batchMap[j.batch_id] || []).push(j);
+    } else {
+      standalone.push(j);
+    }
+  }
+
+  // For active/history split, treat a batch as "active" if any of its jobs are active
+  const batchEntries = Object.entries(batchMap);
+  const activeBatches = batchEntries.filter(([, bj]) => bj.some(j => _ACTIVE_STATUSES.has(j.status)));
+  const pastBatches   = batchEntries.filter(([, bj]) => bj.every(j => !_ACTIVE_STATUSES.has(j.status)));
+
+  const active = standalone.filter(j =>  _ACTIVE_STATUSES.has(j.status));
+  const past   = standalone.filter(j => !_ACTIVE_STATUSES.has(j.status));
 
   let html = '';
 
-  // ── Active / in-progress jobs ────────────────────────────────────────────
-  // Always shown at the top without any collapse
-  if (active.length) {
-    html += active.map(renderJobItem).join('');
+  // ── Active / in-progress items (standalone + active batches) ─────────────
+  if (active.length || activeBatches.length) {
+    html += activeBatches.map(([bid, bj]) => renderBatchGroup(bid, bj)).join('');
+    html += active.map(j => renderJobItem(j)).join('');
   }
 
-  // ── Past jobs (complete / failed / blocked) ──────────────────────────────
-  // Always shown in a collapsable History section.
-  // Defaults: open when no active jobs are running, collapsed when they are.
-  if (past.length) {
-    const defaultOpen = active.length === 0;
+  // ── Past items (complete / failed / blocked) ──────────────────────────────
+  const hasPast = past.length > 0 || pastBatches.length > 0;
+  if (hasPast) {
+    const pastCount   = past.length + pastBatches.reduce((n, [, bj]) => n + bj.length, 0);
+    const defaultOpen = active.length === 0 && activeBatches.length === 0;
     const showPast    = historyOpenSet ? historyOpen : defaultOpen;
     html += `
     <div class="history-header" onclick="toggleHistory()">
-      <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">History (${past.length})</span>
+      <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">History (${pastCount})</span>
       <span id="historyChevron" class="history-chevron" style="transform:${showPast?'rotate(0deg)':'rotate(-90deg)'}">▼</span>
     </div>
     <div id="historyList" style="display:${showPast?'flex':'none'};flex-direction:column;gap:6px">
-      ${past.map(renderJobItem).join('')}
+      ${pastBatches.map(([bid, bj]) => renderBatchGroup(bid, bj)).join('')}
+      ${past.map(j => renderJobItem(j)).join('')}
     </div>`;
   }
 
