@@ -48,6 +48,145 @@ _BANDIT_EXTENSIONS = {".py"}
 _YAML_EXTENSIONS   = {".yaml", ".yml"}
 _CLAUDE_SKIP_EXTENSIONS = {".pyc", ".pyo"}  # binary — never sent to Claude
 
+# ── Bandit remediation lookup (v1.4) ─────────────────────────────────────────
+# Maps bandit test IDs → actionable plain-English fix guidance.
+# Source: https://bandit.readthedocs.io/en/latest/plugins/
+_BANDIT_REMEDIATIONS: dict[str, str] = {
+    # ── Assertions / exec ────────────────────────────────────────────────────
+    "B101": "Remove assert statements used as runtime security guards. Replace with an "
+            "explicit if/raise pattern: `if not condition: raise ValueError('...')`.",
+    "B102": "Avoid exec() on dynamic or external input. If code execution is genuinely "
+            "required, use ast.literal_eval() for safe evaluation of literal expressions.",
+    "B103": "Do not use chmod 0o777 or world-writable permissions. Use 0o640 (owner "
+            "read/write, group read) or 0o600 for sensitive files.",
+    "B104": "Avoid binding to 0.0.0.0 (all interfaces) unless explicitly required. "
+            "Bind to a specific interface address (e.g. '127.0.0.1' for local-only).",
+
+    # ── Hardcoded credentials ────────────────────────────────────────────────
+    "B105": "Remove hardcoded password string. Use an environment variable "
+            "(os.environ['PASSWORD']) or a secrets manager (AWS Secrets Manager, "
+            "HashiCorp Vault, Azure Key Vault) to supply credentials at runtime.",
+    "B106": "Do not pass a hardcoded password as a function argument. Inject the "
+            "credential from an environment variable or secrets manager instead.",
+    "B107": "Do not use a hardcoded string as a default password value in a function "
+            "signature. Default to None and require the caller to supply the credential.",
+    "B108": "Avoid predictable / world-readable temp file paths such as /tmp/. Use "
+            "tempfile.mkstemp() or tempfile.TemporaryFile() which create files with "
+            "restricted permissions (0o600).",
+
+    # ── Exception handling ───────────────────────────────────────────────────
+    "B110": "Replace bare `except: pass` with at minimum `except Exception as e: log.warning(...)`. "
+            "Silently swallowing exceptions hides security-relevant errors.",
+    "B112": "Replace `except: continue` with explicit exception handling. "
+            "Log the exception before continuing so failures are observable.",
+
+    # ── Web frameworks ───────────────────────────────────────────────────────
+    "B201": "Disable Flask debug mode in production. Set `app.run(debug=False)` or "
+            "control it via the FLASK_DEBUG environment variable (never hard-code True).",
+
+    # ── Unsafe deserialization ───────────────────────────────────────────────
+    "B301": "Replace pickle with a safer serialization format. Use json or msgpack for "
+            "data interchange; use joblib only for trusted ML model files in isolated "
+            "environments. Never unpickle data from untrusted network sources.",
+    "B302": "Replace marshal with json or struct for data serialization. "
+            "marshal is not safe for untrusted input.",
+
+    # ── Weak cryptography ────────────────────────────────────────────────────
+    "B303": "Replace MD5 or SHA-1 with SHA-256 (hashlib.sha256) or SHA-3 for any "
+            "security-relevant hashing (passwords, HMAC, digital signatures). "
+            "MD5/SHA-1 are only acceptable for checksums of trusted data.",
+    "B304": "Replace DES, 3DES, RC2, or RC4 with AES-256-GCM or ChaCha20-Poly1305. "
+            "Use the cryptography library's Fernet or hazmat.primitives.ciphers.aead.",
+    "B305": "Use AES in GCM or CCM mode (authenticated encryption). Avoid ECB mode "
+            "(deterministic, no integrity) and CBC without MAC (vulnerable to padding oracle).",
+    "B306": "Replace tempnam() with tempfile.mkstemp() to avoid predictable temp file names.",
+    "B307": "Replace eval() with ast.literal_eval() for parsing Python literals, or "
+            "re-design to avoid dynamic code evaluation entirely.",
+    "B308": "Do not use mark_safe() on user-supplied content. Escape all user input "
+            "before marking it safe, or redesign to avoid bypassing auto-escaping.",
+    "B310": "Validate and allow-list URLs before passing to urllib.urlopen(). "
+            "Reject URLs with unexpected schemes or hosts to prevent SSRF.",
+    "B311": "Replace random.random() / random.choice() with secrets.token_bytes() or "
+            "secrets.choice() for any security-sensitive randomness (tokens, IDs, salts).",
+    "B312": "Replace telnetlib with Paramiko (SSH) or use HTTPS REST APIs for remote "
+            "management. Telnet transmits credentials in plaintext.",
+    "B321": "Replace ftplib with SFTP (Paramiko) or FTPS for encrypted file transfer. "
+            "Plain FTP transmits credentials and data in cleartext.",
+    "B322": "Replace input() in Python 2 code with raw_input(). In Python 3, validate "
+            "and sanitise input() output before use in security-sensitive contexts.",
+    "B323": "Pass ssl.create_default_context() to urllib or requests to enable "
+            "full certificate verification. Never pass verify=False in production.",
+    "B324": "Replace hashlib.md5() and hashlib.sha1() with hashlib.sha256() or "
+            "hashlib.sha3_256() for security-sensitive use.",
+    "B325": "Replace os.tempnam() with tempfile.mkstemp(). tempnam is vulnerable to "
+            "symlink attacks between name generation and file creation.",
+
+    # ── Import-level flags ───────────────────────────────────────────────────
+    "B401": "Remove telnetlib import. Use Paramiko (SSH) for encrypted remote access.",
+    "B403": "Review all uses of pickle. If processing untrusted data, replace with "
+            "json or a schema-validated format. Document any remaining uses as trusted-only.",
+    "B404": "subprocess usage is flagged for review. Ensure all arguments are from "
+            "trusted sources and use `subprocess.run([...], shell=False)` (list form).",
+    "B405": "Replace xml.etree.ElementTree with defusedxml.ElementTree to prevent XXE "
+            "and billion-laughs attacks.",
+    "B406": "Replace xml.sax with defusedxml.sax.",
+    "B407": "Replace xml.dom.expatbuilder with defusedxml.",
+    "B408": "Replace xml.dom.minidom with defusedxml.minidom.",
+    "B409": "Replace xml.dom.pulldom with defusedxml.pulldom.",
+    "B411": "Replace xmlrpclib with defusedxml.xmlrpc.",
+    "B413": "Replace PyCrypto (unmaintained, CVEs) with the cryptography library "
+            "(pip install cryptography).",
+
+    # ── TLS / SSL ────────────────────────────────────────────────────────────
+    "B501": "Enable certificate verification. Remove `verify=False` and provide the "
+            "correct CA bundle path or use the default system trust store.",
+    "B502": "Require TLS 1.2 at minimum. Set `ssl.PROTOCOL_TLS_CLIENT` or use "
+            "`ssl.create_default_context()` which enforces modern TLS by default.",
+    "B503": "Replace insecure SSL defaults. Use `ssl.create_default_context()` which "
+            "selects a secure protocol and cipher suite automatically.",
+    "B504": "Specify a minimum TLS version. Pass `ssl_minimum_version=ssl.TLSVersion.TLSv1_2` "
+            "when creating SSL contexts.",
+    "B505": "Use at least 2048-bit RSA, 256-bit EC, or 256-bit symmetric keys. "
+            "Keys shorter than these thresholds no longer meet NIST guidelines.",
+    "B506": "Replace yaml.load(data) with yaml.safe_load(data) to prevent arbitrary "
+            "Python object instantiation from untrusted YAML input.",
+    "B507": "Set `RejectPolicy` on Paramiko SSH client to reject unknown host keys: "
+            "`client.set_missing_host_key_policy(paramiko.RejectPolicy())`.",
+
+    # ── Shell injection ──────────────────────────────────────────────────────
+    "B601": "Never use shell=True with Paramiko exec_command if the command includes "
+            "user-supplied input. Validate and sanitise all command arguments.",
+    "B602": "Replace `subprocess.Popen(..., shell=True)` with list-form arguments and "
+            "`shell=False`: `subprocess.Popen(['cmd', arg1, arg2])`. "
+            "shell=True enables command injection if any argument is user-controlled.",
+    "B603": "Review subprocess call: even without shell=True, validate that all "
+            "arguments come from trusted sources before passing to subprocess.",
+    "B604": "Remove `shell=True`. Call the target function directly or use "
+            "`subprocess.run(['cmd', ...], shell=False)` with a validated argument list.",
+    "B605": "Replace os.system() / os.popen() with subprocess.run([], shell=False). "
+            "os.system passes the command to a shell, enabling injection.",
+    "B606": "Replace os.execl/os.execv with subprocess.run([], shell=False) "
+            "to retain better control over environment and arguments.",
+    "B607": "Use an absolute path for the executable. Partial paths (e.g. 'python') "
+            "are resolved using $PATH and can be hijacked.",
+    "B608": "Use parameterised queries (cursor.execute(sql, params)) instead of "
+            "string concatenation or f-strings to build SQL. This prevents SQL injection.",
+    "B609": "Avoid shell wildcards (* and ?) in subprocess commands with shell=True. "
+            "Prefer explicit file lists or glob.glob() with validated patterns.",
+    "B610": "Replace Django .extra() with .annotate() or raw queryset methods with "
+            "parameterised arguments to prevent SQL injection.",
+    "B611": "Replace Django .raw() SQL with the ORM or use parameterised raw queries: "
+            "`Model.objects.raw('SELECT ... WHERE id = %s', [user_id])`.",
+
+    # ── Template injection ───────────────────────────────────────────────────
+    "B701": "Enable Jinja2 autoescaping: `Environment(autoescape=True)` or use "
+            "`select_autoescape(['html', 'xml'])`. Never render user input without escaping.",
+    "B702": "Set `default_filters=['h']` on the Mako TemplateDefVal to enable "
+            "auto HTML-escaping, or escape all user-controlled variables explicitly.",
+    "B703": "Do not pass unsanitised user input to `django.utils.safestring.mark_safe()`. "
+            "Escape user content with `django.utils.html.escape()` first.",
+}
+
 # ── Claude security review prompt ───────────────────────────────────────────
 
 _SECURITY_SYSTEM = """You are an expert application security engineer specialising
@@ -102,7 +241,8 @@ Return ONLY a JSON object in this exact format:
       "test_name": "short descriptive name (e.g. hardcoded_password)",
       "text": "clear description of the issue",
       "code": "the specific line or snippet (≤ 120 chars)",
-      "line": null
+      "line": null,
+      "remediation": "concise, actionable fix guidance (1-3 sentences) — what the developer should change and how"
     }}
   ],
   "summary": "1-3 sentence overall assessment",
@@ -161,9 +301,10 @@ async def scan(
             log.warning("bandit error for %s: %s", filename, bandit_error)
 
         for f in result.get("findings", []):
+            test_id = f.get("test_id", "")
             all_findings.append(SecurityFinding(
                 source="bandit",
-                test_id=f.get("test_id"),
+                test_id=test_id,
                 test_name=f.get("test_name"),
                 severity=f.get("severity", "LOW"),
                 confidence=f.get("confidence", ""),
@@ -171,6 +312,7 @@ async def scan(
                 filename=filename,
                 text=f.get("text", ""),
                 code=f.get("code", ""),
+                remediation=_BANDIT_REMEDIATIONS.get(test_id, ""),
             ))
 
     log.info("security_agent: bandit finished, %d findings so far", len(all_findings))
@@ -190,6 +332,13 @@ async def scan(
                 line=f.get("line"),
                 text=f.get("message", ""),
                 code=f.get("value_preview", ""),
+                remediation=(
+                    "Move this credential out of the YAML file. "
+                    "Reference it via an environment variable (e.g. `password: {{ env_var('DB_PASSWORD') }}`), "
+                    "a secrets manager (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault), "
+                    "or a CI/CD secret (GitHub Actions secrets, Kubernetes Secrets). "
+                    "Never commit credentials to version control."
+                ),
             ))
 
     # ── 2. Claude security review (all files) ───────────────────────────────
@@ -227,6 +376,7 @@ async def scan(
                     text=f.get("text", ""),
                     code=(f.get("code") or "")[:200],
                     line=f.get("line"),
+                    remediation=f.get("remediation", ""),
                 ))
 
             claude_summary = parsed.get("summary")

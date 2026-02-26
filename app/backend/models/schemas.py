@@ -262,15 +262,16 @@ class ReconciliationReport(BaseModel):
 
 class SecurityFinding(BaseModel):
     """A single finding from bandit or Claude security review."""
-    source:     str    = "bandit"   # "bandit" | "claude"
-    test_id:    Optional[str] = None
-    test_name:  Optional[str] = None
-    severity:   str    = "LOW"      # CRITICAL | HIGH | MEDIUM | LOW
-    confidence: str    = ""
-    line:       Optional[int] = None
-    filename:   Optional[str] = None
-    text:       str    = ""
-    code:       str    = ""
+    source:      str           = "bandit"   # "bandit" | "claude" | "yaml_scan"
+    test_id:     Optional[str] = None
+    test_name:   Optional[str] = None
+    severity:    str           = "LOW"      # CRITICAL | HIGH | MEDIUM | LOW
+    confidence:  str           = ""
+    line:        Optional[int] = None
+    filename:    Optional[str] = None
+    text:        str           = ""
+    code:        str           = ""
+    remediation: str           = ""         # Actionable fix guidance (v1.4)
 
 
 class SecurityScanReport(BaseModel):
