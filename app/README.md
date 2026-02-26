@@ -75,7 +75,7 @@ bash start.sh
 - REJECT → job blocked permanently
 
 **Gate 2 (Step 9 — Security Review):** Reviewer sees the full security scan findings and makes an informed decision. Pipeline pauses only when the scan is not clean (REVIEW_RECOMMENDED or REQUIRES_FIXES). Clean scans auto-proceed.
-- APPROVED → proceed to code quality review (scan was clean, or reviewer confirmed no action needed)
+- APPROVED → proceed to logic equivalence + code quality review (scan was clean, or reviewer confirmed no action needed)
 - ACKNOWLEDGED → proceed with a note on record (known risk accepted)
 - FAILED → job blocked permanently
 
@@ -111,7 +111,7 @@ app/
 │   │   ├── verification_agent.py  Step 4  — Verification
 │   │   ├── conversion_agent.py    Steps 6–7 — Stack assignment + code generation
 │   │   ├── security_agent.py      Step 8  — Security scan (bandit + YAML + Claude)
-│   │   ├── review_agent.py        Step 10 — Code quality review
+│   │   ├── review_agent.py        Step 10 — Logic equivalence + code quality review (v1.3)
 │   │   └── test_agent.py          Step 11 — Test generation
 │   ├── models/
 │   │   └── schemas.py             Pydantic models for all pipeline artifacts

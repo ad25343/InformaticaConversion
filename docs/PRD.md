@@ -50,7 +50,8 @@ produces converted code through an agentic pipeline with two human review gates.
 
 Steps:
 1. XML parse and structural analysis
-2. Source-to-Target field mapping (S2T Excel workbook)
+2. Complexity classification (LOW / MEDIUM / HIGH / VERY_HIGH)
+S2T. Source-to-Target field mapping (S2T Excel workbook)
 3. Documentation generation (Markdown)
 4. Verification — flags unsupported transformations, dead columns, unresolved parameters
 5. Gate 1 — human sign-off (APPROVE / REJECT)
@@ -121,7 +122,6 @@ New features:
 
 - Multi-mapping batch conversion (one ZIP → multiple output packages)
 - Git integration: open a pull request with generated code directly from the UI
-- Incremental re-conversion: only re-run steps whose inputs changed
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 - Team mode: multiple reviewers, comment threads on individual flags
 - Webhook notifications (Slack, Teams) on gate decisions
@@ -150,7 +150,8 @@ Step 0   Session & Parameter Parse
     │
     ▼
 Step 1   XML Parse & Graph Extraction  [deterministic, lxml + XXE-hardened parser]
-Step 2   S2T Field Mapping             [Claude + openpyxl Excel output]
+Step 2   Complexity Classification     [rule-based, objective criteria from parsed XML]
+Step S2T Source-to-Target Field Map    [Claude + openpyxl Excel output]
 Step 3   Documentation Generation      [Claude, Markdown]
 Step 4   Verification                  [deterministic + Claude flags]
     │
@@ -247,7 +248,8 @@ Job
 └── state              JSON blob — pipeline artefacts per step
     ├── session_parse_report   Step 0
     ├── parse_report           Step 1
-    ├── s2t                    Step 2
+    ├── complexity             Step 2
+    ├── s2t                    Step S2T (between Steps 2 and 3)
     ├── documentation_md       Step 3
     ├── verification           Step 4
     ├── sign_off               Step 5  (Gate 1)
