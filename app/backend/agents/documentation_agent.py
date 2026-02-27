@@ -17,36 +17,17 @@ log = logging.getLogger("conversion.documentation_agent")
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Token budgets: tier floors + dynamic estimate.
+# Token budget: always 64 000 with the extended-output beta.
 #
-# We can't know in advance exactly how many tokens Claude will output, but we
-# can estimate from the number of transformations (the primary driver of doc
-# length).  Empirically, each transformation generates ~1 500 output tokens of
-# full technical documentation, plus a ~4 000-token fixed overhead.
+# We always request the maximum and always enable the beta header.
+# Claude stops generating when done — requesting more tokens than needed
+# has zero cost impact (you pay for tokens generated, not tokens requested).
+# This eliminates truncation on any mapping regardless of complexity tier.
 #
-# Formula:  estimated = num_trans × 1 500 + 4 000
-#           → rounded up to the next 4 096 multiple, capped at 64 000
-#
-# The tier-based dict below is used as a FLOOR so that even very simple
-# mappings get a reasonable minimum.  The final budget is:
-#   max(tier_floor, estimated)
-#
-# Standard Sonnet output limit is 8 192 tokens.  For HIGH and VERY_HIGH tier
-# mappings we need more — we enable Anthropic's extended-output beta which
-# supports up to 64 000 output tokens.  The beta header is added automatically
-# when max_tokens > _STANDARD_OUTPUT_LIMIT.
+# DOC_MAX_TOKENS_OVERRIDE env var still works for testing.
 # ─────────────────────────────────────────────────────────────────────────────
-_DOC_MAX_TOKENS: dict[ComplexityTier, int] = {
-    ComplexityTier.LOW:        8_192,
-    ComplexityTier.MEDIUM:    12_288,
-    ComplexityTier.HIGH:      32_768,
-    ComplexityTier.VERY_HIGH: 64_000,
-}
-
-_TOKENS_PER_TRANSFORMATION = 1_500   # empirical: chars-per-trans / avg token size
-_DOC_FIXED_OVERHEAD        = 4_000   # header, summary, lineage section
-_DOC_TOKEN_CAP             = 64_000  # hard ceiling — requires extended output beta
-_STANDARD_OUTPUT_LIMIT     = 8_192   # default Sonnet max; beta needed above this
+_DOC_MAX_TOKENS = 64_000
+_EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
 
 
 def _estimate_doc_tokens(graph: dict) -> int:
@@ -59,9 +40,7 @@ def _estimate_doc_tokens(graph: dict) -> int:
         len(m.get("transformations", []))
         for m in graph.get("mappings", [])
     )
-    raw       = num_trans * _TOKENS_PER_TRANSFORMATION + _DOC_FIXED_OVERHEAD
-    bucketed  = ((raw + 4_095) // 4_096) * 4_096   # round UP to next 4 096
-    return min(bucketed, _DOC_TOKEN_CAP)
+    return num_trans  # used for logging only
 
 # Sentinel appended to the markdown when Claude hit the token limit.
 # The verification agent looks for this string and surfaces a clear
@@ -268,23 +247,19 @@ async def document(
     if _override:
         max_tokens = int(_override)
     else:
-        tier_floor = _DOC_MAX_TOKENS.get(complexity.tier, 16_384)
-        estimated  = _estimate_doc_tokens(graph)
-        max_tokens = max(tier_floor, estimated)
+        max_tokens = _DOC_MAX_TOKENS
 
-    # For HIGH/VERY_HIGH tier mappings max_tokens exceeds the standard 8 192
-    # output limit — enable Anthropic's extended-output beta automatically.
-    create_kwargs: dict = dict(
+    num_trans = _estimate_doc_tokens(graph)  # returns count for logging
+    log.info("documentation_agent: max_tokens=%d transformations=%d", max_tokens, num_trans)
+
+    # Always use the extended-output beta — no truncation on any mapping size.
+    message = await client.messages.create(
         model=MODEL,
         max_tokens=max_tokens,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
+        extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
     )
-    if max_tokens > _STANDARD_OUTPUT_LIMIT:
-        create_kwargs["extra_headers"] = {"anthropic-beta": "output-128k-2025-02-19"}
-        log.info("documentation_agent: extended output beta enabled (max_tokens=%d)", max_tokens)
-
-    message = await client.messages.create(**create_kwargs)
 
     doc_text = message.content[0].text
 
