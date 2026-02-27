@@ -2,6 +2,22 @@
 STEP 3 — Documentation Agent
 Claude-powered. Produces the full Markdown documentation file per mapping.
 Works strictly from the parsed graph — never from general Informatica knowledge.
+
+Two-pass strategy (primary approach)
+--------------------------------------
+Large or complex mappings routinely exceed single-call output limits even with
+the extended-output beta enabled.  We always use two sequential Claude calls:
+
+  Pass 1 — Overview + all Transformations + Parameters & Variables
+  Pass 2 — Field-Level Lineage + Session & Runtime Context + Ambiguities
+
+Pass 2 receives Pass 1's output as context so lineage traces have the full
+transformation detail to reference.  The combined output is returned as one
+Markdown document.
+
+Each call requests 64 000 tokens with the extended-output beta, giving a
+theoretical ceiling of 128 000 output tokens — sufficient for any Informatica
+mapping in practice.
 """
 from __future__ import annotations
 import json
@@ -16,36 +32,15 @@ log = logging.getLogger("conversion.documentation_agent")
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Token budget: always 64 000 with the extended-output beta.
-#
-# We always request the maximum and always enable the beta header.
-# Claude stops generating when done — requesting more tokens than needed
-# has zero cost impact (you pay for tokens generated, not tokens requested).
-# This eliminates truncation on any mapping regardless of complexity tier.
-#
-# DOC_MAX_TOKENS_OVERRIDE env var still works for testing.
-# ─────────────────────────────────────────────────────────────────────────────
-_DOC_MAX_TOKENS = 64_000
+_DOC_MAX_TOKENS      = 64_000
 _EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
 
-
-def _estimate_doc_tokens(graph: dict) -> int:
-    """Return a dynamic output-token estimate based on transformation count.
-
-    Rounds up to the nearest 4 096 multiple so we never land on an
-    awkward mid-bucket boundary.
-    """
-    num_trans = sum(
-        len(m.get("transformations", []))
-        for m in graph.get("mappings", [])
-    )
-    return num_trans  # used for logging only
-
-# Sentinel appended to the markdown when Claude hit the token limit.
+# Sentinel appended to the markdown when Claude hit the token limit on either pass.
 # The verification agent looks for this string and surfaces a clear
 # DOCUMENTATION_TRUNCATED flag instead of confusing "not found in docs" failures.
 DOC_TRUNCATION_SENTINEL = "\n\n<!-- DOC_TRUNCATED -->"
+
+# ── Prompts ──────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a senior data engineer deeply familiar with Informatica PowerCenter.
 
@@ -61,7 +56,7 @@ Rules:
 - Output ONLY the Markdown document — no preamble, no commentary outside the doc
 """
 
-DOCUMENTATION_PROMPT = """Produce full technical documentation for the Informatica mapping below.
+PASS_1_PROMPT = """Produce the FIRST PART of technical documentation for the Informatica mapping below.
 
 ## Parse Summary
 {parse_summary}
@@ -74,9 +69,9 @@ DOCUMENTATION_PROMPT = """Produce full technical documentation for the Informati
 {graph_json}
 ```
 
-## Required Documentation Structure
+## Instructions
 
-Produce a Markdown document with these sections:
+Write ONLY the following sections — stop after completing Parameters and Variables:
 
 # Mapping: [name]
 
@@ -88,7 +83,7 @@ Produce a Markdown document with these sections:
 - High-level data flow narrative
 
 ## Transformations (in execution order)
-For EACH transformation:
+For EACH transformation — document ALL of them, do not skip any:
 ### [Transformation Name] — [Type]
 - **Purpose**: What business logic does this perform?
 - **Input Ports**: table with name, datatype, source
@@ -98,13 +93,33 @@ For EACH transformation:
 - **Hardcoded Values**: list any constants
 - If UNSUPPORTED: state UNSUPPORTED TRANSFORMATION clearly, document all visible metadata
 
-## Field-Level Lineage
-For every target field, trace: source field → each transformation step → target
-State what happened at each step (passthrough / renamed / retyped / derived / aggregated / lookup / generated)
-Flag as LINEAGE GAP if trace cannot be completed
-
 ## Parameters and Variables
 Table: name | datatype | default value | purpose | resolved?
+
+Do NOT write Field-Level Lineage, Session & Runtime Context, or Ambiguities and Flags — \
+those will be produced in a second pass.
+"""
+
+PASS_2_PROMPT = """You are completing the documentation for an Informatica mapping.
+Pass 1 has already documented the Overview, all Transformations, and Parameters & Variables.
+
+## Pass 1 Documentation (already written — use as reference)
+{pass1_doc}
+
+## Full Mapping Graph (JSON)
+```json
+{graph_json}
+```
+{session_context_block}
+## Instructions
+
+Write ONLY the following remaining sections:
+
+## Field-Level Lineage
+For every target field, trace: source field → each transformation step → target field.
+State what happened at each step (passthrough / renamed / retyped / derived / aggregated / lookup / generated).
+Flag as LINEAGE GAP if the trace cannot be completed.
+Use the transformation detail from Pass 1 above as your primary reference.
 
 ## Session & Runtime Context
 (Populated from Workflow XML and parameter file when uploaded)
@@ -116,8 +131,20 @@ Table: name | datatype | default value | purpose | resolved?
 - Any unresolved $$VARIABLES
 
 ## Ambiguities and Flags
-List every point of uncertainty, with location and description
+List every point of uncertainty across the full mapping, with location and description.
+Include anything flagged in Pass 1 transformations plus any lineage gaps found above.
+
+Output ONLY these three sections — do not repeat any content from Pass 1.
 """
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _count_transformations(graph: dict) -> int:
+    return sum(
+        len(m.get("transformations", []))
+        for m in graph.get("mappings", [])
+    )
 
 
 def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
@@ -185,20 +212,49 @@ def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
     return "\n".join(lines)
 
 
+async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label: str) -> tuple[str, bool]:
+    """
+    Make a single documentation Claude call.
+    Returns (text, truncated).
+    """
+    _override = os.environ.get("DOC_MAX_TOKENS_OVERRIDE")
+    max_tokens = int(_override) if _override else _DOC_MAX_TOKENS
+
+    log.info("documentation_agent: %s — requesting max_tokens=%d", pass_label, max_tokens)
+
+    message = await client.messages.create(
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
+    )
+
+    text = message.content[0].text
+    truncated = message.stop_reason == "max_tokens"
+
+    if truncated:
+        log.warning("documentation_agent: %s hit token limit — doc may be incomplete", pass_label)
+
+    return text, truncated
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
 async def document(
     parse_report: ParseReport,
     complexity: ComplexityReport,
     graph: dict,
     session_parse_report: Optional[SessionParseReport] = None,
 ) -> str:
-    """Returns the full documentation as a Markdown string.
-
-    If Claude hits the output token limit the returned string will end with
-    DOC_TRUNCATION_SENTINEL so downstream consumers (verification_agent) can
-    detect the truncation and surface a clear warning to the human reviewer
-    instead of confusing 'not found in documentation' failures.
     """
+    Returns the full documentation as a Markdown string produced by two
+    sequential Claude calls (Pass 1: transformations, Pass 2: lineage).
 
+    If either pass hits the output token limit the returned string will end
+    with DOC_TRUNCATION_SENTINEL so downstream consumers (verification_agent)
+    can detect the truncation and surface a clear warning to the human reviewer.
+    """
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     parse_summary = (
@@ -215,57 +271,56 @@ async def document(
         f"Special Flags: {complexity.special_flags}"
     )
 
-    # Keep the graph JSON compact but complete
+    # Keep the graph JSON compact but complete — truncate only if truly massive
     graph_json = json.dumps(graph, indent=2)
-    # Truncate if massive — Claude context limit safety
     if len(graph_json) > 80_000:
         graph_json = graph_json[:80_000] + "\n... [truncated for length]"
 
-    # v1.1: inject session context when available
     session_context_block = _build_session_context_block(session_parse_report)
+    session_section = f"\n{session_context_block}\n" if session_context_block else ""
 
-    prompt = DOCUMENTATION_PROMPT.format(
+    num_trans = _count_transformations(graph)
+    log.info(
+        "documentation_agent: starting two-pass doc generation — "
+        "tier=%s transformations=%d",
+        complexity.tier.value, num_trans,
+    )
+
+    # ── Pass 1: Overview + Transformations + Parameters ───────────────────────
+    pass1_prompt = PASS_1_PROMPT.format(
         parse_summary=parse_summary,
         complexity_summary=complexity_summary,
         graph_json=graph_json,
     )
 
-    # Append session context block after the main prompt if present
-    if session_context_block:
-        prompt += f"\n\n{session_context_block}"
+    pass1_doc, pass1_truncated = await _claude_call(client, pass1_prompt, "Pass 1 (transformations)")
+    log.info("documentation_agent: Pass 1 complete — %d chars", len(pass1_doc))
 
-    # ── Token budget selection ────────────────────────────────────────────────
-    # Priority order:
-    #   1. DOC_MAX_TOKENS_OVERRIDE env var  (testing / manual override)
-    #   2. Dynamic estimate from transformation count  (primary production path)
-    #   3. Tier floor as a guaranteed minimum
-    #
-    # The dynamic estimate grows with num_transformations so a 14-transformation
-    # mapping automatically gets a larger budget than a 5-transformation one,
-    # without needing to be classified at a higher tier.
-    _override = os.environ.get("DOC_MAX_TOKENS_OVERRIDE")
-    if _override:
-        max_tokens = int(_override)
-    else:
-        max_tokens = _DOC_MAX_TOKENS
+    if pass1_truncated:
+        # Pass 1 itself truncated — stamp sentinel and return early, no point
+        # running Pass 2 without complete transformation context.
+        log.error("documentation_agent: Pass 1 truncated — skipping Pass 2")
+        return pass1_doc + DOC_TRUNCATION_SENTINEL
 
-    num_trans = _estimate_doc_tokens(graph)  # returns count for logging
-    log.info("documentation_agent: max_tokens=%d transformations=%d", max_tokens, num_trans)
-
-    # Always use the extended-output beta — no truncation on any mapping size.
-    message = await client.messages.create(
-        model=MODEL,
-        max_tokens=max_tokens,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-        extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
+    # ── Pass 2: Lineage + Session Context + Ambiguities ───────────────────────
+    pass2_prompt = PASS_2_PROMPT.format(
+        pass1_doc=pass1_doc,
+        graph_json=graph_json,
+        session_context_block=session_section,
     )
 
-    doc_text = message.content[0].text
+    pass2_doc, pass2_truncated = await _claude_call(client, pass2_prompt, "Pass 2 (lineage)")
+    log.info("documentation_agent: Pass 2 complete — %d chars", len(pass2_doc))
 
-    # Detect token-limit cutoff and stamp the sentinel so the verifier can
-    # surface a human-readable warning rather than opaque "not found" failures.
-    if message.stop_reason == "max_tokens":
-        doc_text += DOC_TRUNCATION_SENTINEL
+    # Combine — Pass 1 ends at Parameters, Pass 2 starts at Field-Level Lineage
+    combined = pass1_doc.rstrip() + "\n\n" + pass2_doc.lstrip()
 
-    return doc_text
+    if pass2_truncated:
+        combined += DOC_TRUNCATION_SENTINEL
+
+    log.info(
+        "documentation_agent: two-pass complete — total %d chars pass2_truncated=%s",
+        len(combined), pass2_truncated,
+    )
+
+    return combined
