@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-12-step agentic pipeline powered by Claude with security scanning, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently.
+12-step agentic pipeline powered by Claude with security scanning, actionable remediation guidance, two-pass documentation generation, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -74,8 +74,8 @@ batch.zip/
 | **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
 | 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
-| **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections |
-| **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist |
+| **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections — each finding includes actionable remediation guidance |
+| **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist; "🔧 How to fix" shown per finding |
 | 10 | Logic Equivalence + Code Quality | Claude | Stage A: rule-by-rule XML→code comparison (VERIFIED/NEEDS_REVIEW/MISMATCH); Stage B: 10+ static quality checks |
 | 11 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
 | **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REJECTED** |
@@ -164,16 +164,16 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 
 ---
 
-## Complexity Tiers & Token Budgets
+## Complexity Tiers
 
-| Tier | Criteria | Doc tokens | QC tokens |
-|------|----------|-----------|-----------|
-| LOW | < 5 transformations | 8 192 | 2 048 |
-| MEDIUM | 5–9 transformations | 12 288 | 4 096 |
-| HIGH | 10–14 transformations | 16 384 | 6 144 |
-| VERY_HIGH | 15+ transformations, or 2+ independent HIGH structural criteria | 32 768 | 8 192 |
+| Tier | Criteria | QC tokens |
+|------|----------|-----------|
+| LOW | < 5 transformations | 2 048 |
+| MEDIUM | 5–9 transformations | 4 096 |
+| HIGH | 10–14 transformations | 6 144 |
+| VERY_HIGH | 15+ transformations, or 2+ independent HIGH structural criteria | 8 192 |
 
-Documentation token budget auto-scales: `max(tier_floor, num_transformations × 1 500 + 4 000)`.
+**Documentation (Step 3)** always uses two sequential Claude calls with the extended-output beta (64K tokens each, ~128K combined ceiling). Pass 1 covers Overview + all Transformations + Parameters; Pass 2 covers Field-Level Lineage + Session Context + Ambiguities. This eliminates truncation failures on HIGH/VERY_HIGH complexity and SCD2 mappings.
 
 ---
 
@@ -221,8 +221,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v1.1** | Shipped | Three-file upload + ZIP archive; session config extraction; $$VAR resolution; YAML artifact generation; dedicated Security Scan step (Step 8); bandit + YAML + Claude security review |
 | **v1.2** | Shipped | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
 | **v1.3** | Shipped | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
-| **v2.0** | Current | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
-| **v2.1** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
+| **v2.0** | Shipped | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
+| **v2.1** | Current | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); timestamp timezone fix; CI failure-only notifications |
+| **v2.2** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
 ---

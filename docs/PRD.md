@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.0
+**Version:** 2.1
 **Author:** ad25343
-**Last Updated:** 2026-02-26
+**Last Updated:** 2026-02-27
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -138,7 +138,31 @@ New features:
   jobs grouped under a batch header card in the sidebar with live summary stats
   (X complete · Y awaiting review · Z running · N blocked)
 
-### v2.1 — Planned
+### v2.1 — Security Remediation + Reliable Documentation (current)
+
+Quality and reliability improvements across the security and documentation pipeline.
+
+New features:
+- **Security remediation guidance (v1.4):** Every security finding now includes an
+  actionable "How to fix" recommendation. Bandit findings (B101–B703) are matched to a
+  static remediation lookup table; YAML secrets findings include a canned credential
+  externalisation guide; Claude findings include a model-generated remediation field.
+  The Gate 2 UI shows a green "🔧 How to fix:" section per finding.
+- **Two-pass documentation (Step 3):** Documentation generation now runs as two
+  sequential Claude calls instead of one. Pass 1 covers Overview + all Transformations
+  + Parameters & Variables; Pass 2 covers Field-Level Lineage + Session & Runtime
+  Context + Ambiguities, with Pass 1 output as context. Each call uses the 64K
+  extended-output beta, giving a combined ceiling of ~128K output tokens — sufficient
+  for any Informatica mapping in practice. Eliminates the truncation failures seen on
+  HIGH/VERY_HIGH complexity SCD2 and multi-target mappings.
+- **Timestamp timezone fix:** All UI timestamps are now correctly displayed in the
+  user's local timezone. Previously, UTC timestamps from the database were rendered
+  without conversion, showing the wrong time for non-UTC users.
+- **CI noise reduction:** GitHub Actions security scan now only fires when Python
+  source files change (path filter); success emails suppressed — notifications sent
+  only on scan failure.
+
+### v2.2 — Planned
 
 - Git integration: open a pull request with generated code directly from the UI
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
@@ -312,18 +336,19 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 9. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target |
-|---|---|---|---|---|---|
-| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job |
-| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
-| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% |
-| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% |
-| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min |
-| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% |
-| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% |
-| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% |
-| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent |
+| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target | v2.1 Target |
+|---|---|---|---|---|---|---|
+| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job | > 95% per job |
+| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% | > 75% |
+| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% | < 10% |
+| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min | < 5 min |
+| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% | < 5% |
+| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% | > 80% |
+| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% | 100% |
+| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent | ≥ 3 concurrent |
+| Doc truncation rate (HIGH/VERY_HIGH tier) | — | — | — | — | — | 0% |
 
 ---
 
