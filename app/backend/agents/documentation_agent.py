@@ -5,11 +5,14 @@ Works strictly from the parsed graph — never from general Informatica knowledg
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import anthropic
 
 from typing import Optional
 from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport, SessionParseReport
+
+log = logging.getLogger("conversion.documentation_agent")
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
