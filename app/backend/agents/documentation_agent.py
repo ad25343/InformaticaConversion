@@ -22,22 +22,28 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 # full technical documentation, plus a ~4 000-token fixed overhead.
 #
 # Formula:  estimated = num_trans × 1 500 + 4 000
-#           → rounded up to the next 4 096 multiple, capped at 32 768
+#           → rounded up to the next 4 096 multiple, capped at 64 000
 #
 # The tier-based dict below is used as a FLOOR so that even very simple
 # mappings get a reasonable minimum.  The final budget is:
 #   max(tier_floor, estimated)
+#
+# Standard Sonnet output limit is 8 192 tokens.  For HIGH and VERY_HIGH tier
+# mappings we need more — we enable Anthropic's extended-output beta which
+# supports up to 64 000 output tokens.  The beta header is added automatically
+# when max_tokens > _STANDARD_OUTPUT_LIMIT.
 # ─────────────────────────────────────────────────────────────────────────────
 _DOC_MAX_TOKENS: dict[ComplexityTier, int] = {
     ComplexityTier.LOW:        8_192,
     ComplexityTier.MEDIUM:    12_288,
-    ComplexityTier.HIGH:      16_384,
-    ComplexityTier.VERY_HIGH: 32_768,
+    ComplexityTier.HIGH:      32_768,
+    ComplexityTier.VERY_HIGH: 64_000,
 }
 
 _TOKENS_PER_TRANSFORMATION = 1_500   # empirical: chars-per-trans / avg token size
 _DOC_FIXED_OVERHEAD        = 4_000   # header, summary, lineage section
-_DOC_TOKEN_CAP             = 32_768  # hard ceiling (model context safety)
+_DOC_TOKEN_CAP             = 64_000  # hard ceiling — requires extended output beta
+_STANDARD_OUTPUT_LIMIT     = 8_192   # default Sonnet max; beta needed above this
 
 
 def _estimate_doc_tokens(graph: dict) -> int:
@@ -263,12 +269,19 @@ async def document(
         estimated  = _estimate_doc_tokens(graph)
         max_tokens = max(tier_floor, estimated)
 
-    message = await client.messages.create(
+    # For HIGH/VERY_HIGH tier mappings max_tokens exceeds the standard 8 192
+    # output limit — enable Anthropic's extended-output beta automatically.
+    create_kwargs: dict = dict(
         model=MODEL,
         max_tokens=max_tokens,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
+    if max_tokens > _STANDARD_OUTPUT_LIMIT:
+        create_kwargs["betas"] = ["output-128k-2025-02-19"]
+        log.info("documentation_agent: extended output beta enabled (max_tokens=%d)", max_tokens)
+
+    message = await client.messages.create(**create_kwargs)
 
     doc_text = message.content[0].text
 
