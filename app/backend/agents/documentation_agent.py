@@ -20,7 +20,6 @@ theoretical ceiling of 128 000 output tokens — sufficient for any Informatica
 mapping in practice.
 """
 from __future__ import annotations
-import asyncio
 import json
 import logging
 import os
@@ -35,7 +34,6 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
 _DOC_MAX_TOKENS       = 64_000
 _EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
-_PASS_TIMEOUT_SECS    = 600  # 10 minutes per pass; raise via DOC_PASS_TIMEOUT_SECS env var
 
 # Sentinel appended to the markdown when Claude hit the token limit on either pass.
 # The orchestrator checks for this before advancing to Step 4 and fails the job
@@ -223,37 +221,22 @@ async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label
     Make a single documentation Claude call.
     Returns (text, truncated).
 
-    Enforces a per-pass timeout (default 10 min, override via DOC_PASS_TIMEOUT_SECS).
-    If the timeout fires, returns ("", True) so the caller stamps DOC_TRUNCATION_SENTINEL
-    and the orchestrator fails the job at Step 3 with a clear timeout message.
+    No timeout is applied here — the call is async so it does not block the event
+    loop regardless of how long Claude takes.  The orchestrator runs a 30-second
+    heartbeat loop alongside this call so the UI shows live elapsed time.
     """
     _override = os.environ.get("DOC_MAX_TOKENS_OVERRIDE")
     max_tokens = int(_override) if _override else _DOC_MAX_TOKENS
 
-    timeout = int(os.environ.get("DOC_PASS_TIMEOUT_SECS", str(_PASS_TIMEOUT_SECS)))
+    log.info("documentation_agent: %s — requesting max_tokens=%d", pass_label, max_tokens)
 
-    log.info(
-        "documentation_agent: %s — requesting max_tokens=%d timeout=%ds",
-        pass_label, max_tokens, timeout,
+    message = await client.messages.create(
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
     )
-
-    try:
-        message = await asyncio.wait_for(
-            client.messages.create(
-                model=MODEL,
-                max_tokens=max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-                extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
-            ),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        log.error(
-            "documentation_agent: %s TIMED OUT after %ds — treating as truncated",
-            pass_label, timeout,
-        )
-        return f"\n\n> ⚠️ **Documentation generation timed out** ({pass_label} did not complete within {timeout}s).\n", True
 
     text = message.content[0].text
     truncated = message.stop_reason == "max_tokens"
