@@ -69,7 +69,7 @@ batch.zip/
 | 1 | Parse XML | lxml (deterministic) | Fails fast on malformed XML; XXE-hardened parser |
 | 2 | Classify Complexity | Rule-based | LOW / MEDIUM / HIGH / VERY_HIGH |
 | S2T | Source-to-Target Map | Rule-based | Excel workbook generated |
-| 3 | Generate Documentation | Claude | Full transformation specs in Markdown |
+| 3 | Generate Documentation | Claude | Two-pass (Pass 1: transformations; Pass 2: lineage). Fails fast with `<!-- DOC_TRUNCATED -->` sentinel if output is incomplete — job blocked at Step 3, never advances to verification. |
 | 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
 | **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
@@ -82,7 +82,7 @@ batch.zip/
 
 ### Human Gates
 
-**Gate 1 (Step 5 — Human Review):** Reviewer sees the full Verification Report before any code is generated.
+**Gate 1 (Step 5 — Human Review):** Reviewer sees the full Verification Report before any code is generated. Where Claude suggests an actionable code-level fix for a flag (`auto_fix_suggestion`), a "🔧 Suggested Auto-Fix" panel is shown with a checkbox — checking it carries the suggestion forward to Step 7 for the conversion agent to apply.
 - APPROVE → pipeline continues to stack assignment and code generation
 - REJECT → job blocked permanently
 
@@ -194,6 +194,33 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | `MAX_ZIP_EXTRACTED_MB` | No | `200` | Max total extracted size from a ZIP (zip bomb guard) |
 | `MAX_ZIP_FILE_COUNT` | No | `200` | Max number of files inside a ZIP |
 | `DOC_MAX_TOKENS_OVERRIDE` | No | — | Force a specific doc token limit — for testing truncation only |
+| `DB_PATH` | No | `app/data/jobs.db` | Override SQLite database location — set to an absolute path for Docker or shared-filesystem deployments |
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/jobs` | Upload Mapping XML (+ optional Workflow + Parameter) and start pipeline |
+| `POST` | `/api/jobs/zip` | Upload a single-mapping ZIP archive — file types auto-detected |
+| `POST` | `/api/jobs/batch` | Upload a batch ZIP (one subfolder per mapping) — starts all pipelines |
+| `GET` | `/api/batches/{id}` | Get batch record + per-job summaries and computed batch status |
+| `GET` | `/api/jobs` | List all jobs (most recent 50) |
+| `GET` | `/api/jobs/{id}` | Get full job state |
+| `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
+| `DELETE` | `/api/jobs/{id}` | Delete job and associated XML |
+| `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (`APPROVE` / `REJECT`) |
+| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (`APPROVED` / `ACKNOWLEDGED` / `FAILED`) |
+| `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (`APPROVED` / `REJECTED`) |
+| `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text via `?format=text`) |
+| `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
+| `GET` | `/api/jobs/{id}/s2t/download` | Download S2T Excel workbook |
+| `GET` | `/api/jobs/{id}/download/{file}` | Download a generated code file |
+| `GET` | `/api/jobs/{id}/tests/download/{file}` | Download a generated test file |
+| `GET` | `/api/logs/registry` | All jobs with log filenames and final status |
+
+> Enable interactive API docs at `http://localhost:8000/docs` by setting `SHOW_DOCS=true` in `.env`.
 
 ---
 

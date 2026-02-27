@@ -200,8 +200,8 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     yield await emit(2, JobStatus.CLASSIFYING, f"Classified as {complexity.tier.value}",
                      {"complexity": complexity.model_dump()})
 
-    # ── STEP 2b — SOURCE-TO-TARGET MAPPING ───────────────────
-    log.step_start(0, "Source-to-Target Mapping")
+    # ── STEP S2T — SOURCE-TO-TARGET MAPPING ──────────────────
+    log.step_start("S2T", "Source-to-Target Mapping")
     s2t_result: dict = {}
     try:
         s2t_result = s2t_agent.build_s2t(parse_report, graph, job_id)
@@ -211,14 +211,14 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         log.info(
             f"S2T mapping built — {n_mapped} mapped, {n_unmapped} unmapped target(s), "
             f"{n_src_ump} unmapped source(s), Excel: {s2t_result['excel_filename']}",
-            step=2,
+            step="S2T",
             data=s2t_result["summary"],
         )
-        log.step_complete(0, "Source-to-Target Mapping",
+        log.step_complete("S2T", "Source-to-Target Mapping",
                           f"{n_mapped} mapped fields, {n_unmapped} unmapped")
     except Exception as e:
-        log.warning(f"S2T mapping generation failed (non-blocking): {e}", step=2)
-        log.step_complete(0, "Source-to-Target Mapping", f"FAILED (non-blocking): {e}")
+        log.warning(f"S2T mapping generation failed (non-blocking): {e}", step="S2T")
+        log.step_complete("S2T", "Source-to-Target Mapping", f"FAILED (non-blocking): {e}")
 
     # Store summary + records in job state (skip heavy excel_path binary)
     s2t_state = {

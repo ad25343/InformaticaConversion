@@ -158,6 +158,14 @@ New features:
 - **Timestamp timezone fix:** All UI timestamps are now correctly displayed in the
   user's local timezone. Previously, UTC timestamps from the database were rendered
   without conversion, showing the wrong time for non-UTC users.
+- **Step 3 completeness gate:** Documentation generation stamps a `<!-- DOC_COMPLETE -->`
+  sentinel at the end of the output on success, or `<!-- DOC_TRUNCATED -->` if any pass
+  hits the token limit. The orchestrator checks for the sentinel immediately after Step 3
+  and fails the job before Step 4 runs — preventing verification from operating on an
+  incomplete document.
+- **DB_PATH persistence fix:** Default database path changed from the OS temp directory
+  (data loss on reboot) to `app/data/jobs.db` relative to the repository root. Override
+  with the `DB_PATH` environment variable for Docker or shared-filesystem deployments.
 - **CI noise reduction:** GitHub Actions security scan now only fires when Python
   source files change (path filter); success emails suppressed — notifications sent
   only on scan failure.
@@ -313,6 +321,19 @@ Job
     ├── code_review            Step 10
     ├── test_report            Step 11
     └── code_sign_off          Step 12 (Gate 3)
+```
+
+Key schema types:
+
+```
+VerificationFlag
+├── flag_type             Flag category (e.g. ORPHANED_PORT, UNSUPPORTED_TRANSFORMATION)
+├── severity              CRITICAL | HIGH | MEDIUM | LOW | INFO
+├── description           Human-readable description of the issue
+├── recommendation        Actionable guidance for the reviewer
+└── auto_fix_suggestion   (optional) Specific code-level fix Claude proposes; if the
+                          reviewer checks "Apply this fix" at Gate 1, the suggestion is
+                          forwarded to the conversion agent at Step 7
 ```
 
 ---

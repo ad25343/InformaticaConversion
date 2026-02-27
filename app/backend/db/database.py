@@ -11,11 +11,11 @@ from typing import Optional, List
 import aiosqlite
 
 import os
-import tempfile
 
-# Use DB_PATH env var if set, otherwise default to system temp dir.
-# (Mounted/network filesystems often don't support SQLite file locking.)
-_default_db = Path(tempfile.gettempdir()) / "informatica_converter" / "jobs.db"
+# Use DB_PATH env var if set, otherwise default to app/data/jobs.db
+# (relative to this file, so it works from any working directory).
+# Override with DB_PATH=/absolute/path/jobs.db for Docker or shared-FS deployments.
+_default_db = Path(__file__).parent.parent.parent / "data" / "jobs.db"
 DB_PATH = Path(os.environ.get("DB_PATH", str(_default_db)))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
