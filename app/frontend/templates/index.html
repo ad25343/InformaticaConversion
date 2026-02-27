@@ -839,7 +839,7 @@ function renderJobPanel(job) {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
       <div>
         <div class="panel-title" style="margin-bottom:4px">${esc(job.filename)} <span class="badge ${badgeCls}" style="font-size:12px;vertical-align:middle">${badgeLabel}</span></div>
-        <div class="panel-sub" style="margin-bottom:0">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${new Date(job.created_at).toLocaleString()}</div>
+        <div class="panel-sub" style="margin-bottom:0">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${utcDate(job.created_at).toLocaleString()}</div>
       </div>
       <div class="report-actions" style="margin-bottom:0;flex-shrink:0">
         <span class="lbl">Download report:</span>
@@ -878,7 +878,7 @@ function renderJobPanel(job) {
     html += `<div class="rejected-card">
       <h3>✗ Review Rejected by ${esc(sr.reviewer_name)} (${esc(sr.reviewer_role)})</h3>
       ${sr.notes ? `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">Notes: ${esc(sr.notes)}</div>` : ''}
-      <div style="font-size:12px;color:var(--muted)">Reviewed: ${new Date(sr.review_date).toLocaleString()}</div>
+      <div style="font-size:12px;color:var(--muted)">Reviewed: ${utcDate(sr.review_date).toLocaleString()}</div>
       <div class="next-steps">
         <div class="next-step">
           <div class="next-step-num">1</div>
@@ -1159,7 +1159,7 @@ function renderJobPanel(job) {
       <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
         <span>Reviewer: <strong>${esc(sr.reviewer_name)}</strong> (${esc(sr.reviewer_role)})</span>
         <span>Decision: <strong style="color:${isApproved?'var(--accent2)':'var(--danger)'}">${sr.decision}</strong></span>
-        <span>Date: ${new Date(sr.review_date).toLocaleString()}</span>
+        <span>Date: ${utcDate(sr.review_date).toLocaleString()}</span>
         ${appliedFixes.length ? `<span style="color:#4ade80;font-weight:600">🔧 ${appliedFixes.length} fix${appliedFixes.length>1?'es':''} applied to Step 7</span>` : ''}
       </div>
       ${sr.notes ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px">Notes: ${esc(sr.notes)}</div>` : ''}
@@ -2161,7 +2161,7 @@ function buildReportMarkdown(job) {
   h1(`Conversion Report: ${job.filename}`);
   kv('Job ID',    job.job_id);
   kv('Status',    job.status?.toUpperCase());
-  kv('Started',   new Date(job.created_at).toLocaleString());
+  kv('Started',   utcDate(job.created_at).toLocaleString());
   if (job.complexity) kv('Complexity', job.complexity);
   L.push('');
   hr();
@@ -2389,6 +2389,10 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function escHtml(s) { return esc(s); }
+// Parse a UTC timestamp from the DB (no timezone suffix) correctly.
+// Python's datetime.utcnow().isoformat() omits 'Z', so JavaScript treats it
+// as local time instead of UTC — appending 'Z' forces correct UTC parsing.
+function utcDate(s) { if (!s) return new Date(NaN); return new Date(s.endsWith('Z') ? s : s + 'Z'); }
 
 function markdownToHtml(md) {
   return md
