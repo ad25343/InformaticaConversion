@@ -166,6 +166,11 @@ New features:
 - **DB_PATH persistence fix:** Default database path changed from the OS temp directory
   (data loss on reboot) to `app/data/jobs.db` relative to the repository root. Override
   with the `DB_PATH` environment variable for Docker or shared-filesystem deployments.
+- **Step 3 progress heartbeat:** The orchestrator now runs documentation generation
+  as a background async task and emits an SSE progress event every 30 seconds showing
+  elapsed time and which pass is active. Large SCD2 mappings can take 15–20+ minutes —
+  the pipeline is fully async so no other jobs are blocked. No timeout is imposed on
+  the Claude calls; a hard cap would incorrectly fail valid long-running passes.
 - **CI noise reduction:** GitHub Actions security scan now only fires when Python
   source files change (path filter); success emails suppressed — notifications sent
   only on scan failure.

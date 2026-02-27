@@ -69,7 +69,7 @@ batch.zip/
 | 1 | Parse XML | lxml (deterministic) | Fails fast on malformed XML; XXE-hardened parser |
 | 2 | Classify Complexity | Rule-based | LOW / MEDIUM / HIGH / VERY_HIGH |
 | S2T | Source-to-Target Map | Rule-based | Excel workbook generated |
-| 3 | Generate Documentation | Claude | Two-pass (Pass 1: transformations; Pass 2: lineage). Fails fast with `<!-- DOC_TRUNCATED -->` sentinel if output is incomplete — job blocked at Step 3, never advances to verification. |
+| 3 | Generate Documentation | Claude | Two-pass (Pass 1: transformations; Pass 2: lineage). 30-second SSE heartbeats keep the UI updated during long runs (SCD2 mappings can take 15–20+ min — normal, async, nothing is blocked). Fails fast if output is incomplete (`<!-- DOC_TRUNCATED -->` sentinel). |
 | 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
 | **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
