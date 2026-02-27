@@ -281,7 +281,7 @@ async def document(
         messages=[{"role": "user", "content": prompt}],
     )
     if max_tokens > _STANDARD_OUTPUT_LIMIT:
-        create_kwargs["betas"] = ["output-128k-2025-02-19"]
+        create_kwargs["extra_headers"] = {"anthropic-beta": "output-128k-2025-02-19"}
         log.info("documentation_agent: extended output beta enabled (max_tokens=%d)", max_tokens)
 
     message = await client.messages.create(**create_kwargs)
