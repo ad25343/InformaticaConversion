@@ -231,14 +231,35 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.step_start(3, "Generate Documentation")
     log.state_change("classifying", "documenting", step=3)
     log.claude_call(3, "documentation generation")
-    yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation (Claude)…")
-    try:
-        documentation_md = await documentation_agent.document(
+    yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
+
+    # Run documentation as a background task so we can emit heartbeat SSE events
+    # every 30 s while both passes run — prevents the client from seeing a frozen
+    # spinner and keeps the SSE connection alive during long Claude calls.
+    _doc_task = asyncio.create_task(
+        documentation_agent.document(
             parse_report, complexity, graph, session_parse_report=session_parse_report
         )
-        doc_len = len(documentation_md)
-        log.info(f"Documentation generated — {doc_len} chars", step=3,
-                 data={"doc_chars": doc_len})
+    )
+    _HEARTBEAT = 30  # seconds between progress SSE events
+    _elapsed   = 0
+    while not _doc_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(_doc_task), timeout=_HEARTBEAT)
+        except asyncio.TimeoutError:
+            _elapsed += _HEARTBEAT
+            _mins, _secs = divmod(_elapsed, 60)
+            _elapsed_str = f"{_mins}m {_secs}s" if _mins else f"{_secs}s"
+            _pass_hint = "Pass 2 (lineage)…" if _elapsed > 120 else "Pass 1 (transformations)…"
+            yield await emit(
+                3, JobStatus.DOCUMENTING,
+                f"Generating documentation — {_pass_hint} ({_elapsed_str} elapsed)",
+            )
+            continue
+        break  # task completed normally
+
+    try:
+        documentation_md = _doc_task.result()
     except Exception as e:
         log.step_failed(3, "Generate Documentation", str(e), exc_info=True)
         log.finalize("failed", steps_completed=3)
@@ -246,6 +267,9 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         yield await emit(3, JobStatus.FAILED, f"Documentation error: {e}", _err(e))
         return
 
+    doc_len = len(documentation_md)
+    log.info(f"Documentation generated — {doc_len} chars", step=3,
+             data={"doc_chars": doc_len})
     log.step_complete(3, "Generate Documentation", f"{len(documentation_md):,} chars")
     yield await emit(3, JobStatus.DOCUMENTING, "Documentation complete",
                      {"documentation_md": documentation_md})
