@@ -14,6 +14,7 @@ from .models.schemas import JobStatus
 from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
     session_parser_agent, security_agent
+from .agents.documentation_agent import DOC_TRUNCATION_SENTINEL, DOC_COMPLETE_SENTINEL
 from .logger import JobLogger
 from .security import scan_xml_for_secrets
 
@@ -248,6 +249,26 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.step_complete(3, "Generate Documentation", f"{len(documentation_md):,} chars")
     yield await emit(3, JobStatus.DOCUMENTING, "Documentation complete",
                      {"documentation_md": documentation_md})
+
+    # ── STEP 3 VALIDATION — check doc completeness before advancing ───────────
+    if DOC_TRUNCATION_SENTINEL in documentation_md:
+        msg = (
+            "Documentation was truncated before all transformations, lineage, or targets "
+            "were written. Re-upload the file to retry Step 3 with a fresh job. "
+            "If truncation persists, contact your admin."
+        )
+        log.step_failed(3, "Documentation Completeness", msg)
+        log.finalize("failed", steps_completed=3)
+        log.close()
+        yield await emit(3, JobStatus.FAILED, f"Step 3 incomplete: {msg}")
+        return
+    if DOC_COMPLETE_SENTINEL not in documentation_md:
+        msg = "Documentation did not complete normally — missing completion marker. Re-upload to retry."
+        log.step_failed(3, "Documentation Completeness", msg)
+        log.finalize("failed", steps_completed=3)
+        log.close()
+        yield await emit(3, JobStatus.FAILED, f"Step 3 incomplete: {msg}")
+        return
 
     # ── STEP 4 — VERIFY ───────────────────────────────────────
     log.step_start(4, "Verification")

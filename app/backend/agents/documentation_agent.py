@@ -36,9 +36,13 @@ _DOC_MAX_TOKENS      = 64_000
 _EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
 
 # Sentinel appended to the markdown when Claude hit the token limit on either pass.
-# The verification agent looks for this string and surfaces a clear
-# DOCUMENTATION_TRUNCATED flag instead of confusing "not found in docs" failures.
+# The orchestrator checks for this before advancing to Step 4 and fails the job
+# immediately rather than running verification on an incomplete document.
 DOC_TRUNCATION_SENTINEL = "\n\n<!-- DOC_TRUNCATED -->"
+
+# Sentinel appended to the markdown when both passes complete without truncation.
+# The orchestrator requires this to be present before advancing to Step 4.
+DOC_COMPLETE_SENTINEL = "\n\n<!-- DOC_COMPLETE -->"
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -251,9 +255,13 @@ async def document(
     Returns the full documentation as a Markdown string produced by two
     sequential Claude calls (Pass 1: transformations, Pass 2: lineage).
 
-    If either pass hits the output token limit the returned string will end
-    with DOC_TRUNCATION_SENTINEL so downstream consumers (verification_agent)
-    can detect the truncation and surface a clear warning to the human reviewer.
+    The returned string ends with one of two sentinels:
+      DOC_COMPLETE_SENTINEL    — both passes finished without truncation; safe to advance
+      DOC_TRUNCATION_SENTINEL  — a pass hit the token limit; orchestrator should fail the job
+
+    The orchestrator checks the sentinel immediately after this call and stops
+    the pipeline at Step 3 if the document is incomplete, rather than running
+    verification on a partial document.
     """
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -317,10 +325,15 @@ async def document(
 
     if pass2_truncated:
         combined += DOC_TRUNCATION_SENTINEL
-
-    log.info(
-        "documentation_agent: two-pass complete — total %d chars pass2_truncated=%s",
-        len(combined), pass2_truncated,
-    )
+        log.warning(
+            "documentation_agent: two-pass complete but TRUNCATED — total %d chars",
+            len(combined),
+        )
+    else:
+        combined += DOC_COMPLETE_SENTINEL
+        log.info(
+            "documentation_agent: two-pass complete — total %d chars",
+            len(combined),
+        )
 
     return combined
