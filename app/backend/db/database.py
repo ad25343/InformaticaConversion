@@ -216,16 +216,32 @@ async def recover_stuck_jobs() -> List[str]:
     Mark jobs that were left in mid-pipeline states as FAILED.
 
     Called once at startup.  Any job whose status is a transient processing
-    state (parsing, classifying, documenting, verifying, converting) will
-    never complete after a server restart because its asyncio task is gone.
-    Marking them FAILED makes the UI show an actionable state (delete + retry)
-    rather than a spinner that never resolves.
+    state (parsing, classifying, documenting, verifying, assigning_stack,
+    converting, security_scanning, reviewing, testing) will never complete
+    after a server restart because its asyncio task is gone.  Marking them
+    FAILED makes the UI show an actionable state (delete + retry) rather
+    than a spinner that never resolves.
+
+    Gate statuses (awaiting_review, awaiting_security_review,
+    awaiting_code_review) are intentionally excluded — a human reviewer
+    can still approve or reject them after the server comes back up.
 
     Returns the list of job_ids that were recovered.
     """
-    # Statuses that represent in-flight pipeline work (not terminal, not gates)
+    # Every transient status where an asyncio task is doing live work.
+    # These can never complete after a server restart — the task is gone.
+    # Gate/awaiting statuses are intentionally excluded: a human reviewer
+    # can still approve/reject them after the server comes back up.
     _STUCK_STATUSES = (
-        "parsing", "classifying", "documenting", "verifying", "converting",
+        "parsing",           # Step 1
+        "classifying",       # Step 2
+        "documenting",       # Step 3
+        "verifying",         # Step 4
+        "assigning_stack",   # Step 6
+        "converting",        # Step 7
+        "security_scanning", # Step 8
+        "reviewing",         # Step 10
+        "testing",           # Step 11
     )
     placeholders = ",".join("?" * len(_STUCK_STATUSES))
     now = datetime.utcnow().isoformat()
