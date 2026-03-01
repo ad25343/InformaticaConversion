@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from backend.config import settings as _cfg          # centralised config — must be first
 from backend.db.database import init_db, DB_PATH
 from backend.routes import router
 from backend.logger import configure_app_logging
@@ -37,7 +38,6 @@ _APP_START_TIME = time.monotonic()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from backend.config import settings as _cfg
     log_level = _cfg.log_level
     configure_app_logging(log_level)
     await init_db()
@@ -130,7 +130,7 @@ async def health_check():
         pass
     return JSONResponse({
         "status":         "ok" if db_ok else "degraded",
-        "version":        "1.1.0",
+        "version":        "2.3.0",
         "uptime_seconds": round(time.monotonic() - _APP_START_TIME, 1),
         "db":             "ok" if db_ok else "error",
     }, status_code=200 if db_ok else 503)
