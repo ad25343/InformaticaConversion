@@ -306,8 +306,16 @@ async def convert(
     documentation_md: str,
     graph: dict,
     accepted_fixes: list[str] | None = None,
+    security_findings: list[dict] | None = None,
     session_parse_report: Optional[SessionParseReport] = None,
 ) -> ConversionOutput:
+    """
+    Generate converted code for the assigned target stack.
+
+    accepted_fixes     — reviewer-approved code-level fixes from Gate 1 (Step 5)
+    security_findings  — security scan findings from a previous round (REQUEST_FIX path);
+                         Claude must address every listed finding in this regeneration
+    """
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     stack = stack_assignment.assigned_stack
 
@@ -318,7 +326,7 @@ async def convert(
         TargetStack.HYBRID:  PYSPARK_SYSTEM,  # Default to PySpark for hybrid MVP
     }
 
-    # Build the optional "Reviewer-Approved Fixes" section
+    # Build the optional "Reviewer-Approved Fixes" section (from Gate 1)
     if accepted_fixes:
         numbered = "\n".join(f"{i+1}. {fix}" for i, fix in enumerate(accepted_fixes))
         approved_fixes_section = (
@@ -330,10 +338,36 @@ async def convert(
     else:
         approved_fixes_section = ""
 
+    # Build the optional "Security Findings to Fix" section (from Gate 2 REQUEST_FIX)
+    if security_findings:
+        finding_lines = []
+        for i, f in enumerate(security_findings, 1):
+            sev      = f.get("severity", "UNKNOWN")
+            ftype    = f.get("finding_type", "")
+            location = f.get("location", "")
+            desc     = f.get("description", "")
+            fix      = f.get("remediation", "")
+            finding_lines.append(
+                f"{i}. [{sev}] {ftype} — {location}\n"
+                f"   Issue: {desc}\n"
+                f"   Fix required: {fix if fix else 'Address this security issue in the regenerated code.'}"
+            )
+        security_fix_section = (
+            "\n## 🔒 Security Findings — You MUST Fix All of These\n"
+            "A human security reviewer rejected the previous code generation and requested fixes. "
+            "You MUST address every finding below in this regenerated code. Do not reproduce any "
+            "of the listed patterns. For each finding, apply the stated fix or an equivalent "
+            "secure alternative:\n\n"
+            + "\n\n".join(finding_lines)
+            + "\n\n"
+        )
+    else:
+        security_fix_section = ""
+
     prompt = CONVERSION_PROMPT.format(
         stack=stack.value,
         rationale=stack_assignment.rationale,
-        approved_fixes_section=approved_fixes_section,
+        approved_fixes_section=approved_fixes_section + security_fix_section,
         documentation_md=documentation_md[:30_000],
     )
 

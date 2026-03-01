@@ -704,6 +704,184 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
                      })
 
 
+async def resume_after_security_fix_request(
+    job_id: str,
+    state: dict,
+    filename: str = "unknown",
+    remediation_round: int = 1,
+) -> AsyncGenerator[dict, None]:
+    """
+    Called after a REQUEST_FIX decision at Gate 2 (Step 9).
+    Re-runs Steps 7 (conversion) and 8 (security scan) with the security findings
+    injected as mandatory fix requirements, then re-pauses at Gate 2.
+    Capped at MAX_REMEDIATION_ROUNDS to prevent infinite loops.
+    """
+    MAX_REMEDIATION_ROUNDS = 2
+
+    log = JobLogger(job_id, filename)
+
+    async def emit(step: int, status: JobStatus, message: str, data: dict = None):
+        patch = data or {}
+        patch["pipeline_log"] = log.get_buffer()
+        await update_job(job_id, status.value, step, patch)
+        return {"step": step, "status": status.value, "message": message}
+
+    from .models.schemas import (
+        ComplexityReport, ParseReport, SessionParseReport,
+        StackAssignment, ConversionOutput, SecurityScanReport,
+    )
+
+    try:
+        documentation_md  = state["documentation_md"]
+        graph             = state["graph"]
+        stack_assignment  = StackAssignment(**state["stack_assignment"])
+        _spr = state.get("session_parse_report")
+        session_parse_report = SessionParseReport(**_spr) if _spr else None
+        _sec = state.get("security_scan")
+        prev_security_scan = SecurityScanReport(**_sec) if _sec else None
+    except Exception as e:
+        log.step_failed(7, "State reconstruction (fix round)", str(e), exc_info=True)
+        log.close()
+        yield await emit(7, JobStatus.FAILED, f"State reconstruction failed: {e}", _err(e))
+        return
+
+    # Collect the findings that the reviewer asked to fix
+    security_findings_to_fix = []
+    if prev_security_scan:
+        security_findings_to_fix = [
+            f.model_dump() for f in prev_security_scan.findings
+        ]
+
+    log.info(
+        f"Security fix round {remediation_round}/{MAX_REMEDIATION_ROUNDS} — "
+        f"re-running conversion with {len(security_findings_to_fix)} finding(s) as fix context",
+        step=7,
+    )
+
+    # ── RE-RUN STEP 7 — CONVERT (with security findings as fix context) ──────
+    log.step_start(7, f"Convert (Remediation Round {remediation_round})")
+    log.state_change("awaiting_security_review", "converting", step=7)
+    log.claude_call(7, f"code regeneration — security fix round {remediation_round}")
+    yield await emit(
+        7, JobStatus.CONVERTING,
+        f"Regenerating code to address security findings (round {remediation_round} of {MAX_REMEDIATION_ROUNDS})…",
+    )
+
+    # Carry forward any Gate 1 accepted fixes
+    accepted_fixes: list[str] = []
+    sign_off_data = state.get("sign_off", {})
+    for res in (sign_off_data.get("flags_accepted", []) + sign_off_data.get("flags_resolved", [])):
+        if res.get("apply_fix") and res.get("fix_suggestion"):
+            fix_text = res["fix_suggestion"].strip()
+            if fix_text:
+                accepted_fixes.append(fix_text)
+
+    try:
+        conversion_output = await conversion_agent.convert(
+            stack_assignment,
+            documentation_md,
+            graph,
+            accepted_fixes=accepted_fixes or None,
+            security_findings=security_findings_to_fix or None,
+            session_parse_report=session_parse_report,
+        )
+        file_list   = list(conversion_output.files.keys())
+        total_lines = sum(c.count("\n") for c in conversion_output.files.values())
+        log.info(
+            f"Regeneration complete — {len(file_list)} file(s), ~{total_lines:,} lines",
+            step=7,
+            data={"files": file_list, "total_lines": total_lines},
+        )
+    except Exception as e:
+        log.step_failed(7, "Conversion (fix round)", str(e), exc_info=True)
+        log.finalize("failed", steps_completed=7)
+        log.close()
+        yield await emit(7, JobStatus.FAILED, f"Conversion error during fix round: {e}", _err(e))
+        return
+
+    if not conversion_output.parse_ok:
+        fail_msg = (
+            f"Conversion output degraded during fix round {remediation_round} — "
+            "JSON parse failed. Re-upload and retry."
+        )
+        log.step_failed(7, "Conversion (fix round)", fail_msg)
+        log.finalize("failed", steps_completed=7)
+        log.close()
+        yield await emit(7, JobStatus.FAILED, f"⚠️ {fail_msg}",
+                         {"conversion": conversion_output.model_dump()})
+        return
+
+    log.step_complete(7, f"Conversion (round {remediation_round})",
+                      f"{len(file_list)} file(s), ~{total_lines:,} lines")
+    yield await emit(7, JobStatus.CONVERTING, f"Regeneration round {remediation_round} complete",
+                     {"conversion": conversion_output.model_dump()})
+
+    # ── RE-RUN STEP 8 — SECURITY SCAN ────────────────────────────────────────
+    log.step_start(8, f"Security Re-scan (round {remediation_round})")
+    log.state_change("converting", "security_scanning", step=8)
+    yield await emit(8, JobStatus.CONVERTING, "Re-scanning regenerated code for security issues…")
+
+    try:
+        security_scan = await security_agent.scan(
+            conversion=conversion_output,
+            mapping_name=conversion_output.mapping_name,
+        )
+        log.step_complete(
+            8, f"Security Re-scan (round {remediation_round})",
+            f"recommendation={security_scan.recommendation}",
+        )
+    except Exception as e:
+        log.warning(f"Security re-scan failed (non-blocking): {e}", step=8)
+        from .models.schemas import SecurityScanReport
+        security_scan = SecurityScanReport(
+            mapping_name=conversion_output.mapping_name,
+            target_stack=str(conversion_output.target_stack),
+            recommendation="REVIEW_RECOMMENDED",
+            claude_summary=f"Security re-scan could not complete: {e}. Manual review recommended.",
+        )
+
+    # ── RE-PRESENT GATE 2 ─────────────────────────────────────────────────────
+    can_request_fix_again = remediation_round < MAX_REMEDIATION_ROUNDS
+
+    if security_scan.recommendation != "APPROVED":
+        log.state_change("security_scanning", "awaiting_security_review", step=9)
+        log.finalize("awaiting_security_review", steps_completed=9)
+        log.close()
+        yield await emit(
+            9, JobStatus.AWAITING_SEC_REVIEW,
+            f"⚠️ Security findings remain after fix round {remediation_round}. "
+            f"{'One more fix attempt available.' if can_request_fix_again else 'No further fix rounds — choose Approve, Acknowledge, or Fail.'} "
+            "Pipeline paused at Step 9.",
+            {
+                "security_scan": security_scan.model_dump(),
+                "remediation_round": remediation_round,
+                "can_request_fix": can_request_fix_again,
+            },
+        )
+    else:
+        # Re-scan is clean — auto-proceed
+        log.info(
+            f"Security re-scan clean after fix round {remediation_round} — auto-proceeding to Step 10.",
+            step=9,
+        )
+        # Fall through to Step 10 in resume_after_security_review by yielding a
+        # synthetic APPROVED sign-off then running the rest of the pipeline.
+        from .models.schemas import SecuritySignOffRecord, SecurityReviewDecision
+        auto_signoff = SecuritySignOffRecord(
+            reviewer_name="system",
+            reviewer_role="auto",
+            review_date=__import__("datetime").datetime.utcnow().isoformat() + "Z",
+            decision=SecurityReviewDecision.APPROVED,
+            notes=f"Auto-approved after clean re-scan (fix round {remediation_round})",
+            remediation_round=remediation_round,
+        )
+        state["security_sign_off"] = auto_signoff.model_dump()
+        state["security_scan"]     = security_scan.model_dump()
+        state["conversion"]        = conversion_output.model_dump()
+        async for event in resume_after_security_review(job_id, state, filename):
+            yield event
+
+
 async def resume_after_security_review(job_id: str, state: dict, filename: str = "unknown") -> AsyncGenerator[dict, None]:
     """
     Called after human security review (Gate 2 — Step 9).
@@ -711,6 +889,7 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
     Decision options:
       APPROVED     — no issues / clean scan
       ACKNOWLEDGED — issues noted, accepted risk — continue with notes
+      REQUEST_FIX  — re-run Steps 7-8 with findings as fix context, re-present Gate 2
       FAILED       — block pipeline permanently
     """
     log = JobLogger(job_id, filename)

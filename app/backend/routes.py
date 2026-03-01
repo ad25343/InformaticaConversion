@@ -329,6 +329,7 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
     """
     Submit human security review decision (Gate 2 — Step 9).
     APPROVED / ACKNOWLEDGED  → resume pipeline from Step 10.
+    REQUEST_FIX              → re-run Steps 7-8 with findings as fix context, re-present Gate 2.
     FAILED                   → block the job permanently.
     """
     job = await db.get_job(job_id)
@@ -337,16 +338,24 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
     if job["status"] != JobStatus.AWAITING_SEC_REVIEW.value:
         raise HTTPException(400, f"Job is not awaiting security review (status: {job['status']})")
 
+    state    = job["state"]
+    filename = job["filename"]
+
+    # Determine remediation round — increments each time REQUEST_FIX is chosen
+    prev_round = state.get("remediation_round", 0)
+    this_round = prev_round + 1 if payload.decision == SecurityReviewDecision.REQUEST_FIX else prev_round
+
     sec_signoff = SecuritySignOffRecord(
         reviewer_name=payload.reviewer_name,
         reviewer_role=payload.reviewer_role,
-        review_date=__import__("datetime").datetime.utcnow().isoformat(),
+        review_date=__import__("datetime").datetime.utcnow().isoformat() + "Z",
         decision=payload.decision,
         notes=payload.notes,
+        remediation_round=prev_round,
     )
 
-    logger.info("Security review received: job_id=%s decision=%s reviewer=%s",
-                job_id, payload.decision, payload.reviewer_name)
+    logger.info("Security review received: job_id=%s decision=%s reviewer=%s round=%d",
+                job_id, payload.decision, payload.reviewer_name, prev_round)
 
     await db.update_job(job_id, JobStatus.AWAITING_SEC_REVIEW.value, 9,
                         {"security_sign_off": sec_signoff.model_dump()})
@@ -360,13 +369,37 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
             "decision": payload.decision,
         }
 
+    if payload.decision == SecurityReviewDecision.REQUEST_FIX:
+        # Re-run Steps 7-8 with security findings injected, then re-pause at Gate 2
+        queue: asyncio.Queue = asyncio.Queue()
+        _progress_queues[job_id] = queue
+
+        state["security_sign_off"] = sec_signoff.model_dump()
+        state["remediation_round"] = this_round
+
+        async def _fix_and_rescan():
+            async for progress in orchestrator.resume_after_security_fix_request(
+                job_id, state, filename, remediation_round=this_round
+            ):
+                await queue.put(progress)
+            await queue.put(None)
+
+        task = asyncio.create_task(_fix_and_rescan())
+        _active_tasks[job_id] = task
+        logger.info("Pipeline re-running Steps 7-8 for security fix: job_id=%s round=%d",
+                    job_id, this_round)
+        return {
+            "message": f"Security fix requested (round {this_round}). Regenerating code and re-scanning.",
+            "job_id": job_id,
+            "decision": payload.decision,
+            "remediation_round": this_round,
+        }
+
     # APPROVED or ACKNOWLEDGED — resume pipeline from Step 10
-    queue: asyncio.Queue = asyncio.Queue()
+    queue = asyncio.Queue()
     _progress_queues[job_id] = queue
 
-    state    = job["state"]
     state["security_sign_off"] = sec_signoff.model_dump()
-    filename = job["filename"]
 
     async def _resume():
         async for progress in orchestrator.resume_after_security_review(job_id, state, filename):

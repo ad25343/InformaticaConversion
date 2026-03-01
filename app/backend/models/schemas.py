@@ -51,7 +51,8 @@ class SecurityReviewDecision(str, Enum):
     """Gate 2 (Step 9) decisions — security scan human review."""
     APPROVED     = "APPROVED"      # No issues / clean scan — proceed
     ACKNOWLEDGED = "ACKNOWLEDGED"  # Issues noted, accepted risk — proceed with notes
-    FAILED       = "FAILED"        # Unacceptable findings — block pipeline
+    REQUEST_FIX  = "REQUEST_FIX"  # Send findings back to Step 7 for remediation, re-scan, re-review
+    FAILED       = "FAILED"        # Unacceptable findings — block pipeline permanently
 
 class CodeReviewDecision(str, Enum):
     """Gate 3 (Step 12) decisions — generated code review sign-off."""
@@ -416,11 +417,12 @@ class SignOffRequest(BaseModel):
 
 class SecuritySignOffRecord(BaseModel):
     """Stored on the job after security review gate (Step 9)."""
-    reviewer_name: str
-    reviewer_role: str
-    review_date:   str
-    decision:      SecurityReviewDecision
-    notes:         Optional[str] = None
+    reviewer_name:      str
+    reviewer_role:      str
+    review_date:        str
+    decision:           SecurityReviewDecision
+    notes:              Optional[str] = None
+    remediation_round:  int = 0   # 0 = first review; 1/2 = after REQUEST_FIX rounds
 
 class SecuritySignOffRequest(BaseModel):
     """POST body for /jobs/{job_id}/security-review."""
