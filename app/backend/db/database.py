@@ -57,6 +57,11 @@ _V2_0_MIGRATIONS = [
     CREATE_BATCH_TABLE.strip(),
 ]
 
+# v2.1 — soft delete: flag jobs instead of physical DELETE
+_V2_1_MIGRATIONS = [
+    "ALTER TABLE jobs ADD COLUMN deleted_at TEXT",
+]
+
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -75,6 +80,12 @@ async def init_db():
                 await db.execute(sql)
             except Exception:
                 pass  # column/table already present
+        # Apply v2.1 migrations idempotently
+        for sql in _V2_1_MIGRATIONS:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # column already present
         await db.commit()
 
 
@@ -204,11 +215,35 @@ async def get_batch_jobs(batch_id: str) -> List[dict]:
 
 
 async def delete_job(job_id: str) -> bool:
-    """Delete a job record and its XML content. Returns True if a row was deleted."""
+    """Soft-delete a job by stamping deleted_at. Returns True if the row was found.
+    The record is retained so log files and audit history remain accessible."""
+    now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        await db.execute(
+            "UPDATE jobs SET deleted_at = ?, updated_at = ? WHERE job_id = ? AND deleted_at IS NULL",
+            (now, now, job_id),
+        )
         await db.commit()
         return db.total_changes > 0
+
+
+async def list_deleted_jobs() -> List[dict]:
+    """Return soft-deleted jobs, newest first, for the Log Archive sidebar."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT job_id, filename, status, current_step, created_at, deleted_at, state_json, batch_id "
+            "FROM jobs WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 200"
+        ) as cur:
+            rows = await cur.fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                state = json.loads(d.pop("state_json", "{}"))
+                d["mapping_name"] = state.get("mapping_name") or state.get("complexity", {})
+                d["log_readable"] = True   # log file preserved on disk
+                result.append(d)
+            return result
 
 
 async def recover_stuck_jobs() -> List[str]:
@@ -275,7 +310,7 @@ async def list_jobs() -> List[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json, batch_id "
-            "FROM jobs ORDER BY created_at DESC LIMIT 50"
+            "FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50"
         ) as cur:
             rows = await cur.fetchall()
             result = []

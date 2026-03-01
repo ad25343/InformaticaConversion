@@ -652,13 +652,15 @@ startBtn.addEventListener('click', async () => {
 // ─────────────────────────────────────────────
 async function loadJobs() {
   try {
-    const [jobsRes, histRes] = await Promise.all([
-      fetch('/api/jobs'),
-      fetch('/api/logs/history'),
-    ]);
-    const jobsData = await jobsRes.json();
-    const histData = await histRes.json();
-    renderJobList(jobsData.jobs || [], histData.history || []);
+    const res  = await fetch('/api/jobs');
+    const data = await res.json();
+    let history = [];
+    try {
+      const histRes  = await fetch('/api/logs/history');
+      const histData = await histRes.json();
+      history = histData.history || [];
+    } catch(he) { /* history is supplemental — never break the main list */ }
+    renderJobList(data.jobs || [], history);
   } catch(e) { /* ignore poll errors */ }
 }
 

@@ -157,21 +157,16 @@ async def list_jobs():
 
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
-    """Delete a job and clean up its associated log and S2T files."""
-    from .logger import job_log_path, remove_registry_entry
+    """Soft-delete a job (sets deleted_at; preserves DB record and log file)."""
     from .agents.s2t_agent import s2t_excel_path
 
-    deleted = await db.delete_job(job_id)
-    if not deleted:
-        raise HTTPException(404, "Job not found")
+    flagged = await db.delete_job(job_id)
+    if not flagged:
+        raise HTTPException(404, "Job not found or already deleted")
 
-    # Best-effort cleanup of associated files.
-    # NOTE: log files are intentionally preserved on disk as an audit trail;
-    # only the registry entry is removed so the index stays clean.
+    # S2T Excel is an intermediate artefact — still clean it up.
+    # Log file and registry entry are kept so the job appears in Log Archive.
     cleaned = []
-
-    remove_registry_entry(job_id)
-
     s2t_path = s2t_excel_path(job_id)
     if s2t_path and s2t_path.exists():
         try:
@@ -180,7 +175,7 @@ async def delete_job(job_id: str):
         except OSError:
             pass
 
-    return {"deleted": True, "job_id": job_id, "cleaned": cleaned}
+    return {"flagged_deleted": True, "job_id": job_id, "cleaned": cleaned}
 
 
 @router.get("/jobs/{job_id}")
@@ -265,12 +260,36 @@ async def get_log_registry():
 
 @router.get("/logs/history")
 async def get_log_history():
-    """Return log entries for jobs whose DB records no longer exist (historical jobs)."""
+    """Return archived jobs: soft-deleted DB records + orphaned registry entries."""
     from .logger import list_orphaned_registry_entries
-    live_jobs = await db.list_jobs()
-    live_ids  = {j["job_id"] for j in live_jobs}
-    orphans   = list_orphaned_registry_entries(live_ids)
-    return {"history": orphans}
+    # Live (non-deleted) jobs — excluded from archive
+    live_jobs    = await db.list_jobs()
+    live_ids     = {j["job_id"] for j in live_jobs}
+    # Soft-deleted jobs (still in DB, flagged deleted_at)
+    deleted_jobs = await db.list_deleted_jobs()
+    deleted_ids  = {j["job_id"] for j in deleted_jobs}
+    # Normalise deleted DB rows to the same shape as registry entries
+    deleted_entries = []
+    for j in deleted_jobs:
+        mn = j.get("mapping_name")
+        if isinstance(mn, dict):
+            mn = None
+        deleted_entries.append({
+            "job_id":       j["job_id"],
+            "xml_filename": j["filename"],
+            "mapping_name": mn or j["filename"],
+            "status":       j["status"],
+            "started_at":   j["created_at"],
+            "deleted_at":   j.get("deleted_at"),
+            "log_readable": True,
+        })
+    # Orphaned registry entries (not in DB at all)
+    all_known_ids = live_ids | deleted_ids
+    orphans = list_orphaned_registry_entries(all_known_ids)
+    # Merge: deleted DB jobs first (most recent), then orphans
+    history = deleted_entries + orphans
+    history.sort(key=lambda e: e.get("deleted_at") or e.get("started_at", ""), reverse=True)
+    return {"history": history}
 
 
 @router.get("/logs/history/{job_id}")
