@@ -343,21 +343,25 @@ async def convert(
         finding_lines = []
         for i, f in enumerate(security_findings, 1):
             sev      = f.get("severity", "UNKNOWN")
-            ftype    = f.get("finding_type", "")
-            location = f.get("location", "")
-            desc     = f.get("description", "")
+            ftype    = f.get("test_name") or f.get("finding_type", "security issue")
+            location = f.get("filename") or f.get("location", "")
+            desc     = f.get("text") or f.get("description", "")
             fix      = f.get("remediation", "")
+            code     = f.get("code", "").strip()
+            line     = f.get("line")
+            line_ref = f" line {line}" if line else ""
+            snippet  = f"\n   Offending code ({location}{line_ref}):\n   ```\n   {code}\n   ```" if code else ""
             finding_lines.append(
-                f"{i}. [{sev}] {ftype} — {location}\n"
-                f"   Issue: {desc}\n"
-                f"   Fix required: {fix if fix else 'Address this security issue in the regenerated code.'}"
+                f"{i}. [{sev}] {ftype} — {location}{line_ref}\n"
+                f"   Issue: {desc}{snippet}\n"
+                f"   Fix required: {fix if fix else 'Do not reproduce this pattern in the regenerated code.'}"
             )
         security_fix_section = (
             "\n## 🔒 Security Findings — You MUST Fix All of These\n"
             "A human security reviewer rejected the previous code generation and requested fixes. "
-            "You MUST address every finding below in this regenerated code. Do not reproduce any "
-            "of the listed patterns. For each finding, apply the stated fix or an equivalent "
-            "secure alternative:\n\n"
+            "The EXACT offending code snippets are shown for each finding — you must NOT reproduce "
+            "these patterns anywhere in the regenerated code. For each finding, apply the stated "
+            "fix or an equivalent secure alternative:\n\n"
             + "\n\n".join(finding_lines)
             + "\n\n"
         )
