@@ -267,32 +267,42 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         yield await emit(3, JobStatus.FAILED, f"Documentation error: {e}", _err(e))
         return
 
-    doc_len = len(documentation_md)
-    log.info(f"Documentation generated — {doc_len} chars", step=3,
-             data={"doc_chars": doc_len})
-    log.step_complete(3, "Generate Documentation", f"{len(documentation_md):,} chars")
-    yield await emit(3, JobStatus.DOCUMENTING, "Documentation complete",
-                     {"documentation_md": documentation_md})
+    # ── STEP 3 VALIDATION — check doc completeness ────────────────────────────
+    # Truncation is a WARNING, not a hard failure.  The reviewer sees a prominent
+    # flag at Gate 1 and decides whether the partial documentation is sufficient
+    # to proceed.  Hard-failing here wastes all prior Claude calls and forces a
+    # full re-upload — not worth it when the doc is usually 90%+ complete.
+    doc_truncated = DOC_TRUNCATION_SENTINEL in documentation_md
+    doc_missing_sentinel = DOC_COMPLETE_SENTINEL not in documentation_md and not doc_truncated
 
-    # ── STEP 3 VALIDATION — check doc completeness before advancing ───────────
-    if DOC_TRUNCATION_SENTINEL in documentation_md:
-        msg = (
-            "Documentation was truncated before all transformations, lineage, or targets "
-            "were written. Re-upload the file to retry Step 3 with a fresh job. "
-            "If truncation persists, contact your admin."
+    if doc_truncated:
+        log.warning(
+            "Documentation was truncated (hit token limit on one pass). "
+            "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
+            step=3,
         )
-        log.step_failed(3, "Documentation Completeness", msg)
-        log.finalize("failed", steps_completed=3)
-        log.close()
-        yield await emit(3, JobStatus.FAILED, f"Step 3 incomplete: {msg}")
-        return
-    if DOC_COMPLETE_SENTINEL not in documentation_md:
-        msg = "Documentation did not complete normally — missing completion marker. Re-upload to retry."
-        log.step_failed(3, "Documentation Completeness", msg)
-        log.finalize("failed", steps_completed=3)
-        log.close()
-        yield await emit(3, JobStatus.FAILED, f"Step 3 incomplete: {msg}")
-        return
+    elif doc_missing_sentinel:
+        log.warning(
+            "Documentation completion marker missing — output may be incomplete. "
+            "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
+            step=3,
+        )
+
+    # Strip sentinels so they never appear in UI, reports, or agent prompts.
+    documentation_md = (
+        documentation_md
+        .replace(DOC_COMPLETE_SENTINEL, "")
+        .replace(DOC_TRUNCATION_SENTINEL, "")
+        .strip()
+    )
+
+    doc_len = len(documentation_md)
+    log.info(f"Documentation generated — {doc_len} chars (truncated={doc_truncated})",
+             step=3, data={"doc_chars": doc_len, "doc_truncated": doc_truncated})
+    log.step_complete(3, "Generate Documentation", f"{doc_len:,} chars")
+    yield await emit(3, JobStatus.DOCUMENTING,
+                     "Documentation complete" + (" (truncated — reviewer notified)" if doc_truncated else ""),
+                     {"documentation_md": documentation_md, "doc_truncated": doc_truncated})
 
     # ── STEP 4 — VERIFY ───────────────────────────────────────
     log.step_start(4, "Verification")
@@ -304,6 +314,37 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
             parse_report, complexity, documentation_md, graph,
             session_parse_report=session_parse_report,
         )
+
+        # If documentation was truncated, inject a prominent flag so the reviewer
+        # sees it at Gate 1 and can decide whether to proceed or re-upload.
+        if doc_truncated or doc_missing_sentinel:
+            from .models.schemas import VerificationFlag
+            trunc_reason = (
+                "Documentation hit the token limit during generation — one or more sections "
+                "(field-level lineage, session context, or ambiguities) may be incomplete or missing. "
+                "Review the documentation tab carefully before approving. "
+                "If critical sections are missing, reject and re-upload to regenerate."
+                if doc_truncated else
+                "Documentation did not finish normally — the completion marker was not found. "
+                "Output may be cut off. Review the documentation tab before approving."
+            )
+            truncation_flag = VerificationFlag(
+                flag_type="DOCUMENTATION_TRUNCATED",
+                location="Step 3 — Documentation Generation",
+                description=trunc_reason,
+                blocking=False,
+                severity="HIGH",
+                recommendation=(
+                    "Read through the full documentation and confirm all transformations, "
+                    "field lineage, and business rules are present before approving. "
+                    "If sections are missing, click Reject and re-upload the mapping to regenerate."
+                ),
+                auto_fix_suggestion=None,
+            )
+            verification.flags.insert(0, truncation_flag)
+            verification.total_flags += 1
+            log.warning("Truncation flag injected into verification report", step=4)
+
         log.info(
             f"Verification complete — status={verification.overall_status}, "
             f"checks={verification.total_checks}, passed={verification.total_passed}, "

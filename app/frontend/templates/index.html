@@ -1127,9 +1127,19 @@ function renderJobPanel(job) {
 
   // ── STEP 3 — DOCUMENTATION ────────────────
   if (state.documentation_md) {
-    html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3 — Documentation<span class="card-chevron">▼</span></div>
+    const truncBanner = state.doc_truncated
+      ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,146,60,.12);border:1px solid var(--sev-high);border-radius:8px;font-size:12px;color:#fb923c">
+           ⚠️ <strong>Documentation was truncated</strong> — the token limit was reached during generation.
+           One or more sections (field lineage, session context, or ambiguities) may be incomplete.
+           Review carefully before approving at Gate 1. If critical sections are missing, Reject and re-upload.
+         </div>`
+      : '';
+    html += `<div class="card" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3 — Documentation
+        ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
+        <span class="card-chevron">▼</span></div>
       <div class="card-body">
+      ${truncBanner}
       <div class="doc-content" id="docContent">${markdownToHtml(state.documentation_md)}</div>
       </div>
     </div>`;
