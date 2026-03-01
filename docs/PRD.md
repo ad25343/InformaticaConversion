@@ -256,7 +256,35 @@ Step 12  ◼ Gate 3 — Code Review Sign-off
 
 ---
 
-## 5. Security Architecture
+## 5. Stack Assignment Decision Matrix
+
+Step 6 assigns one of three target stacks (or a documented hybrid) based on the
+criteria below. The assignment is deterministic given the mapping characteristics —
+reviewers can override at Gate 1 by adding a note, but the default follows this matrix.
+
+| Criterion | PySpark | dbt | Python (Pandas) |
+|---|---|---|---|
+| **Complexity tier** | HIGH / VERY_HIGH | LOW / MEDIUM | LOW / MEDIUM |
+| **Data volume** | > 50M rows | Any (SQL-bound) | < 1M rows |
+| **Source type** | DB, files, streams | DB / warehouse | Files (CSV/JSON/XML), APIs |
+| **Target type** | DB, data lake, files | Data warehouse | Files, APIs, lightweight DB |
+| **Transformation types** | Complex joins, multi-aggregations, UDFs, procedural logic | SQL-expressible — filters, joins, aggregations, SCDs, derived fields | Simple field mapping, API calls, file format conversion |
+| **SCD support** | SCD1 + SCD2 (merge/upsert) | SCD1 + SCD2 (snapshots) | SCD1 only (practical limit) |
+| **Join complexity** | Multiple joiners, complex conditions, cross-dataset | Single or multi JOIN in SQL | Simple merges only |
+| **Lookup handling** | Broadcast join, dynamic cache | CTE or ref() | Dict lookup / merge |
+| **Expressions** | Spark functions + UDFs | SQL CASE/COALESCE/macros | Python functions |
+| **Parallelism** | Native (Spark cluster) | Warehouse-native | None (single process) |
+| **Test framework** | pytest + pyspark.testing | dbt tests (schema.yml) | pytest |
+| **Output artifacts** | `.py` job + `requirements.txt` + YAML configs | `.sql` models + `schema.yml` + `sources.yml` + macros | `.py` script + `requirements.txt` |
+| **Auto-assigned when** | ≥1 Joiner + HIGH tier, or VERY_HIGH, or volume flag | SQL-friendly transformations + warehouse target | LOW tier + file/API source or target |
+
+**Hybrid:** Where a single mapping has sub-flows that suit different stacks, the assignment
+record documents which component maps to which stack and why. Hybrid is rare — most
+Informatica mappings have a dominant pattern that determines the stack clearly.
+
+---
+
+## 6. Security Architecture
 
 Security is infrastructure, not a feature layer. Every file-handling path in the application
 flows through `backend/security.py`.
@@ -279,7 +307,7 @@ flows through `backend/security.py`.
 
 ---
 
-## 6. API Surface
+## 7. API Surface
 
 | Method | Path | Description |
 |---|---|---|
@@ -303,7 +331,7 @@ flows through `backend/security.py`.
 
 ---
 
-## 7. Data Model (Key Fields)
+## 8. Data Model (Key Fields)
 
 ```
 Batch  (v2.0)
@@ -370,7 +398,7 @@ SecuritySignOffRecord  (Gate 2 sign-off)
 
 ---
 
-## 8. Sample Files
+## 9. Sample Files
 
 The repository ships sample Informatica exports across three complexity tiers to allow
 end-to-end testing without a live PowerCenter instance.
@@ -387,7 +415,7 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ---
 
-## 9. Success Metrics
+## 10. Success Metrics
 
 | Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target | v2.1 Target |
 |---|---|---|---|---|---|---|
@@ -405,7 +433,7 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ---
 
-## 10. Technical Constraints
+## 11. Technical Constraints
 
 - **Python 3.11+** — orchestrator uses `asyncio.TaskGroup` patterns; type annotations
   use `X | Y` union syntax

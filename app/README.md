@@ -178,6 +178,26 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 
 ---
 
+## Stack Assignment
+
+Step 6 assigns the target stack based on mapping characteristics. The decision is deterministic — reviewers can override at Gate 1.
+
+| Criterion | PySpark | dbt | Python (Pandas) |
+|---|---|---|---|
+| **Complexity tier** | HIGH / VERY_HIGH | LOW / MEDIUM | LOW / MEDIUM |
+| **Data volume** | > 50M rows | Any (SQL-bound) | < 1M rows |
+| **Source type** | DB, files, streams | DB / warehouse | Files, APIs |
+| **Target type** | DB, data lake, files | Data warehouse | Files, APIs, lightweight DB |
+| **Transformation types** | Complex joins, multi-aggregations, UDFs | SQL-expressible — filters, joins, SCDs, derived fields | Simple field mapping, API calls, file conversion |
+| **SCD support** | SCD1 + SCD2 (merge/upsert) | SCD1 + SCD2 (snapshots) | SCD1 only |
+| **Lookup handling** | Broadcast join, dynamic cache | CTE or `ref()` | Dict lookup / merge |
+| **Output artifacts** | `.py` + `requirements.txt` + YAML configs | `.sql` models + `schema.yml` + `sources.yml` + macros | `.py` script + `requirements.txt` |
+| **Test framework** | pytest + pyspark.testing | dbt tests (schema.yml) | pytest |
+
+**Hybrid:** documented explicitly in the stack assignment record when a mapping has sub-flows that suit different stacks.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
