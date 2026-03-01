@@ -163,7 +163,7 @@ CONVERSION_PROMPT = """Convert the Informatica mapping documented below to {stac
 {security_context}
 ## Stack Assignment Rationale
 {rationale}
-{approved_fixes_section}
+{approved_fixes_section}{flag_handling_section}
 ## Full Mapping Documentation (your source of truth)
 {documentation_md}
 
@@ -174,6 +174,7 @@ CONVERSION_PROMPT = """Convert the Informatica mapping documented below to {stac
 - Structured logging at: job start, after each major transformation, job end (with row counts)
 - Reject/error handling as documented
 - Where a Reviewer-Approved Fix is listed above, apply it precisely as described
+- Where a Verification Flag Handling rule is listed above, apply it — do NOT skip the transformation
 
 Output complete, production-ready code.
 
@@ -197,6 +198,110 @@ Rules for the delimiter format:
 - Every file must have both BEGIN_FILE and END_FILE markers
 - Put NOTES section at the end
 """
+
+
+def _build_flag_handling_section(verification_flags: list[dict]) -> str:
+    """
+    Build a prompt section that instructs Claude to auto-handle each verification flag.
+    The tool addresses as much as possible in code; the human reviewer handles what can't be.
+    Returns an empty string if there are no actionable flags.
+    """
+    if not verification_flags:
+        return ""
+
+    # Per-flag-type handling rules mapped to concrete code instructions
+    _HANDLING_RULES: dict[str, str] = {
+        "INCOMPLETE_LOGIC": (
+            "The transformation has missing or incomplete logic (e.g. a Filter with no condition, "
+            "a Router with an undefined group, or a conditional with no ELSE branch). "
+            "Generate the transformation as a PASS-THROUGH (all records proceed). "
+            "Add a prominent comment: "
+            "# TODO [AUTO-FLAG]: INCOMPLETE_LOGIC — {detail}. "
+            "Confirm the intended rule with the mapping owner before promoting to production."
+        ),
+        "ENVIRONMENT_SPECIFIC_VALUE": (
+            "A hardcoded environment-specific value was found (connection string, file path, "
+            "schema name, server name, rate, threshold, etc.). "
+            "Move it to the config dict / config file at the top of the generated code. "
+            "Never embed it inline. Add a comment: "
+            "# CONFIG: {detail}"
+        ),
+        "HIGH_RISK": (
+            "A high-risk logic pattern was detected (complex conditional, multi-branch routing, "
+            "hardcoded business constant, potential data loss path, etc.). "
+            "Implement the logic as documented. "
+            "Add an assertion or row-count check immediately after the transformation. "
+            "Add a comment: # HIGH-RISK [AUTO-FLAG]: {detail} — validate output with UAT."
+        ),
+        "LINEAGE_GAP": (
+            "A target field could not be traced to a source. "
+            "Set the field to None / NULL with a comment: "
+            "# TODO [AUTO-FLAG]: LINEAGE GAP — {detail}. Trace manually in the Informatica mapping."
+        ),
+        "DEAD_LOGIC": (
+            "A transformation is isolated from the data flow (no inputs or outputs). "
+            "Comment it out entirely with: "
+            "# DEAD LOGIC [AUTO-FLAG]: {detail} — confirm with mapping owner whether to remove."
+        ),
+        "REVIEW_REQUIRED": (
+            "Logic is ambiguous or unclear from the documentation. "
+            "Implement a best-effort interpretation based on field names and context. "
+            "Add a comment: # TODO [AUTO-FLAG]: REVIEW REQUIRED — {detail}. "
+            "Confirm interpretation with the mapping owner."
+        ),
+        "ORPHANED_PORT": (
+            "A port has no connections. Skip it in the converted code. "
+            "Add a comment: # ORPHANED PORT [AUTO-FLAG]: {detail}"
+        ),
+        "UNRESOLVED_PARAMETER": (
+            "A parameter has no resolved value. "
+            "Add it to the config dict with a placeholder: PARAM_NAME = '<fill_in>' "
+            "and reference it from there. Never hardcode the parameter inline. "
+            "Add a comment: # UNRESOLVED PARAM [AUTO-FLAG]: {detail}"
+        ),
+        "UNRESOLVED_VARIABLE": (
+            "A $$VARIABLE has no resolved value. "
+            "Add it to the config dict with a placeholder and reference it. "
+            "Add a comment: # UNRESOLVED VARIABLE [AUTO-FLAG]: {detail}"
+        ),
+        "UNSUPPORTED_TRANSFORMATION": (
+            "This transformation type cannot be automatically converted. "
+            "Generate a clearly-marked stub with: "
+            "# TODO [MANUAL REQUIRED]: UNSUPPORTED TRANSFORMATION — {detail}. "
+            "Leave the stub in place so the engineer knows exactly what to implement."
+        ),
+    }
+
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    for flag in verification_flags:
+        flag_type = flag.get("flag_type", "")
+        location  = flag.get("location", "")
+        detail    = flag.get("description", flag.get("detail", ""))
+        rule      = _HANDLING_RULES.get(flag_type)
+        if not rule:
+            continue  # INFO/DOCUMENTATION_TRUNCATED flags don't need code handling
+        key = f"{flag_type}::{location}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        instruction = rule.replace("{detail}", detail or flag_type)
+        lines.append(f"- [{flag_type}] at {location or 'mapping level'}:\n  {instruction}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\n## ⚙️ Verification Flag Auto-Handling — Apply These Rules During Conversion\n"
+        "The verification step found the following issues. The tool will handle each one "
+        "in code rather than blocking the conversion. Apply every rule below exactly. "
+        "Do NOT skip any flagged transformation — generate code (or a clearly-marked stub) "
+        "for every item:\n\n"
+        + "\n\n".join(lines)
+        + "\n\n"
+    )
 
 
 def _build_yaml_artifacts(spr: SessionParseReport) -> dict[str, str]:
@@ -311,13 +416,17 @@ async def convert(
     accepted_fixes: list[str] | None = None,
     security_findings: list[dict] | None = None,
     session_parse_report: Optional[SessionParseReport] = None,
+    verification_flags: list[dict] | None = None,
 ) -> ConversionOutput:
     """
     Generate converted code for the assigned target stack.
 
-    accepted_fixes     — reviewer-approved code-level fixes from Gate 1 (Step 5)
-    security_findings  — security scan findings from a previous round (REQUEST_FIX path);
-                         Claude must address every listed finding in this regeneration
+    accepted_fixes      — reviewer-approved code-level fixes from Gate 1 (Step 5)
+    security_findings   — security scan findings from a previous round (REQUEST_FIX path);
+                          Claude must address every listed finding in this regeneration
+    verification_flags  — flags from Step 4 verification; Claude auto-handles each
+                          (stubs, TODOs, config extraction) so the conversion is never blocked
+                          by issues that can be addressed in code
     """
     client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
     stack = stack_assignment.assigned_stack
@@ -377,11 +486,17 @@ async def convert(
     except Exception:
         security_context = ""  # never block a conversion due to KB read failure
 
+    # Build verification flag auto-handling section
+    flag_handling_section = _build_flag_handling_section(
+        [f.model_dump() if hasattr(f, "model_dump") else f for f in (verification_flags or [])]
+    )
+
     prompt = CONVERSION_PROMPT.format(
         stack=stack.value,
         rationale=stack_assignment.rationale,
         security_context=security_context,
         approved_fixes_section=approved_fixes_section + security_fix_section,
+        flag_handling_section=flag_handling_section,
         documentation_md=documentation_md[:30_000],
     )
 

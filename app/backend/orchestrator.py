@@ -508,11 +508,30 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
     log.claude_call(7, f"code generation ({stack_assignment.assigned_stack.value})")
     yield await emit(7, JobStatus.CONVERTING,
                      f"Converting to {stack_assignment.assigned_stack.value} (Claude)…")
+    # Gather verification flags so the conversion agent can auto-handle them in code
+    v_flags_raw = []
+    if verification and verification.flags:
+        v_flags_raw = [f.model_dump() for f in verification.flags]
+        actionable_flag_types = {
+            "INCOMPLETE_LOGIC", "ENVIRONMENT_SPECIFIC_VALUE", "HIGH_RISK",
+            "LINEAGE_GAP", "DEAD_LOGIC", "REVIEW_REQUIRED", "ORPHANED_PORT",
+            "UNRESOLVED_PARAMETER", "UNRESOLVED_VARIABLE", "UNSUPPORTED_TRANSFORMATION",
+        }
+        v_flags_raw = [f for f in v_flags_raw if f.get("flag_type") in actionable_flag_types]
+        if v_flags_raw:
+            log.info(
+                f"Injecting {len(v_flags_raw)} verification flag(s) into conversion prompt "
+                "for auto-handling",
+                step=7,
+                data={"flag_types": [f["flag_type"] for f in v_flags_raw]},
+            )
+
     try:
         conversion_output = await conversion_agent.convert(
             stack_assignment, documentation_md, graph,
             accepted_fixes=accepted_fixes or None,
             session_parse_report=session_parse_report,
+            verification_flags=v_flags_raw or None,
         )
         file_list = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())
@@ -839,6 +858,22 @@ async def resume_after_security_fix_request(
             if fix_text:
                 accepted_fixes.append(fix_text)
 
+    # Carry verification flags forward into the fix round as well
+    from .models.schemas import VerificationReport
+    _v = state.get("verification")
+    _verification_fix = VerificationReport(**_v) if _v else None
+    v_flags_fix: list[dict] = []
+    if _verification_fix and _verification_fix.flags:
+        actionable_flag_types = {
+            "INCOMPLETE_LOGIC", "ENVIRONMENT_SPECIFIC_VALUE", "HIGH_RISK",
+            "LINEAGE_GAP", "DEAD_LOGIC", "REVIEW_REQUIRED", "ORPHANED_PORT",
+            "UNRESOLVED_PARAMETER", "UNRESOLVED_VARIABLE", "UNSUPPORTED_TRANSFORMATION",
+        }
+        v_flags_fix = [
+            f.model_dump() for f in _verification_fix.flags
+            if f.flag_type in actionable_flag_types
+        ]
+
     try:
         conversion_output = await conversion_agent.convert(
             stack_assignment,
@@ -847,6 +882,7 @@ async def resume_after_security_fix_request(
             accepted_fixes=accepted_fixes or None,
             security_findings=security_findings_to_fix or None,
             session_parse_report=session_parse_report,
+            verification_flags=v_flags_fix or None,
         )
         file_list   = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())

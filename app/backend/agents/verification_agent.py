@@ -264,13 +264,31 @@ async def verify(
             )
         ))
 
-    # Every source has at least one outgoing connector?
+    # Every source participates in the data flow?
+    # In Informatica's architecture, SOURCE elements never appear directly as FROMINSTANCE
+    # in CONNECTOR elements — they always connect through a Source Qualifier (SQ_*).
+    # We check: (a) direct match (non-standard), (b) SQ_{name} is in the flow,
+    # (c) any connected SQ whose name contains the source name (handles abbreviations).
+    sq_connected = {
+        t["name"]
+        for m in graph.get("mappings", [])
+        for t in m.get("transformations", [])
+        if t.get("type") == "Source Qualifier" and t["name"] in connected_instances
+    }
     for src in graph.get("sources", []):
-        has_out = any(c.get("from_instance") == src["name"] for c in all_connectors)
+        src_name = src["name"]
+        has_out = (
+            any(c.get("from_instance") == src_name for c in all_connectors)   # direct
+            or f"SQ_{src_name}" in sq_connected                                 # standard SQ naming
+            or any(src_name in sq_name for sq_name in sq_connected)             # partial match
+        )
         completeness_checks.append(CheckResult(
-            name=f"Source '{src['name']}' has outgoing connections",
+            name=f"Source '{src_name}' participates in data flow",
             passed=has_out,
-            detail=None if has_out else f"Source '{src['name']}' sends no data downstream."
+            detail=None if has_out else (
+                f"Source '{src_name}' has no Source Qualifier connected to the mapping — "
+                "it may be an unused source definition or its SQ was not parsed correctly."
+            )
         ))
 
     # Every target receives at least one incoming connector?
