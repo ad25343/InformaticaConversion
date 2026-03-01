@@ -843,6 +843,11 @@ async def resume_after_security_fix_request(
     # ── RE-PRESENT GATE 2 ─────────────────────────────────────────────────────
     can_request_fix_again = remediation_round < MAX_REMEDIATION_ROUNDS
 
+    # Archive the previous scan before overwriting so the UI can show what changed
+    prev_rounds = list(state.get("security_scan_rounds", []))
+    if prev_security_scan:
+        prev_rounds.append(prev_security_scan.model_dump())
+
     if security_scan.recommendation != "APPROVED":
         log.state_change("security_scanning", "awaiting_security_review", step=9)
         log.finalize("awaiting_security_review", steps_completed=9)
@@ -853,9 +858,10 @@ async def resume_after_security_fix_request(
             f"{'One more fix attempt available.' if can_request_fix_again else 'No further fix rounds — choose Approve, Acknowledge, or Fail.'} "
             "Pipeline paused at Step 9.",
             {
-                "security_scan": security_scan.model_dump(),
-                "remediation_round": remediation_round,
-                "can_request_fix": can_request_fix_again,
+                "security_scan":        security_scan.model_dump(),
+                "security_scan_rounds": prev_rounds,
+                "remediation_round":    remediation_round,
+                "can_request_fix":      can_request_fix_again,
             },
         )
     else:
