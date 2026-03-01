@@ -281,7 +281,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.1** | Shipped | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); Gate 2 REQUEST_FIX remediation loop (re-runs Steps 7→8, max 2 rounds, security findings injected into conversion prompt); timestamp timezone fix; CI failure-only notifications |
 | **v2.2** | Shipped | Security Knowledge Base (17 standing rules + auto-learned patterns; every Gate 2 approval makes future conversions smarter); scan round history + fix-round diff UI; Log Archive sidebar; soft delete; bandit PATH fix; Gate 2 UI fixes; doc truncation changed to Gate 1 warning |
 | **v2.2.2** | Shipped | Verification decoupled from docs (graph structural + risk checks only); tier-based doc depth (LOW = single pass); Pass 2 no longer re-sends graph JSON (~50% input token reduction); field-level lineage scoped to non-trivial fields only |
-| **v2.3.0** | Current | Code review hardening: bcrypt passwords, Claude API retry (exponential backoff), XML input validation, DB indices, `/health` endpoint, pydantic Settings class |
+| **v2.3.0** | Shipped | Code review hardening: bcrypt passwords, Claude API retry (exponential backoff), XML input validation, DB indices, `/health` endpoint, pydantic Settings class |
+| **v2.3.1** | Shipped | Error handling: WRONG_FILE_TYPE detection for workflow-in-mapping-slot; empty mapping guard; error message propagation to UI error card; tailored actionable hints for known failure patterns |
+| **v2.3.2** | Current | Verification flag auto-handling: conversion agent addresses all auto-fixable flags in code (pass-through stubs, config extraction, TODO comments, manual stubs); source SQ connectivity false positive fixed |
 | **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 

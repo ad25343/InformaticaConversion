@@ -274,6 +274,39 @@ Addresses all immediate and short-term items from the external code review.
 - **Pydantic `Settings` class**: `backend/config.py` centralises all 20+ env var reads.
   Replaces scattered `os.environ.get()` calls across 10+ files.
 
+### v2.3.2 — Verification Flag Auto-Handling (current)
+
+Fixed:
+- **Source connectivity false positive**: the verification check always failed for Informatica
+  source tables because they connect through Source Qualifiers (SQ_*), not directly.
+  Check updated to detect `SQ_{source_name}` in the connected instance set. Renamed to
+  "participates in data flow".
+
+Added:
+- **Verification flag auto-handling**: the conversion agent now receives all actionable
+  Step 4 flags and addresses each in generated code. The tool converts successfully in
+  the presence of verification flags rather than waiting for human intervention on
+  auto-fixable issues. Per-flag rules: `INCOMPLETE_LOGIC` → pass-through + TODO stub;
+  `ENVIRONMENT_SPECIFIC_VALUE` → config dict extraction; `LINEAGE_GAP` → None + TODO;
+  `DEAD_LOGIC` → commented out; `REVIEW_REQUIRED` → best-effort + TODO; `UNRESOLVED_PARAMETER`
+  → config placeholder; `UNSUPPORTED_TRANSFORMATION` → manual stub. Flags also carried
+  into security fix rounds.
+
+### v2.3.1 — Error Handling (Wrong File Type & Empty Pipeline) (shipped)
+
+Fixed:
+- **Wrong file type detection**: uploading a Workflow XML as the primary mapping file
+  now produces an immediate BLOCKED result with a human-readable explanation. The parser
+  detects `WORKFLOW` elements without `MAPPING` definitions and raises a `WRONG_FILE_TYPE`
+  parse flag. Previously the pipeline silently advanced to steps 2–4 before blocking.
+- **Empty mapping guard**: orchestrator explicitly checks for empty `mapping_names` after
+  parsing and surfaces a descriptive error before advancing to Step 2.
+- **Error message propagation**: parse flag `detail` text is stored in `state.error` and
+  displayed in the UI error card. Users now see the exact reason a job blocked.
+- **UI error card always renders**: the error card now appears for all FAILED/BLOCKED jobs.
+  Falls back to parse flag details, then a generic step-number message. Tailored hints
+  for known failure patterns: workflow-in-mapping-slot, no mappings found, missing API key.
+
 ### v2.3 — Planned
 
 - Git integration: open a pull request with generated code directly from the UI

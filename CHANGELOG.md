@@ -10,6 +10,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-01 — v2.3.2 (Verification Flag Auto-Handling + Source SQ Fix)
+
+### Fixed
+- **Source connectivity false positive** — the verification check "Source X has outgoing
+  connections" always failed in standard Informatica mappings because source tables connect
+  through a Source Qualifier (SQ_*), not directly. The CONNECTOR elements use the SQ as
+  `FROMINSTANCE`, never the source table itself. The check now correctly detects connection
+  via `SQ_{source_name}` in `connected_instances`, or any connected SQ whose name contains
+  the source name. Check renamed to "Source X participates in data flow". (`verification_agent.py`)
+
+### Added
+- **Verification flag auto-handling in conversion** — the conversion agent now receives
+  all actionable verification flags from Step 4 and addresses each one directly in generated
+  code. The tool no longer blocks on issues that can be handled in code; only source-level
+  problems that genuinely can't be resolved automatically require human intervention.
+
+  Per-flag code-level handling:
+  - `INCOMPLETE_LOGIC` → pass-through + `# TODO [AUTO-FLAG]` stub with explanation
+  - `ENVIRONMENT_SPECIFIC_VALUE` → value extracted to config dict at top of file
+  - `HIGH_RISK` → implemented as documented + assertion/row-count check + warning comment
+  - `LINEAGE_GAP` → target field set to `None` + `# TODO [AUTO-FLAG]` for manual trace
+  - `DEAD_LOGIC` → commented out with explanation
+  - `REVIEW_REQUIRED` → best-effort implementation + `# TODO` for mapping owner to confirm
+  - `ORPHANED_PORT` → skipped with comment
+  - `UNRESOLVED_PARAMETER` / `UNRESOLVED_VARIABLE` → added to config as `<fill_in>` placeholder
+  - `UNSUPPORTED_TRANSFORMATION` → manual stub with `# TODO [MANUAL REQUIRED]`
+
+  Flags are injected into both the primary conversion (Step 7) and security remediation
+  rounds (Gate 2 REQUEST_FIX). (`conversion_agent.py`, `orchestrator.py`)
+
+---
+
+## 2026-03-01 — v2.3.1 (Error Handling — Wrong File Type & Empty Pipeline)
+
+### Fixed
+- **Wrong file type detection** — uploading a Workflow XML as the primary mapping file
+  now produces an immediate, actionable BLOCKED result instead of silently spinning
+  through steps 2–4 with no explanation. The parser detects when the XML contains
+  `WORKFLOW` elements but no `MAPPING` definitions and raises a `WRONG_FILE_TYPE`
+  parse flag with a clear human-readable message. (`parser_agent.py`)
+- **Empty mapping guard** — the orchestrator now explicitly checks for an empty
+  `mapping_names` list after parsing completes (even when `parse_status` is not
+  FAILED) and surfaces a descriptive error before advancing to Step 2. (`orchestrator.py`)
+- **Error message propagation** — parse flag `detail` text is now stored in
+  `state.error` and surfaced in the UI error card, so users see exactly why a job
+  blocked rather than a generic "Blocked on Step 1" message. (`orchestrator.py`)
+- **UI error card always renders** — the error card now appears for all FAILED/BLOCKED
+  jobs regardless of whether `state.error` is set. Falls back to parse flag details,
+  then to a generic step-number message. Tailored actionable hints are shown for known
+  failure patterns: workflow-in-mapping-slot, no mappings found, missing API key.
+  (`index.html`)
+
+---
+
 ## 2026-03-01 — v2.3.0 (Code Review Hardening — Security, Reliability, Config)
 
 Addresses all immediate and short-term items from the external code review.
