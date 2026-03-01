@@ -160,12 +160,34 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         return
 
     if parse_report.parse_status == "FAILED":
-        log.step_failed(1, "Parse XML", "parse_status=FAILED")
+        # Surface the first flag's detail as the human-readable error so the UI
+        # shows something actionable rather than just "Blocked".
+        first_flag = parse_report.flags[0] if parse_report.flags else None
+        user_msg = (
+            first_flag.detail if first_flag
+            else "XML parse failed. Check the parse report for details."
+        )
+        log.step_failed(1, "Parse XML", f"parse_status=FAILED — {user_msg}")
         log.finalize("blocked", steps_completed=1)
         log.close()
         yield await emit(1, JobStatus.BLOCKED, "Parse FAILED — see parse report",
                          {"parse_report": parse_report.model_dump(),
-                          "error": "XML parse failed. Check the parse report for details."})
+                          "error": user_msg})
+        return
+
+    # Guard: a "COMPLETE" parse with no mappings means the wrong file was uploaded
+    # (e.g. a Workflow XML in the primary mapping slot). Fail fast with a clear message.
+    if not parse_report.mapping_names:
+        msg = (
+            "No Mapping definitions found in the uploaded XML. "
+            "If you uploaded a Workflow file as the primary mapping, please re-upload "
+            "with the Mapping XML in the required field and the Workflow XML in the optional field."
+        )
+        log.step_failed(1, "Parse XML", msg)
+        log.finalize("blocked", steps_completed=1)
+        log.close()
+        yield await emit(1, JobStatus.BLOCKED, "No mappings found",
+                         {"parse_report": parse_report.model_dump(), "error": msg})
         return
 
     log.step_complete(1, "Parse XML",

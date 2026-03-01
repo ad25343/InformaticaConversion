@@ -961,21 +961,39 @@ function renderJobPanel(job) {
   `;
 
   // ── ERROR CARD ────────────────────────────
-  if ((job.status === 'failed' || job.status === 'blocked') && state.error && !isRejected) {
+  if ((job.status === 'failed' || job.status === 'blocked') && !isRejected) {
     const hasTrace = !!state.error_detail;
-    const traceId = 'trace_' + Math.random().toString(36).slice(2);
+    const traceId  = 'trace_' + Math.random().toString(36).slice(2);
+
+    // Build the primary error message — prefer state.error, fall back to parse flags,
+    // then a generic message so the card is never empty.
+    let errorMsg = state.error || '';
+    if (!errorMsg && state.parse_report) {
+      const flags = state.parse_report.flags || [];
+      if (flags.length) errorMsg = flags.map(f => f.detail).join(' | ');
+    }
+    if (!errorMsg) errorMsg = `Pipeline stopped at Step ${job.current_step}. Check the parse report below for details.`;
+
+    // Tailor the "What to do" hint based on known error patterns
+    let hint = 'Check the details above. Common causes: invalid XML structure, missing ANTHROPIC_API_KEY, network timeout, or unsupported transformation type.';
+    if (errorMsg.toLowerCase().includes('workflow') && errorMsg.toLowerCase().includes('mapping')) {
+      hint = '💡 It looks like you uploaded a Workflow XML as the primary mapping file. Use the <strong>Mapping XML</strong> field for the mapping export, and the optional <strong>Workflow XML</strong> field for the workflow file.';
+    } else if (errorMsg.toLowerCase().includes('no mapping')) {
+      hint = '💡 No Mapping definitions were found in the uploaded file. Make sure you export the Mapping (not the Workflow or Session) from Informatica Designer.';
+    } else if (errorMsg.toLowerCase().includes('api_key') || errorMsg.toLowerCase().includes('api key')) {
+      hint = '💡 ANTHROPIC_API_KEY is missing or invalid. Set it in your .env file and restart the server.';
+    }
+
     html += `<div class="error-card">
-      <div class="card-title"><span class="icon">🚨</span> Pipeline Error — Step ${job.current_step}</div>
-      <div class="error-msg">${esc(state.error)}</div>
+      <div class="card-title"><span class="icon">🚨</span> Pipeline Stopped — Step ${job.current_step}</div>
+      <div class="error-msg">${esc(errorMsg)}</div>
       ${hasTrace ? `
         <span class="error-toggle" onclick="toggleTrace('${traceId}')">▶ Show full traceback</span>
         <pre class="error-trace" id="${traceId}">${esc(state.error_detail)}</pre>
       ` : ''}
       <div class="error-actions">
         <div class="info-box" style="margin-bottom:0;flex:1">
-          <strong>What to do:</strong> Check the traceback above. Common causes: invalid XML structure,
-          missing ANTHROPIC_API_KEY, network timeout, or unsupported transformation type in the mapping.
-          Fix the root cause, then re-upload the file to start a new job.
+          <strong>What to do:</strong> <span>${hint}</span>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="reuploadForJob()">↩ Re-upload Fixed File</button>
       </div>

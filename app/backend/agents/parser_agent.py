@@ -96,7 +96,23 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
             ))
 
     # ── Determine parse status ────────────────
-    if not graph["mappings"] and not graph["workflows"]:
+    if not graph["mappings"] and graph["workflows"]:
+        # Workflow XML uploaded in the primary mapping slot — clear, actionable error.
+        parse_status = "FAILED"
+        wf_names = ", ".join(w.get("name", "?") for w in graph["workflows"][:5])
+        flags.insert(0, ParseFlag(
+            flag_type="WRONG_FILE_TYPE",
+            element="root",
+            detail=(
+                f"This file contains {len(graph['workflows'])} Workflow definition(s) "
+                f"({wf_names}) but no Mapping definitions. "
+                "It looks like you uploaded a Workflow XML as the primary mapping file. "
+                "Please re-upload: put the Mapping XML (.xml from Informatica Designer) "
+                "in the required 'Mapping XML' field, and optionally put this file in "
+                "the 'Workflow XML' field."
+            )
+        ))
+    elif not graph["mappings"] and not graph["workflows"]:
         parse_status = "PARTIAL"
         flags.append(ParseFlag(
             flag_type="UNKNOWN_ELEMENT",
