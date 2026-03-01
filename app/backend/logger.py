@@ -138,6 +138,14 @@ def registry_entry(job_id: str) -> Optional[dict]:
     return _load_registry().get(job_id)
 
 
+def remove_registry_entry(job_id: str) -> None:
+    """Remove a job's entry from registry.json (call when a job is deleted)."""
+    reg = _load_registry()
+    if job_id in reg:
+        reg.pop(job_id)
+        _save_registry(reg)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Filename helpers
 # ─────────────────────────────────────────────────────────────────────────────

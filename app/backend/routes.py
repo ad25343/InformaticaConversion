@@ -158,22 +158,19 @@ async def list_jobs():
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a job and clean up its associated log and S2T files."""
-    from .logger import job_log_path
+    from .logger import job_log_path, remove_registry_entry
     from .agents.s2t_agent import s2t_excel_path
 
     deleted = await db.delete_job(job_id)
     if not deleted:
         raise HTTPException(404, "Job not found")
 
-    # Best-effort cleanup of associated files
+    # Best-effort cleanup of associated files.
+    # NOTE: log files are intentionally preserved on disk as an audit trail;
+    # only the registry entry is removed so the index stays clean.
     cleaned = []
-    log_path = job_log_path(job_id)
-    if log_path and log_path.exists():
-        try:
-            log_path.unlink()
-            cleaned.append("log")
-        except OSError:
-            pass
+
+    remove_registry_entry(job_id)
 
     s2t_path = s2t_excel_path(job_id)
     if s2t_path and s2t_path.exists():
