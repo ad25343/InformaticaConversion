@@ -148,6 +148,15 @@ New features:
   static remediation lookup table; YAML secrets findings include a canned credential
   externalisation guide; Claude findings include a model-generated remediation field.
   The Gate 2 UI shows a green "🔧 How to fix:" section per finding.
+- **Gate 2 REQUEST_FIX remediation loop:** Reviewers can now request that Claude actually
+  fix the identified security findings rather than just accepting or rejecting them. Choosing
+  REQUEST_FIX re-runs Step 7 (code generation) with all security findings injected into the
+  conversion prompt as mandatory fix requirements (severity, location, description, and
+  required fix per finding). Step 8 (security scan) then re-runs on the regenerated code and
+  Gate 2 is re-presented to the reviewer. If the re-scan is clean it auto-proceeds to Step 10.
+  Capped at 2 remediation rounds — the "Request Fix" button is hidden after round 2 to prevent
+  infinite loops. Round number and remaining attempts are shown as a banner in the Gate 2 UI.
+  The remediation round is tracked in `SecuritySignOffRecord.remediation_round`.
 - **Two-pass documentation (Step 3):** Documentation generation now runs as two
   sequential Claude calls instead of one. Pass 1 covers Overview + all Transformations
   + Parameters & Variables; Pass 2 covers Field-Level Lineage + Session & Runtime
@@ -228,6 +237,8 @@ Step 8   Security Scan                 [bandit (Python) + YAML regex + Claude re
 Step 9   ◼ Gate 2 — Human Security Review
          APPROVED     → auto-proceed to Step 10 (scan was clean)
          ACKNOWLEDGED → proceed to Step 10 (issues noted, risk accepted)
+         REQUEST_FIX  → re-run Step 7 with findings injected → re-run Step 8 → re-present Gate 2
+                        (max 2 remediation rounds; auto-proceeds to Step 10 if re-scan is clean)
          FAILED       → BLOCKED (terminal)
          [Pauses only when scan is not APPROVED]
     │
@@ -281,7 +292,7 @@ flows through `backend/security.py`.
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
 | `DELETE` | `/api/jobs/{id}` | Delete job and associated files |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (APPROVE / REJECT) |
-| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / FAILED) |
+| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / REQUEST_FIX / FAILED) |
 | `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVED / REJECTED) |
 | `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text) |
 | `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
@@ -339,6 +350,22 @@ VerificationFlag
 └── auto_fix_suggestion   (optional) Specific code-level fix Claude proposes; if the
                           reviewer checks "Apply this fix" at Gate 1, the suggestion is
                           forwarded to the conversion agent at Step 7
+
+SecurityReviewDecision  (v1.2 / v2.1)
+    APPROVED              Scan was clean, or reviewer confirmed no action needed
+    ACKNOWLEDGED          Issues noted and accepted as known risk (proceeds to Step 10)
+    REQUEST_FIX           Re-run Step 7 with findings injected → re-run Step 8 →
+                          re-present Gate 2 (max 2 rounds; auto-proceeds if clean)
+    FAILED                Block pipeline permanently
+
+SecuritySignOffRecord  (Gate 2 sign-off)
+├── reviewer_name         Name of the security reviewer
+├── reviewer_role         Role of the reviewer
+├── review_date           Timestamp of decision (UTC, displayed in local timezone)
+├── decision              SecurityReviewDecision enum value
+├── notes                 Reviewer notes
+└── remediation_round     (v2.1) Which REQUEST_FIX round produced this record (0 = no fix
+                          requested; 1 = first round; 2 = second and final round)
 ```
 
 ---

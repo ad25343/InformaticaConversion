@@ -75,7 +75,7 @@ batch.zip/
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
 | 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
 | **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections — each finding includes actionable remediation guidance |
-| **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / FAILED** — pauses when findings exist; "🔧 How to fix" shown per finding |
+| **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / REQUEST_FIX / FAILED** — pauses when findings exist; "🔧 How to fix" shown per finding; REQUEST_FIX re-runs Steps 7→8→Gate 2 (max 2 rounds) |
 | 10 | Logic Equivalence + Code Quality | Claude | Stage A: rule-by-rule XML→code comparison (VERIFIED/NEEDS_REVIEW/MISMATCH); Stage B: 10+ static quality checks |
 | 11 | Test Generation | Claude | pytest / dbt test stubs; test files re-scanned for secrets |
 | **12** | **Gate 3 — Code Review** | UI sign-off | **APPROVED / REJECTED** |
@@ -89,6 +89,7 @@ batch.zip/
 **Gate 2 (Step 9 — Security Review):** Reviewer sees the full security scan findings and makes an informed decision. Pipeline pauses only when the scan is not clean (REVIEW_RECOMMENDED or REQUIRES_FIXES). Clean scans auto-proceed.
 - APPROVED → proceed to logic equivalence + code quality review (scan was clean, or reviewer confirmed no action needed)
 - ACKNOWLEDGED → proceed with a note on record (known risk accepted)
+- REQUEST_FIX → re-run Step 7 (code generation) with all findings injected as mandatory fix requirements, then re-run Step 8 (security scan), then re-present Gate 2. Capped at 2 remediation rounds; if the re-scan is clean it auto-proceeds. "Request Fix" button hidden after round 2.
 - FAILED → job blocked permanently
 
 **Gate 3 (Step 12 — Code Review):** Reviewer sees converted code, test coverage, and the security report.
@@ -211,7 +212,7 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
 | `DELETE` | `/api/jobs/{id}` | Delete job and associated XML |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (`APPROVE` / `REJECT`) |
-| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (`APPROVED` / `ACKNOWLEDGED` / `FAILED`) |
+| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (`APPROVED` / `ACKNOWLEDGED` / `REQUEST_FIX` / `FAILED`) |
 | `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (`APPROVED` / `REJECTED`) |
 | `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text via `?format=text`) |
 | `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
@@ -249,7 +250,7 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v1.2** | Shipped | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
 | **v1.3** | Shipped | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
 | **v2.0** | Shipped | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
-| **v2.1** | Current | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); timestamp timezone fix; CI failure-only notifications |
+| **v2.1** | Current | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); Gate 2 REQUEST_FIX remediation loop (re-runs Steps 7→8, max 2 rounds, security findings injected into conversion prompt); timestamp timezone fix; CI failure-only notifications |
 | **v2.2** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
