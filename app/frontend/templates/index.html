@@ -1415,9 +1415,10 @@ function renderJobPanel(job) {
 
   // ── STEP 9 — SECURITY REVIEW GATE ───────────────
   if (job.status === 'awaiting_security_review' || state.security_sign_off) {
-    const signedOff = !!state.security_sign_off;
     const srd = state.security_sign_off || {};
     const srdDecision = srd.decision || '';
+    // REQUEST_FIX is an intermediate decision — don't treat it as a final sign-off
+    const signedOff = !!state.security_sign_off && srdDecision !== 'REQUEST_FIX';
     const srdDecColor = { APPROVED:'var(--accent2)', ACKNOWLEDGED:'var(--warn)', FAILED:'var(--danger)' }[srdDecision] || 'var(--muted)';
 
     if (signedOff) {
