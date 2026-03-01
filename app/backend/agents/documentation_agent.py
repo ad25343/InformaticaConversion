@@ -3,21 +3,26 @@ STEP 3 — Documentation Agent
 Claude-powered. Produces the full Markdown documentation file per mapping.
 Works strictly from the parsed graph — never from general Informatica knowledge.
 
-Two-pass strategy (primary approach)
---------------------------------------
-Large or complex mappings routinely exceed single-call output limits even with
-the extended-output beta enabled.  We always use two sequential Claude calls:
+Tier-based strategy
+--------------------
+Documentation depth scales with mapping complexity to avoid unnecessary token use:
 
-  Pass 1 — Overview + all Transformations + Parameters & Variables
-  Pass 2 — Field-Level Lineage + Session & Runtime Context + Ambiguities
+  LOW  (< 5 transformations): Single pass — Overview + Transformations + Parameters.
+       No field-level lineage (overkill for simple mappings) and no Ambiguities section.
 
-Pass 2 receives Pass 1's output as context so lineage traces have the full
-transformation detail to reference.  The combined output is returned as one
-Markdown document.
+  MEDIUM / HIGH / VERY_HIGH: Two sequential Claude calls:
+    Pass 1 — Overview + Transformations + Parameters & Variables
+    Pass 2 — Field-Level Lineage (non-trivial fields only) + Session Context + Ambiguities
 
-Each call requests 64 000 tokens with the extended-output beta, giving a
-theoretical ceiling of 128 000 output tokens — sufficient for any Informatica
-mapping in practice.
+  Pass 2 does NOT re-send the full graph JSON — Pass 1's output already contains all
+  transformation detail. This avoids sending ~80k chars of redundant context to Pass 2.
+
+  Field-Level Lineage scope:
+    Only fields that go through a non-trivial step (derived, calculated, aggregated,
+    lookup, conditional, type-cast) are fully traced. Simple passthrough and rename-only
+    fields are grouped in a summary table instead of individual traces.
+
+Each call requests 64 000 tokens with the extended-output beta.
 """
 from __future__ import annotations
 import json
@@ -106,24 +111,28 @@ those will be produced in a second pass.
 
 PASS_2_PROMPT = """You are completing the documentation for an Informatica mapping.
 Pass 1 has already documented the Overview, all Transformations, and Parameters & Variables.
+Use Pass 1 as your sole reference — you do not need the raw graph JSON.
 
 ## Pass 1 Documentation (already written — use as reference)
 {pass1_doc}
-
-## Full Mapping Graph (JSON)
-```json
-{graph_json}
-```
 {session_context_block}
 ## Instructions
 
 Write ONLY the following remaining sections:
 
 ## Field-Level Lineage
-For every target field, trace: source field → each transformation step → target field.
-State what happened at each step (passthrough / renamed / retyped / derived / aggregated / lookup / generated).
-Flag as LINEAGE GAP if the trace cannot be completed.
-Use the transformation detail from Pass 1 above as your primary reference.
+
+**Non-trivial fields** (derived, calculated, aggregated, lookup result, conditional, type-cast):
+For each such target field, trace: source field → each transformation step → target field.
+State what happened at each step. Flag as LINEAGE GAP if the trace cannot be completed.
+
+**Passthrough and rename-only fields**:
+Do NOT trace these individually. Instead, add a single summary table:
+| Target Field | Source Field | Transformation | Notes |
+|---|---|---|---|
+(one row per passthrough/rename field)
+
+This keeps the lineage section focused on fields where the logic actually matters.
 
 ## Session & Runtime Context
 (Populated from Workflow XML and parameter file when uploaded)
@@ -256,16 +265,18 @@ async def document(
     session_parse_report: Optional[SessionParseReport] = None,
 ) -> str:
     """
-    Returns the full documentation as a Markdown string produced by two
-    sequential Claude calls (Pass 1: transformations, Pass 2: lineage).
+    Returns the full documentation as a Markdown string.
+
+    Strategy is tier-based:
+      LOW  — single pass (overview + transformations + parameters only)
+      MEDIUM / HIGH / VERY_HIGH — two passes (Pass 1: transformations, Pass 2: lineage)
+
+    Pass 2 does NOT re-send the full graph JSON — Pass 1's output already contains all
+    transformation detail. Lineage is scoped to non-trivial fields only.
 
     The returned string ends with one of two sentinels:
-      DOC_COMPLETE_SENTINEL    — both passes finished without truncation; safe to advance
-      DOC_TRUNCATION_SENTINEL  — a pass hit the token limit; orchestrator should fail the job
-
-    The orchestrator checks the sentinel immediately after this call and stops
-    the pipeline at Step 3 if the document is incomplete, rather than running
-    verification on a partial document.
+      DOC_COMPLETE_SENTINEL    — completed without truncation; safe to advance
+      DOC_TRUNCATION_SENTINEL  — hit the token limit; orchestrator injects a warning flag
     """
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -283,7 +294,7 @@ async def document(
         f"Special Flags: {complexity.special_flags}"
     )
 
-    # Keep the graph JSON compact but complete — truncate only if truly massive
+    # Graph JSON is only sent to Pass 1 — compact but complete
     graph_json = json.dumps(graph, indent=2)
     if len(graph_json) > 80_000:
         graph_json = graph_json[:80_000] + "\n... [truncated for length]"
@@ -292,9 +303,11 @@ async def document(
     session_section = f"\n{session_context_block}\n" if session_context_block else ""
 
     num_trans = _count_transformations(graph)
+    use_two_pass = complexity.tier.value in ("MEDIUM", "HIGH", "VERY_HIGH")
+
     log.info(
-        "documentation_agent: starting two-pass doc generation — "
-        "tier=%s transformations=%d",
+        "documentation_agent: starting %s doc generation — tier=%s transformations=%d",
+        "two-pass" if use_two_pass else "single-pass",
         complexity.tier.value, num_trans,
     )
 
@@ -309,15 +322,19 @@ async def document(
     log.info("documentation_agent: Pass 1 complete — %d chars", len(pass1_doc))
 
     if pass1_truncated:
-        # Pass 1 itself truncated — stamp sentinel and return early, no point
-        # running Pass 2 without complete transformation context.
-        log.error("documentation_agent: Pass 1 truncated — skipping Pass 2")
+        log.error("documentation_agent: Pass 1 truncated — returning early")
         return pass1_doc + DOC_TRUNCATION_SENTINEL
 
-    # ── Pass 2: Lineage + Session Context + Ambiguities ───────────────────────
+    # ── LOW tier: single pass is sufficient — no lineage section needed ────────
+    if not use_two_pass:
+        log.info("documentation_agent: LOW tier — single pass complete, skipping Pass 2")
+        return pass1_doc + DOC_COMPLETE_SENTINEL
+
+    # ── Pass 2: Lineage (non-trivial fields) + Session Context + Ambiguities ───
+    # NOTE: graph_json is intentionally NOT sent here — Pass 1's output already
+    # contains all transformation detail that Pass 2 needs for lineage tracing.
     pass2_prompt = PASS_2_PROMPT.format(
         pass1_doc=pass1_doc,
-        graph_json=graph_json,
         session_context_block=session_section,
     )
 

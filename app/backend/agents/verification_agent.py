@@ -210,107 +210,76 @@ async def verify(
     mapping_name = parse_report.mapping_names[0] if parse_report.mapping_names else "unknown"
 
     # ─────────────────────────────────────────
-    # TRUNCATION DETECTION
-    # Check whether the documentation agent hit the token limit.  If so we add
-    # one prominent DOCUMENTATION_TRUNCATED flag and annotate every subsequent
-    # completeness failure so the reviewer knows the real cause.
+    # TRUNCATION FLAG
+    # If the documentation agent hit the token limit, inject one prominent
+    # flag so the reviewer is aware. We do NOT run doc-completeness string
+    # matching — truncation causes cascading false failures and the reviewer
+    # can already see the truncation banner on the Step 3 card in the UI.
     # ─────────────────────────────────────────
-    doc_was_truncated = DOC_TRUNCATION_SENTINEL in documentation_md
-    if doc_was_truncated:
-        # Strip the sentinel so it doesn't pollute name-search checks below
-        documentation_md = documentation_md.replace(DOC_TRUNCATION_SENTINEL, "")
+    if DOC_TRUNCATION_SENTINEL in documentation_md:
         flags.append(_make_flag(
             "DOCUMENTATION_TRUNCATED",
             "Step 3 — Documentation Agent",
             (
-                "The documentation was cut off by the AI token limit before all transformations "
-                "could be written. Any 'not found in documentation' failures in the Completeness "
-                "section below are caused by this truncation — they do NOT reflect missing logic "
-                "in your Informatica mapping. Re-run Step 3 to regenerate the documentation."
+                "The documentation was cut off by the AI token limit before all sections "
+                "could be written. Review the Step 3 card in the UI to see where it ends. "
+                "The mapping graph is complete — this flag reflects a doc generation limit only."
             ),
             blocking=False,
         ))
 
-    def _missing_detail(entity: str, kind: str) -> str:
-        """Return a failure detail that names the real cause when truncation is known."""
-        base = f"{kind} '{entity}' not found in documentation"
-        if doc_was_truncated:
-            base += (
-                " ⚠️ Documentation was truncated by the token limit — "
-                "this failure is likely caused by truncation, not a missing documentation entry. "
-                "Re-run Step 3 to fix."
-            )
-        return base
-
     # ─────────────────────────────────────────
-    # COMPLETENESS CHECKS (deterministic)
+    # GRAPH STRUCTURAL CHECKS (deterministic)
+    # Verify the parsed graph is internally consistent and ready for conversion.
+    # These checks are against the graph — not the documentation text.
     # ─────────────────────────────────────────
 
     all_transformations = []
     for m in graph.get("mappings", []):
         all_transformations.extend(m.get("transformations", []))
 
-    # Every transformation documented?
+    # Build connector sets for structural checks
+    all_connectors: list[dict] = []
+    for m in graph.get("mappings", []):
+        all_connectors.extend(m.get("connectors", []))
+
+    connected_instances = set()
+    for conn in all_connectors:
+        connected_instances.add(conn.get("from_instance", ""))
+        connected_instances.add(conn.get("to_instance", ""))
+
+    # Every transformation (except sources/targets) participates in the data flow?
     for t in all_transformations:
-        present = t["name"] in documentation_md
+        t_type = t.get("type", "").lower()
+        if t_type in ("source definition", "target definition", "source", "target"):
+            continue
+        in_flow = t["name"] in connected_instances
         completeness_checks.append(CheckResult(
-            name=f"Transformation '{t['name']}' documented",
-            passed=present,
-            detail=None if present else _missing_detail(t["name"], "Transformation")
+            name=f"Transformation '{t['name']}' connected in data flow",
+            passed=in_flow,
+            detail=None if in_flow else (
+                f"Transformation '{t['name']}' ({t.get('type','')}) has no connectors — "
+                "it is isolated from the data flow and will not be converted."
+            )
         ))
 
-    # Every source documented?
+    # Every source has at least one outgoing connector?
     for src in graph.get("sources", []):
-        present = src["name"] in documentation_md
+        has_out = any(c.get("from_instance") == src["name"] for c in all_connectors)
         completeness_checks.append(CheckResult(
-            name=f"Source '{src['name']}' documented",
-            passed=present,
-            detail=None if present else _missing_detail(src["name"], "Source")
+            name=f"Source '{src['name']}' has outgoing connections",
+            passed=has_out,
+            detail=None if has_out else f"Source '{src['name']}' sends no data downstream."
         ))
 
-    # Every target documented?
+    # Every target receives at least one incoming connector?
     for tgt in graph.get("targets", []):
-        present = tgt["name"] in documentation_md
+        has_in = any(c.get("to_instance") == tgt["name"] for c in all_connectors)
         completeness_checks.append(CheckResult(
-            name=f"Target '{tgt['name']}' documented",
-            passed=present,
-            detail=None if present else _missing_detail(tgt["name"], "Target")
+            name=f"Target '{tgt['name']}' receives incoming connections",
+            passed=has_in,
+            detail=None if has_in else f"Target '{tgt['name']}' receives no data — it will be empty."
         ))
-
-    # All port expressions documented?
-    for t in all_transformations:
-        for expr in t.get("expressions", []):
-            port_present = expr["port"] in documentation_md
-            detail = None
-            if not port_present:
-                detail = f"Port '{expr['port']}' expression not found in docs"
-                if doc_was_truncated:
-                    detail += (
-                        " ⚠️ Documentation was truncated — likely caused by token limit cutoff, "
-                        "not a missing expression. Re-run Step 3."
-                    )
-            completeness_checks.append(CheckResult(
-                name=f"Expression for port '{expr['port']}' in '{t['name']}' documented",
-                passed=port_present,
-                detail=detail,
-            ))
-
-    # Parameters documented?
-    for param in parse_report.unresolved_parameters:
-        present = param in documentation_md
-        completeness_checks.append(CheckResult(
-            name=f"Unresolved parameter '{param}' documented",
-            passed=present,
-            detail=None if present else _missing_detail(param, "Parameter")
-        ))
-
-    # Field-Level Lineage section present?
-    lineage_present = "Field-Level Lineage" in documentation_md or "lineage" in documentation_md.lower()
-    completeness_checks.append(CheckResult(
-        name="Field-Level Lineage section present",
-        passed=lineage_present,
-        detail=None if lineage_present else "No lineage section found in documentation"
-    ))
 
     # ─────────────────────────────────────────
     # SELF-CHECKS (deterministic)
@@ -464,11 +433,14 @@ async def verify(
         self_checks.append(CheckResult(name="Parse completed successfully", passed=True))
 
     # ─────────────────────────────────────────
-    # QUALITATIVE FLAGS — Claude
+    # QUALITATIVE FLAGS — Claude (graph-based)
+    # Claude reviews the mapping graph directly for logic risks, hardcoded
+    # values, high-risk patterns, and ambiguous logic.  It no longer reads
+    # the documentation — that is human-facing and reviewed visually at Gate 1.
     # ─────────────────────────────────────────
 
     claude_flags = await _run_claude_quality_checks(
-        documentation_md, graph, mapping_name, expr_input_ports,
+        graph, mapping_name, expr_input_ports,
         tier=complexity.tier,
     )
     # Post-filter: suppress any DEAD_LOGIC flags Claude raised for ports we know are
@@ -480,16 +452,16 @@ async def verify(
 
     flags.extend(f for f in claude_flags if not _is_expr_input_flag(f))
 
-    # Build accuracy checks from Claude output (summarised)
+    # Build accuracy checks from Claude graph review
     accuracy_checks.append(CheckResult(
-        name="No meaning-changing paraphrasing detected (Claude review)",
-        passed=all(f.flag_type != "ACCURACY_CONCERN" for f in claude_flags),
-        detail="See flags section for details" if any(f.flag_type == "ACCURACY_CONCERN" for f in claude_flags) else None
+        name="No high-risk logic patterns detected (Claude graph review)",
+        passed=all(f.flag_type not in ("HIGH_RISK", "INCOMPLETE_LOGIC") for f in claude_flags),
+        detail="See flags section for details" if any(f.flag_type in ("HIGH_RISK", "INCOMPLETE_LOGIC") for f in claude_flags) else None
     ))
     accuracy_checks.append(CheckResult(
-        name="Conditional logic fully represented (Claude review)",
-        passed=all(f.flag_type != "INCOMPLETE_LOGIC" for f in claude_flags),
-        detail=None
+        name="No hardcoded environment values in expressions (Claude graph review)",
+        passed=all(f.flag_type != "ENVIRONMENT_SPECIFIC_VALUE" for f in claude_flags),
+        detail="See flags section for details" if any(f.flag_type == "ENVIRONMENT_SPECIFIC_VALUE" for f in claude_flags) else None
     ))
 
     # ─────────────────────────────────────────
@@ -527,14 +499,78 @@ async def verify(
     )
 
 
+def _build_graph_summary(graph: dict) -> str:
+    """Build a compact, risk-focused summary of the graph for Claude quality review.
+
+    Extracts expressions, SQL overrides, filter conditions, join conditions, and
+    connector topology — everything Claude needs to spot conversion risks without
+    the verbosity of the full JSON (which can exceed 80k chars).
+    """
+    lines: list[str] = []
+
+    sources = graph.get("sources", [])
+    targets = graph.get("targets", [])
+    lines.append(f"Sources ({len(sources)}): {', '.join(s['name'] for s in sources)}")
+    lines.append(f"Targets ({len(targets)}): {', '.join(t['name'] for t in targets)}")
+
+    for m in graph.get("mappings", []):
+        lines.append(f"\nMapping: {m.get('name', 'unknown')}")
+        for t in m.get("transformations", []):
+            lines.append(f"\n  [{t['type']}] {t['name']}")
+
+            # Expressions
+            for expr in t.get("expressions", []):
+                e = expr.get("expression", "")
+                if e and e != expr.get("port", ""):  # skip trivial pass-throughs
+                    lines.append(f"    expr  {expr['port']} = {e[:300]}")
+
+            # SQL / filter / join / lookup conditions
+            for attr_key in ("sql_override", "filter_condition", "join_condition",
+                             "lookup_condition", "pre_sql", "post_sql"):
+                val = t.get(attr_key) or t.get("attributes", {}).get(attr_key, "")
+                if val:
+                    lines.append(f"    {attr_key}: {str(val)[:300]}")
+
+            # Port list (names + types only, for connectivity context)
+            port_names = [
+                f"{p['name']}({'I' if 'INPUT' in p.get('porttype','') else ''}"
+                f"{'O' if 'OUTPUT' in p.get('porttype','') else ''})"
+                for p in t.get("ports", [])
+            ]
+            if port_names:
+                lines.append(f"    ports: {', '.join(port_names[:20])}"
+                             + (" ..." if len(port_names) > 20 else ""))
+
+        # Connector summary (from → to)
+        connectors = m.get("connectors", [])
+        if connectors:
+            lines.append(f"\n  Connectors ({len(connectors)}):")
+            for c in connectors[:60]:  # cap at 60 to keep size manageable
+                lines.append(f"    {c.get('from_instance')}.{c.get('from_field')} "
+                             f"→ {c.get('to_instance')}.{c.get('to_field')}")
+            if len(connectors) > 60:
+                lines.append(f"    ... and {len(connectors) - 60} more connectors")
+
+    summary = "\n".join(lines)
+    # Hard cap — if still very large, truncate gracefully
+    if len(summary) > 20_000:
+        summary = summary[:20_000] + "\n... [graph summary truncated for length]"
+    return summary
+
+
 async def _run_claude_quality_checks(
-    documentation_md: str,
     graph: dict,
     mapping_name: str,
     expr_input_ports: set[str] | None = None,
     tier: ComplexityTier = ComplexityTier.MEDIUM,
 ) -> list[VerificationFlag]:
-    """Ask Claude to identify qualitative issues in the documentation."""
+    """Ask Claude to identify qualitative risks in the mapping graph.
+
+    We review the graph — not the documentation.  The documentation is human-facing
+    and is reviewed visually by the reviewer at Gate 1.  This call is about finding
+    conversion risks: hardcoded values, high-risk logic, ambiguous expressions, dead
+    logic, and incomplete conditionals — all detectable from the raw graph data.
+    """
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     expr_input_note = ""
@@ -548,35 +584,38 @@ these as DEAD_LOGIC:
 {port_list}
 """
 
-    prompt = f"""You are reviewing technical documentation for an Informatica mapping called '{mapping_name}'.
+    # Build a compact graph summary for Claude — focus on expressions, SQL, and connectors.
+    # Full graph JSON can be very large; we extract only what's needed for risk analysis.
+    graph_summary = _build_graph_summary(graph)
 
-Review the documentation below and identify ONLY real issues — do not invent problems.
+    prompt = f"""You are a senior data engineer reviewing an Informatica PowerCenter mapping called '{mapping_name}' before automated conversion to dbt/PySpark.
+
+Review the mapping graph below and identify ONLY real conversion risks — do not invent problems.
 {expr_input_note}
 Look for:
-1. REVIEW_REQUIRED — logic unclear or open to multiple interpretations
-2. DEAD_LOGIC — transformation or port that has no effect on data (exclude expression-input ports listed above)
-3. ENVIRONMENT_SPECIFIC_VALUE — hardcoded values like connection strings, file paths, server names
-4. HIGH_RISK — logic that is financially sensitive or business-critical
-5. LINEAGE_GAP — target field whose lineage cannot be fully traced
-6. ACCURACY_CONCERN — documentation appears to paraphrase in a meaning-changing way
-7. INCOMPLETE_LOGIC — conditional logic appears incomplete or oversimplified
+1. REVIEW_REQUIRED — logic that is unclear, ambiguous, or open to multiple interpretations
+2. DEAD_LOGIC — transformation or port that has no effect on output data (exclude expression-input ports listed above)
+3. ENVIRONMENT_SPECIFIC_VALUE — hardcoded connection strings, server names, schema names, file paths, or IP addresses in expressions or SQL overrides
+4. HIGH_RISK — logic that is financially sensitive, performs updates/deletes, or processes PII
+5. INCOMPLETE_LOGIC — IIF/DECODE/conditional expression that appears to be missing an ELSE branch or default case
+6. LINEAGE_GAP — a target field whose source cannot be determined from the graph connectors and expressions
 
 For each issue found, respond with a JSON array. Each item:
 {{
   "flag_type": "one of the types above",
   "location": "transformation name and port/field if applicable",
-  "description": "specific description of the issue",
+  "description": "specific description of the issue found in the graph",
   "blocking": false,
   "severity": "HIGH or MEDIUM or LOW",
   "recommendation": "one sentence describing the specific action the reviewer should take",
-  "auto_fix_suggestion": "A concrete, specific instruction that can be injected verbatim into the code generation prompt to automatically apply the fix (e.g. 'Move the hardcoded value \\\"PROD_DB\\\" for connection string in SQ_ORDERS into a config variable named DB_CONNECTION_STRING at the top of the file.' or 'Add a null check for CUSTOMER_ID before the join — filter out rows WHERE CUSTOMER_ID IS NULL in the staging CTE.'). Set to null if the issue requires human judgement rather than a mechanical code fix."
+  "auto_fix_suggestion": "A concrete instruction for the code generation prompt (e.g. 'Move the hardcoded value \\"PROD_DB\\" in SQ_ORDERS into a config variable DB_CONNECTION_STRING.'). Set to null if human judgement is needed."
 }}
 
 If no issues found, return: []
 
-Documentation to review:
+Mapping graph to review:
 ---
-{documentation_md[:15000]}
+{graph_summary}
 ---
 
 Respond with ONLY the JSON array. No other text."""
