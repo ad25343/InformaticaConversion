@@ -10,9 +10,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## 2026-03-01 — v2.2 (Log Archive, Soft Delete, Batch Test Set)
+## 2026-03-01 — v2.2 (Security Knowledge Base, Log Archive, Soft Delete, Gate 2 Fixes)
 
 ### Added
+- **Security Knowledge Base** — two-layer system that makes every future code generation
+  smarter from accumulated job history. (`d0ceb0f`, `99c9453`)
+  - `security_rules.yaml` (committed to source): 17 standing rules covering credentials,
+    SQL injection, eval/exec, subprocess, XXE, Zip Slip, weak hashing, insecure random,
+    PII logging, TLS bypass, temp files, and 5 dbt/Snowflake-specific rules derived from
+    real job findings (profiles.yml secrets, post-hook SQL injection, env_var without
+    defaults, Jinja code execution, truncated SQL models).
+  - `security_patterns.json` (runtime state): auto-learned patterns built from every
+    Gate 2 APPROVED / ACKNOWLEDGED decision. Each approved job contributes its findings
+    with occurrence counts — the most common issues get the most emphasis in future prompts.
+  - `build_security_context_block()`: prepends a MANDATORY SECURITY REQUIREMENTS block to
+    every conversion prompt (first generation and REQUEST_FIX reruns). KB read failures
+    never block a conversion.
+  - `GET /api/security/knowledge`: returns `rules_count`, `patterns_count`, `top_patterns`.
+  - Sidebar badge: "🛡 Security KB: N rules · M learned patterns" shown on page load.
+  - Historical backfill: all 10 findings from existing job logs seeded into patterns store.
+- **Security scan round history + fix-round diff UI** — orchestrator now preserves each
+  security scan as an entry in `security_scan_rounds` before overwriting. Gate 2 shows a
+  ✅ Fixed / ⚠️ Remains / 🆕 New comparison table after each REQUEST_FIX round so
+  reviewers can see exactly what was addressed. (`6045476`)
 - **Log Archive sidebar** — collapsible "Log Archive" section in the job list shows
   historical jobs whose DB records are gone but whose log files are still on disk.
   Clicking any entry opens a read-only log panel (`GET /logs/history`,
@@ -40,14 +60,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   version to README covering all assignment criteria. (`7ed7972`)
 
 ### Fixed
-- `loadJobs()` used `Promise.all` for the main jobs fetch and the new history fetch —
-  if `/api/logs/history` errored the entire function failed silently, hiding live jobs.
-  History fetch moved to a separate inner `try/catch`. (`4156a64`)
+- **Security findings injection passing blank descriptions** — `conversion_agent.py` was
+  reading `finding_type` / `location` / `description` which do not exist on the
+  `SecurityFinding` model. Correct fields (`test_name` / `filename` / `text`) now used;
+  offending code snippet and line number also injected so Claude has full context to fix
+  findings. (`9fa54b7`)
+- **Gate 2 approval buttons missing after REQUEST_FIX regen** — `signedOff` was set to
+  `true` whenever `state.security_sign_off` existed (including when `decision =
+  "REQUEST_FIX"`), hiding the decision buttons after regen completed. Fixed by excluding
+  REQUEST_FIX from the signedOff calculation. (`1cb3f16`)
+- **Gate 2 security card rendering during Steps 7/8** — the security review card was
+  visible while regen was running because `|| state.security_sign_off` was truthy.
+  Card now only renders when `status === 'awaiting_security_review' || signedOff`.
+  (`997965d`)
+- **`NameError: name 'os' is not defined`** at startup — `import os` was missing from
+  `routes.py`. (`early commit`)
+- **Bandit not found despite being installed** — `subprocess.run(["bandit", ...])` relied
+  on the shell PATH which is not set when the server starts as a service on macOS.
+  Changed to `[sys.executable, "-m", "bandit", ...]` so bandit always resolves via the
+  same Python interpreter running the app. (`4cab743`)
+- **`loadJobs()` silently hiding live jobs** — `Promise.all` caused the entire function
+  to fail if `/api/logs/history` threw any error. History fetch moved to a separate inner
+  `try/catch`. (`4156a64`)
 - Log files were permanently deleted when a job was removed. Log files are now kept on
   disk; only the `registry.json` entry is cleaned up. (`a861ccc`)
 
 ### Docs
-- All docs updated for Gate 2 REQUEST_FIX: README, PRD, Journey.docx (v5.5). (`3f24619`)
+- All docs updated to v2.2: README, PRD, CHANGELOG, SECURITY.md.
 
 ---
 

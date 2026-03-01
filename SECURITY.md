@@ -55,24 +55,31 @@ Key protections implemented in this version:
 | Credentials in XML | `scan_xml_for_secrets()` — scans uploaded Informatica XML for plaintext passwords before processing |
 | Rate limiting | `slowapi` — `POST /api/jobs`, `POST /api/jobs/zip`, `POST /login` rate-limited per IP |
 | Insecure generated code | Step 8 security scan — bandit (Python), YAML regex scan, Claude review (all stacks) |
-| Security gate | Step 9 human review — reviewer must explicitly APPROVE, ACKNOWLEDGE, or FAIL before pipeline continues; auto-proceeds only when scan is fully clean (APPROVED recommendation) |
+| Security gate | Step 9 human review — reviewer must explicitly APPROVE, ACKNOWLEDGE, REQUEST_FIX, or FAIL before pipeline continues; auto-proceeds only when scan is fully clean (APPROVED recommendation) |
 | Secrets in generated tests | Step 11 test files re-scanned; findings merged into Step 8 security report before Gate 3 |
+| Recurring bad patterns in generated code | Security KB (`security_rules.yaml` + `security_patterns.json`) — 17 standing rules and auto-learned patterns from prior Gate 2 findings injected into every Step 7 conversion prompt (v2.2) |
 | Default credentials | Startup warnings logged if `SECRET_KEY` or `APP_PASSWORD` are not set |
 | Session security | `httponly` + `samesite=lax` cookies; `secure` flag enabled when `HTTPS=true` |
 
 ### Security Review Decisions (Step 9)
 
 When the automated security scan (Step 8) finds issues, the pipeline pauses at Step 9
-and waits for a human decision. Three outcomes are possible:
+and waits for a human decision. Four outcomes are possible:
 
 | Decision | Meaning | Pipeline Effect |
 |----------|---------|----------------|
 | APPROVED | Scan was clean, or reviewer confirms no action needed | Proceeds to Step 10 |
 | ACKNOWLEDGED | Issues noted; risk accepted with documented rationale | Proceeds to Step 10 with finding on record |
+| REQUEST_FIX | Send findings back to Step 7 for Claude to address, then re-scan | Re-runs Steps 7→8→Gate 2; max 2 rounds; auto-proceeds if re-scan is clean |
 | FAILED | Findings are unacceptable for this mapping | Job blocked permanently |
 
 The reviewer, their role, their decision, and any notes are stored in the job record
 (`security_sign_off`) and included in the downloadable Markdown and PDF reports.
+
+After every APPROVED or ACKNOWLEDGED decision, the scan findings are automatically
+recorded in the Security Knowledge Base (`security_patterns.json`). The patterns grow
+in weight with each recurrence and are injected into all future Step 7 conversion prompts,
+so issues seen on one job are proactively avoided on the next.
 
 ---
 

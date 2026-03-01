@@ -2,7 +2,7 @@
 
 Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
-12-step agentic pipeline powered by Claude with security scanning, actionable remediation guidance, two-pass documentation generation, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently.
+12-step agentic pipeline powered by Claude with a self-improving security knowledge base, actionable remediation guidance, two-pass documentation generation, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently. Every Gate 2 approval makes future conversions smarter.
 
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
@@ -73,7 +73,7 @@ batch.zip/
 | 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
 | **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
-| 7 | Convert | Claude | Production-ready code files + YAML config artifacts |
+| 7 | Convert | Claude | Production-ready code files + YAML config artifacts. **Security KB injected**: 17 standing rules + auto-learned patterns from prior jobs prepended to every prompt — no wait for the scan to catch known issues |
 | **8** | **Security Scan** | bandit + YAML regex + Claude | Hardcoded creds, SQL injection, insecure connections — each finding includes actionable remediation guidance |
 | **9** | **Gate 2 — Security Review** | UI sign-off | **APPROVED / ACKNOWLEDGED / REQUEST_FIX / FAILED** — pauses when findings exist; "🔧 How to fix" shown per finding; REQUEST_FIX re-runs Steps 7→8→Gate 2 (max 2 rounds) |
 | 10 | Logic Equivalence + Code Quality | Claude | Stage A: rule-by-rule XML→code comparison (VERIFIED/NEEDS_REVIEW/MISMATCH); Stage B: 10+ static quality checks |
@@ -112,6 +112,9 @@ app/
 │   ├── routes.py                  REST API endpoints (single-file + ZIP + batch upload)
 │   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
 │   │                              credential scan, YAML secrets scan, bandit wrapper)
+│   ├── security_knowledge.py      Security KB — standing rules loader + auto-learned
+│   │                              patterns store; builds prompt injection block (v2.2)
+│   ├── security_rules.yaml        17 hand-curated standing security rules (v2.2)
 │   ├── zip_extractor.py           ZIP upload handler (single-mapping + batch extraction)
 │   ├── auth.py                    Session auth
 │   ├── logger.py                  Structured per-job logging
@@ -162,6 +165,7 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | Insecure generated code | Step 8 — bandit (Python), YAML regex scan, Claude review (all stacks) |
 | Security gate | Step 9 — human reviewer must explicitly approve, acknowledge, or fail findings before code review begins |
 | Secrets in generated test code | Step 11 test files re-scanned and merged into Step 8 report before Gate 3 |
+| Recurring bad patterns re-introduced | Security KB — 17 standing rules + patterns learned from every prior Gate 2 approval injected into Step 7 prompt; each job makes the next one safer |
 
 ---
 
@@ -231,7 +235,7 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | `GET` | `/api/jobs` | List all jobs (most recent 50) |
 | `GET` | `/api/jobs/{id}` | Get full job state |
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
-| `DELETE` | `/api/jobs/{id}` | Delete job and associated XML |
+| `DELETE` | `/api/jobs/{id}` | Soft-delete job — stamps `deleted_at`; data preserved in Log Archive |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (`APPROVE` / `REJECT`) |
 | `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (`APPROVED` / `ACKNOWLEDGED` / `REQUEST_FIX` / `FAILED`) |
 | `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (`APPROVED` / `REJECTED`) |
@@ -241,6 +245,9 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | `GET` | `/api/jobs/{id}/download/{file}` | Download a generated code file |
 | `GET` | `/api/jobs/{id}/tests/download/{file}` | Download a generated test file |
 | `GET` | `/api/logs/registry` | All jobs with log filenames and final status |
+| `GET` | `/api/logs/history` | Log Archive feed — soft-deleted + orphaned log entries |
+| `GET` | `/api/logs/history/{job_id}` | Read a historical log without a live DB record |
+| `GET` | `/api/security/knowledge` | Security KB summary: rule count, pattern count, top patterns |
 
 > Enable interactive API docs at `http://localhost:8000/docs` by setting `SHOW_DOCS=true` in `.env`.
 
@@ -271,8 +278,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v1.2** | Shipped | Human Security Review Gate (Step 9); 12-step pipeline; three human-in-the-loop decision points; security sign-off record on every job |
 | **v1.3** | Shipped | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
 | **v2.0** | Shipped | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
-| **v2.1** | Current | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); Gate 2 REQUEST_FIX remediation loop (re-runs Steps 7→8, max 2 rounds, security findings injected into conversion prompt); timestamp timezone fix; CI failure-only notifications |
-| **v2.2** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
+| **v2.1** | Shipped | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); Gate 2 REQUEST_FIX remediation loop (re-runs Steps 7→8, max 2 rounds, security findings injected into conversion prompt); timestamp timezone fix; CI failure-only notifications |
+| **v2.2** | Current | Security Knowledge Base (17 standing rules + auto-learned patterns; every Gate 2 approval makes future conversions smarter); scan round history + fix-round diff UI; Log Archive sidebar; soft delete; bandit PATH fix; Gate 2 UI fixes |
+| **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
 ---

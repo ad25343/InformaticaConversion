@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.1
+**Version:** 2.2
 **Author:** ad25343
-**Last Updated:** 2026-02-27
+**Last Updated:** 2026-03-01
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -184,7 +184,50 @@ New features:
   source files change (path filter); success emails suppressed — notifications sent
   only on scan failure.
 
-### v2.2 — Planned
+### v2.2 — Security Knowledge Base + Reliability (current)
+
+Closes the feedback loop between Gate 2 security findings and future code generation so
+the tool evolves with every conversion run.
+
+New features:
+- **Security Knowledge Base**: two-layer system injected into every conversion prompt.
+  - *Standing rules* (`security_rules.yaml`, committed to source): 17 hand-curated rules
+    covering hardcoded credentials, SQL injection, eval/exec, subprocess, XXE, Zip Slip,
+    weak cryptography, insecure random, PII logging, TLS bypass, temp files, and 5
+    dbt/Snowflake-specific rules derived from real job findings.
+  - *Auto-learned patterns* (`security_patterns.json`, runtime state): after every Gate 2
+    APPROVED or ACKNOWLEDGED decision the findings are merged into a persistent store keyed
+    by `(test_id/test_name, severity)` with an occurrence counter. Patterns that recur
+    across jobs accumulate weight and are injected into future prompts with the highest
+    emphasis. Historical backfill on first run seeds patterns from all prior job logs.
+  - `GET /api/security/knowledge` — returns `rules_count`, `patterns_count`, `top_patterns`.
+  - Sidebar "🛡 Security KB: N rules · M learned patterns" badge shows KB state on load.
+- **Security scan round history + fix-round diff**: each scan round is archived in
+  `security_scan_rounds` before being overwritten. Gate 2 shows a ✅ Fixed / ⚠️ Remains /
+  🆕 New comparison table after each REQUEST_FIX round.
+- **Log Archive sidebar**: collapsible section shows historical jobs whose DB records are
+  gone but log files remain on disk. Clicking opens a read-only log viewer.
+  `GET /api/logs/history` and `GET /api/logs/history/{job_id}` endpoints.
+- **Soft delete**: the 🗑 button stamps `deleted_at` on the job instead of issuing
+  `DELETE FROM jobs`. Soft-deleted jobs disappear from the active list but all data is
+  preserved and surfaced in the Log Archive. DB auto-migrates on startup.
+- **BATCH_CONCURRENCY env var**: batch semaphore configurable via environment (default 3).
+- **E2E mortgage batch test set (Stages 2–6)**: six-stage synthetic mortgage pipeline
+  covering all three target stacks and all complexity tiers.
+
+Fixed:
+- Security findings injection in REQUEST_FIX was passing blank descriptions because wrong
+  field names were used (`finding_type` / `location` / `description` → corrected to
+  `test_name` / `filename` / `text`); offending code snippet and line number now included.
+- Gate 2 approval buttons missing after regen — `REQUEST_FIX` was counted as a signed-off
+  state, hiding the decision buttons. Fixed by excluding it from the `signedOff` check.
+- Gate 2 security card rendered during Steps 7/8 regen. Gated on status correctly.
+- Bandit `FileNotFoundError` despite being installed — subprocess path resolution on macOS
+  fixed by using `sys.executable -m bandit` instead of the bare `bandit` shell command.
+- `NameError: name 'os' is not defined` at startup — missing `import os` in `routes.py`.
+- `loadJobs()` silently hiding live jobs when `/api/logs/history` errored.
+
+### v2.3 — Planned
 
 - Git integration: open a pull request with generated code directly from the UI
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
@@ -304,6 +347,7 @@ flows through `backend/security.py`.
 | Insecure generated code | Step 8 — bandit (Python), YAML regex secrets scan, Claude review (all stacks) |
 | Security gate bypass | Step 9 — human reviewer must explicitly approve, acknowledge, or fail before pipeline continues |
 | Secrets in generated test code | Step 11 test files re-scanned and merged into Step 8 security report before Gate 3 |
+| Recurring bad patterns in generated code | Security Knowledge Base — 17 standing rules + auto-learned patterns from all prior Gate 2 findings injected into every conversion prompt (v2.2) |
 
 ---
 
@@ -318,7 +362,7 @@ flows through `backend/security.py`.
 | `GET` | `/api/jobs` | List all jobs |
 | `GET` | `/api/jobs/{id}` | Get job state |
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
-| `DELETE` | `/api/jobs/{id}` | Delete job and associated files |
+| `DELETE` | `/api/jobs/{id}` | Soft-delete job (stamps `deleted_at`; data preserved in Log Archive) |
 | `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (APPROVE / REJECT) |
 | `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / REQUEST_FIX / FAILED) |
 | `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVED / REJECTED) |
@@ -328,6 +372,9 @@ flows through `backend/security.py`.
 | `GET` | `/api/jobs/{id}/download/{file}` | Download a generated code file |
 | `GET` | `/api/jobs/{id}/tests/download/{file}` | Download a generated test file |
 | `GET` | `/api/logs/registry` | All jobs with log filenames and final status |
+| `GET` | `/api/logs/history` | Soft-deleted DB jobs + orphaned registry entries for the Log Archive |
+| `GET` | `/api/logs/history/{job_id}` | Read a historical job log without requiring a live DB record |
+| `GET` | `/api/security/knowledge` | Security KB summary: rules count, patterns count, top 10 patterns |
 
 ---
 
@@ -361,6 +408,7 @@ Job
     ├── stack_assignment       Step 6
     ├── conversion             Step 7  (files dict: filename → code)
     ├── security_scan          Step 8
+    ├── security_scan_rounds   Step 8  (v2.2) list of prior scan rounds for fix-round diff
     ├── security_sign_off      Step 9  (Gate 2)
     ├── code_review            Step 10
     ├── test_report            Step 11
@@ -417,19 +465,21 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 10. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target | v2.1 Target |
-|---|---|---|---|---|---|---|
-| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job | > 95% per job |
-| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
-| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% | > 75% |
-| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% | < 10% |
-| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min | < 5 min |
-| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% | < 5% |
-| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% | > 80% |
-| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% | 100% |
-| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent | ≥ 3 concurrent |
-| Doc truncation rate (HIGH/VERY_HIGH tier) | — | — | — | — | — | 0% |
+| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target | v2.1 Target | v2.2 Target |
+|---|---|---|---|---|---|---|---|
+| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job | > 95% per job | > 95% per job |
+| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% | > 75% | > 80% |
+| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% | < 10% | < 10% |
+| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min | < 5 min | < 5 min |
+| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% | < 5% | < 5% |
+| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% | > 80% | > 80% |
+| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% | 100% | 100% |
+| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent |
+| Doc truncation rate (HIGH/VERY_HIGH tier) | — | — | — | — | — | 0% | 0% |
+| Security KB standing rules | — | — | — | — | — | — | 17 |
+| Security KB patterns (after 10 jobs) | — | — | — | — | — | — | ≥ 20 unique |
 
 ---
 
