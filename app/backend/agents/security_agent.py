@@ -40,7 +40,8 @@ from ..security import scan_python_with_bandit, scan_yaml_for_secrets
 
 log = logging.getLogger("conversion.security_agent")
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+from ..config import settings as _cfg
+MODEL = _cfg.claude_model
 
 # ── File-type routing ────────────────────────────────────────────────────────
 # bandit only handles Python; YAML gets a dedicated regex scan; everything goes to Claude

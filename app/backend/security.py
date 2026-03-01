@@ -37,13 +37,14 @@ log = logging.getLogger("conversion.security")
 # Limits
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAX_UPLOAD_BYTES: int = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+from .config import settings as _cfg
+MAX_UPLOAD_BYTES: int = _cfg.max_upload_mb * 1024 * 1024
 """Maximum size for any single uploaded file (default 50 MB)."""
 
-MAX_ZIP_EXTRACTED_BYTES: int = int(os.environ.get("MAX_ZIP_EXTRACTED_MB", "200")) * 1024 * 1024
+MAX_ZIP_EXTRACTED_BYTES: int = _cfg.max_zip_extracted_mb * 1024 * 1024
 """Maximum total extracted size from a ZIP upload (default 200 MB — prevents zip bombs)."""
 
-MAX_ZIP_FILE_COUNT: int = int(os.environ.get("MAX_ZIP_FILE_COUNT", "200"))
+MAX_ZIP_FILE_COUNT: int = _cfg.max_zip_file_count
 """Maximum number of files inside a ZIP upload."""
 
 MAX_BANDIT_LINES: int = 10_000

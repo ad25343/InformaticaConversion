@@ -10,13 +10,12 @@ from typing import Optional, List
 
 import aiosqlite
 
-import os
+import os  # noqa: F401  kept for backward-compat imports elsewhere
+from ..config import settings as _cfg
 
-# Use DB_PATH env var if set, otherwise default to app/data/jobs.db
-# (relative to this file, so it works from any working directory).
-# Override with DB_PATH=/absolute/path/jobs.db for Docker or shared-FS deployments.
+# DB_PATH: use explicit setting if provided, otherwise default to app/data/jobs.db
 _default_db = Path(__file__).parent.parent.parent / "data" / "jobs.db"
-DB_PATH = Path(os.environ.get("DB_PATH", str(_default_db)))
+DB_PATH = Path(_cfg.db_path) if _cfg.db_path else _default_db
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 CREATE_TABLE = """
@@ -45,6 +44,12 @@ CREATE TABLE IF NOT EXISTS batches (
 );
 """
 
+CREATE_INDICES = """
+CREATE INDEX IF NOT EXISTS idx_jobs_status     ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_batch_id   ON jobs(batch_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_deleted_at ON jobs(deleted_at);
+"""
 # Columns added in v1.1 — applied via ALTER TABLE so existing DBs keep working
 _V1_1_MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN workflow_xml_content   TEXT",
@@ -67,6 +72,11 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(CREATE_TABLE)
         await db.execute(CREATE_BATCH_TABLE)
+        # Create indices (idempotent — IF NOT EXISTS)
+        for _idx_sql in CREATE_INDICES.strip().split(";"):
+            _idx_sql = _idx_sql.strip()
+            if _idx_sql:
+                await db.execute(_idx_sql)
         # Apply v1.1 migrations idempotently — SQLite raises OperationalError
         # "duplicate column name" if column already exists; we swallow that.
         for sql in _V1_1_MIGRATIONS:

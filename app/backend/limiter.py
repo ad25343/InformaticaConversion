@@ -32,8 +32,9 @@ from fastapi import HTTPException, Request
 
 # ── Limit strings ─────────────────────────────────────────────────────────────
 
-RATE_LIMIT_JOBS  = os.environ.get("RATE_LIMIT_JOBS",  "20/minute")
-RATE_LIMIT_LOGIN = os.environ.get("RATE_LIMIT_LOGIN", "5/minute")
+from .config import settings as _cfg
+RATE_LIMIT_JOBS  = _cfg.rate_limit_jobs
+RATE_LIMIT_LOGIN = _cfg.rate_limit_login
 
 _PERIOD_SECONDS: dict[str, int] = {
     "second": 1,

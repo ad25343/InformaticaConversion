@@ -2,31 +2,35 @@
 Simple session-based authentication.
 Password is set via APP_PASSWORD in .env.
 Sessions are signed cookies using itsdangerous.
+
+Password hashing uses bcrypt (work factor 12) — bcrypt is deliberately slow
+so brute-force attacks are computationally expensive even if the hash leaks.
 """
 from __future__ import annotations
-import os
-import hashlib
-import hmac
-from datetime import datetime, timedelta
+import bcrypt
+from datetime import datetime
 
 from fastapi import Request, HTTPException
-from fastapi.responses import RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-# ── Config ────────────────────────────────────
-SECRET_KEY   = os.environ.get("SECRET_KEY",   "change-me-in-production-please")
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
-SESSION_HOURS = int(os.environ.get("SESSION_HOURS", "8"))
-COOKIE_NAME  = "ict_session"
+from .config import settings
+
+SECRET_KEY    = settings.secret_key
+APP_PASSWORD  = settings.app_password
+SESSION_HOURS = settings.session_hours
+COOKIE_NAME   = "ict_session"
 
 _signer = URLSafeTimedSerializer(SECRET_KEY)
 
+# Hash the app password once at startup.  bcrypt.hashpw() is called only here;
+# subsequent checks use bcrypt.checkpw() which is safe against timing attacks.
+_APP_PASSWORD_HASH: bytes | None = (
+    bcrypt.hashpw(APP_PASSWORD.encode(), bcrypt.gensalt(rounds=12))
+    if APP_PASSWORD else None
+)
+
 # Public paths that don't require auth
 PUBLIC_PATHS = {"/login", "/static", "/favicon.ico"}
-
-
-def _hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def create_session_token() -> str:
@@ -42,13 +46,11 @@ def verify_session_token(token: str) -> bool:
 
 
 def check_password(submitted: str) -> bool:
-    if not APP_PASSWORD:
+    if not APP_PASSWORD or _APP_PASSWORD_HASH is None:
         # No password set — allow all (dev mode)
         return True
-    return hmac.compare_digest(
-        _hash_password(submitted),
-        _hash_password(APP_PASSWORD)
-    )
+    # bcrypt.checkpw handles constant-time comparison internally
+    return bcrypt.checkpw(submitted.encode(), _APP_PASSWORD_HASH)
 
 
 def is_authenticated(request: Request) -> bool:

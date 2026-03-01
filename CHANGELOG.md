@@ -10,6 +10,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-01 — v2.3.0 (Code Review Hardening — Security, Reliability, Config)
+
+Addresses all immediate and short-term items from the external code review.
+
+### Security
+- **bcrypt password hashing** — replaced `hashlib.sha256` (fast, brute-forceable) with
+  `bcrypt` (work factor 12, deliberately slow). The app password is hashed once at
+  startup using a fresh salt; subsequent logins use `bcrypt.checkpw()` which includes
+  constant-time comparison. Added `bcrypt==4.2.1` to requirements. (`auth.py`)
+
+### Reliability
+- **Claude API retry with exponential backoff** — new `agents/retry.py` module wraps
+  every Claude API call with up to 3 attempts and exponential backoff (10 s base +
+  jitter). Retries on `RateLimitError` (429), `InternalServerError` (500),
+  `APIConnectionError`, and any `APIStatusError` with status 429/500/502/503/529.
+  Applied to documentation Pass 1 & Pass 2 and the verification quality-check call.
+  Non-retryable errors (invalid API key, bad request) still raise immediately.
+- **Input validation for empty/malformed XML** — the `/api/jobs` upload endpoint now
+  rejects empty files and files that do not start with `<` before creating a job record
+  or spending any API tokens. Returns HTTP 400 with a descriptive message.
+- **Database query indices** — four `CREATE INDEX IF NOT EXISTS` statements added to
+  `init_db()`: `idx_jobs_status`, `idx_jobs_created_at`, `idx_jobs_batch_id`,
+  `idx_jobs_deleted_at`. Applied idempotently on every startup; existing databases gain
+  indices automatically on the next restart.
+
+### Observability
+- **`GET /api/health` endpoint** — liveness + readiness probe. Returns
+  `{"status": "ok"|"degraded", "version": "2.3.0", "db": "ok"|"error: ...", "uptime_seconds": N}`.
+  HTTP 200 when healthy, HTTP 503 when the database is unreachable. Suitable for
+  Docker `HEALTHCHECK`, load balancer probes, and uptime monitors.
+
+### Configuration
+- **Pydantic `Settings` class** — new `backend/config.py` centralises all 20+
+  environment variable reads into a single `Settings(BaseSettings)` instance. Every
+  module now imports `from .config import settings` instead of calling
+  `os.environ.get()` directly. The `.env` file is loaded automatically. Added
+  `pydantic-settings==2.6.1` to requirements. Variables covered: `ANTHROPIC_API_KEY`,
+  `CLAUDE_MODEL`, `APP_PASSWORD`, `SECRET_KEY`, `SESSION_HOURS`, `HOST`, `PORT`,
+  `SHOW_DOCS`, `CORS_ORIGINS`, `HTTPS`, `LOG_LEVEL`, `MAX_UPLOAD_MB`,
+  `MAX_ZIP_EXTRACTED_MB`, `MAX_ZIP_FILE_COUNT`, `DB_PATH`, `JOB_RETENTION_DAYS`,
+  `CLEANUP_INTERVAL_HOURS`, `RATE_LIMIT_JOBS`, `RATE_LIMIT_LOGIN`,
+  `BATCH_CONCURRENCY`, `DOC_MAX_TOKENS_OVERRIDE`, `VERIFY_TIMEOUT_SECS`.
+
+---
+
 ## 2026-03-01 — v2.2.2 (Verification & Documentation Token Efficiency)
 
 ### Changed

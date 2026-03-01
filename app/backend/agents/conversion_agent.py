@@ -16,7 +16,8 @@ from ..models.schemas import (
 )
 from ..security_knowledge import build_security_context_block
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+from ..config import settings as _cfg
+MODEL = _cfg.claude_model
 
 
 # ─────────────────────────────────────────────
@@ -76,7 +77,7 @@ def _is_sql_friendly(trans_types: list[str]) -> bool:
 
 async def _get_stack_rationale(stack: TargetStack, complexity: ComplexityReport,
                                 trans_types: list) -> str:
-    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
     prompt = (
         f"A mapping has been assigned to {stack.value}.\n"
         f"Complexity tier: {complexity.tier.value}\n"
@@ -318,7 +319,7 @@ async def convert(
     security_findings  — security scan findings from a previous round (REQUEST_FIX path);
                          Claude must address every listed finding in this regeneration
     """
-    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
     stack = stack_assignment.assigned_stack
 
     system_map = {

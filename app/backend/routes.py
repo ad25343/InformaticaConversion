@@ -30,9 +30,45 @@ from .zip_extractor import extract_informatica_zip, extract_batch_zip
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
+_ROUTE_START_TIME = __import__("time").monotonic()
+_VERSION = "2.2.2"
+
 # ── Active pipeline tasks (in-memory for MVP) ─────
 _active_tasks: dict[str, asyncio.Task] = {}
 _progress_queues: dict[str, asyncio.Queue] = {}
+
+
+# ─────────────────────────────────────────────
+# Health Check
+# ─────────────────────────────────────────────
+
+@router.get("/health")
+async def health_check():
+    """
+    Liveness + readiness probe.
+
+    Returns 200 when the application and database are healthy.
+    Returns 503 when the database is unreachable.
+    Used by load balancers, Docker HEALTHCHECK, and uptime monitors.
+    """
+    import aiosqlite
+    import time
+    db_status = "ok"
+    try:
+        async with aiosqlite.connect(db.DB_PATH) as conn:
+            await conn.execute("SELECT 1")
+    except Exception as exc:
+        db_status = f"error: {exc}"
+
+    uptime = round(time.monotonic() - _ROUTE_START_TIME, 1)
+    payload = {
+        "status": "ok" if db_status == "ok" else "degraded",
+        "version": _VERSION,
+        "db": db_status,
+        "uptime_seconds": uptime,
+    }
+    status_code = 200 if db_status == "ok" else 503
+    return JSONResponse(content=payload, status_code=status_code)
 
 
 # ─────────────────────────────────────────────
@@ -62,7 +98,16 @@ async def create_job(
 
     mapping_content = await file.read()
     validate_upload_size(mapping_content, label=file.filename)
-    xml_str = mapping_content.decode("utf-8", errors="replace")
+
+    # Validate the file is non-empty and looks like XML before doing anything else
+    if not mapping_content:
+        raise HTTPException(400, "Uploaded mapping file is empty.")
+    xml_str = mapping_content.decode("utf-8", errors="replace").strip()
+    if not xml_str:
+        raise HTTPException(400, "Uploaded mapping file is empty after decoding.")
+    if not xml_str.lstrip().startswith("<"):
+        raise HTTPException(400, "Uploaded file does not appear to be valid XML — "
+                               "it must start with an XML element or declaration.")
 
     workflow_str: _Opt[str] = None
     if workflow_file and workflow_file.filename:
@@ -676,7 +721,8 @@ async def create_job_from_zip(
 
 # Semaphore: cap concurrent mapping pipelines to respect Claude API limits.
 # Override with BATCH_CONCURRENCY env var (default: 3).
-_BATCH_CONCURRENCY: int = int(os.environ.get("BATCH_CONCURRENCY", "3"))
+from .config import settings as _cfg
+_BATCH_CONCURRENCY: int = _cfg.batch_concurrency
 _batch_semaphore = asyncio.Semaphore(_BATCH_CONCURRENCY)
 
 

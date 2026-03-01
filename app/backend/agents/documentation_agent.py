@@ -35,7 +35,8 @@ from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport, Sess
 
 log = logging.getLogger("conversion.documentation_agent")
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+from ..config import settings as _cfg
+MODEL = _cfg.claude_model
 
 _DOC_MAX_TOKENS       = 64_000
 _EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
@@ -227,24 +228,29 @@ def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
 
 async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label: str) -> tuple[str, bool]:
     """
-    Make a single documentation Claude call.
+    Make a single documentation Claude call with automatic retry on transient errors.
     Returns (text, truncated).
 
     No timeout is applied here — the call is async so it does not block the event
     loop regardless of how long Claude takes.  The orchestrator runs a 30-second
     heartbeat loop alongside this call so the UI shows live elapsed time.
     """
-    _override = os.environ.get("DOC_MAX_TOKENS_OVERRIDE")
+    from .retry import claude_with_retry
+
+    _override = str(_cfg.doc_max_tokens_override) if _cfg.doc_max_tokens_override else None
     max_tokens = int(_override) if _override else _DOC_MAX_TOKENS
 
     log.info("documentation_agent: %s — requesting max_tokens=%d", pass_label, max_tokens)
 
-    message = await client.messages.create(
-        model=MODEL,
-        max_tokens=max_tokens,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-        extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
+    message = await claude_with_retry(
+        lambda: client.messages.create(
+            model=MODEL,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+            extra_headers={"anthropic-beta": _EXTENDED_OUTPUT_BETA},
+        ),
+        label=f"documentation {pass_label}",
     )
 
     text = message.content[0].text
@@ -278,7 +284,7 @@ async def document(
       DOC_COMPLETE_SENTINEL    — completed without truncation; safe to advance
       DOC_TRUNCATION_SENTINEL  — hit the token limit; orchestrator injects a warning flag
     """
-    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
 
     parse_summary = (
         f"Parse Status: {parse_report.parse_status}\n"

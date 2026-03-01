@@ -37,7 +37,8 @@ _APP_START_TIME = time.monotonic()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log_level = os.environ.get("LOG_LEVEL", "INFO")
+    from backend.config import settings as _cfg
+    log_level = _cfg.log_level
     configure_app_logging(log_level)
     await init_db()
 
@@ -47,7 +48,7 @@ async def lifespan(app: FastAPI):
             "SECURITY WARNING: SECRET_KEY is set to the default insecure value. "
             "Set a strong random SECRET_KEY in your .env before deploying to production."
         )
-    if not os.environ.get("APP_PASSWORD"):
+    if not _cfg.app_password:
         _startup_log.warning(
             "SECURITY WARNING: APP_PASSWORD is not set. "
             "The application is running in open-access dev mode — all requests are unauthenticated. "
@@ -81,13 +82,13 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan,
     # Hide docs behind auth in production — set SHOW_DOCS=false in .env
-    docs_url="/docs" if os.environ.get("SHOW_DOCS", "true").lower() != "false" else None,
+    docs_url="/docs" if _cfg.show_docs else None,
     redoc_url=None,
 )
 
 # ── CORS — restrict to same-origin by default ────────────
 # Allow additional origins via CORS_ORIGINS="https://your.domain,https://other.domain"
-_cors_origins_env = os.environ.get("CORS_ORIGINS", "")
+_cors_origins_env = _cfg.cors_origins
 _allowed_origins: list[str] = (
     [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
     if _cors_origins_env
@@ -150,7 +151,7 @@ async def login_submit(
             httponly=True,
             samesite="lax",
             max_age=SESSION_HOURS * 3600,
-            secure=os.environ.get("HTTPS", "false").lower() == "true",
+            secure=_cfg.https,
         )
         return response
     return RedirectResponse("/login?error=1", status_code=302)

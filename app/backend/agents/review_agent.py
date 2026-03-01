@@ -30,7 +30,8 @@ from ..models.schemas import (
     ConversionOutput, ParseReport, VerificationReport,
 )
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+from ..config import settings as _cfg
+MODEL = _cfg.claude_model
 
 # ── Stage A — Logic Equivalence System & Prompt ──────────────────────────────
 
@@ -309,7 +310,7 @@ async def review(
     parse_report: ParseReport,
     xml_content: str = "",   # v1.3 — original Informatica XML for equivalence check
 ) -> CodeReviewReport:
-    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
 
     # Stage A — Logic Equivalence (runs when xml_content is available)
     equivalence_report: LogicEquivalenceReport | None = None

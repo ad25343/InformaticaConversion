@@ -18,7 +18,8 @@ from ..models.schemas import (
     ComplexityTier, ComplexityReport, ParseReport, SessionParseReport
 )
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+from ..config import settings as _cfg
+MODEL = _cfg.claude_model
 
 # Import the truncation sentinel from the documentation agent so we detect it consistently.
 from .documentation_agent import DOC_TRUNCATION_SENTINEL  # noqa: E402
@@ -571,7 +572,7 @@ async def _run_claude_quality_checks(
     conversion risks: hardcoded values, high-risk logic, ambiguous expressions, dead
     logic, and incomplete conditionals — all detectable from the raw graph data.
     """
-    client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
 
     expr_input_note = ""
     if expr_input_ports:
@@ -622,16 +623,19 @@ Respond with ONLY the JSON array. No other text."""
 
     try:
         import asyncio as _asyncio
+        from .retry import claude_with_retry
         qc_max_tokens = _QC_MAX_TOKENS.get(tier, 4_096)
-        # Hard timeout: verification must complete within 5 minutes.
-        # Without this, a stalled Claude API call leaves the job permanently
-        # stuck in 'verifying' state across server restarts.
-        _VERIFY_TIMEOUT_SECS = int(os.environ.get("VERIFY_TIMEOUT_SECS", "300"))
+        # Hard timeout wraps the full retry sequence so a persistent outage
+        # cannot leave the job stuck in 'verifying' state indefinitely.
+        _VERIFY_TIMEOUT_SECS = _cfg.verify_timeout_secs
         message = await _asyncio.wait_for(
-            client.messages.create(
-                model=MODEL,
-                max_tokens=qc_max_tokens,
-                messages=[{"role": "user", "content": prompt}],
+            claude_with_retry(
+                lambda: client.messages.create(
+                    model=MODEL,
+                    max_tokens=qc_max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+                label="verification quality check",
             ),
             timeout=_VERIFY_TIMEOUT_SECS,
         )

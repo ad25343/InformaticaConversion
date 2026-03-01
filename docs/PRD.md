@@ -257,6 +257,23 @@ Changed:
   fields are consolidated into a single summary table. Eliminates the dominant source of
   Pass 2 output bloat on wide mappings.
 
+### v2.3.0 — Code Review Hardening (current)
+
+Addresses all immediate and short-term items from the external code review.
+
+- **bcrypt password hashing**: replaced SHA-256 (fast hash, brute-forceable) with bcrypt
+  work factor 12. Password hashed once at startup; `bcrypt.checkpw()` used for logins.
+- **Claude API retry logic**: new `agents/retry.py` with exponential backoff (3 attempts,
+  10 s base + jitter). Retries on 429/500/502/503/529. Applied to all agent Claude calls.
+- **XML input validation**: upload endpoint rejects empty files and non-XML content with
+  HTTP 400 before creating a job or spending API tokens.
+- **Database indices**: `idx_jobs_status`, `idx_jobs_created_at`, `idx_jobs_batch_id`,
+  `idx_jobs_deleted_at` — applied idempotently at startup.
+- **`GET /api/health` endpoint**: liveness + readiness probe returning status, version,
+  db connectivity, and uptime. HTTP 200 / 503. Suitable for Docker HEALTHCHECK.
+- **Pydantic `Settings` class**: `backend/config.py` centralises all 20+ env var reads.
+  Replaces scattered `os.environ.get()` calls across 10+ files.
+
 ### v2.3 — Planned
 
 - Git integration: open a pull request with generated code directly from the UI

@@ -25,8 +25,9 @@ from .agents.s2t_agent import s2t_excel_path
 
 log = logging.getLogger("conversion.cleanup")
 
-JOB_RETENTION_DAYS     = int(os.environ.get("JOB_RETENTION_DAYS",     "30"))
-CLEANUP_INTERVAL_HOURS = int(os.environ.get("CLEANUP_INTERVAL_HOURS", "24"))
+from .config import settings as _cfg
+JOB_RETENTION_DAYS     = _cfg.job_retention_days
+CLEANUP_INTERVAL_HOURS = _cfg.cleanup_interval_hours
 
 
 async def cleanup_old_jobs() -> dict[str, int]:
