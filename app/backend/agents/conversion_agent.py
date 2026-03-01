@@ -14,6 +14,7 @@ from ..models.schemas import (
     ComplexityReport, ComplexityTier, StackAssignment,
     ConversionOutput, TargetStack, ParseReport, SessionParseReport
 )
+from ..security_knowledge import build_security_context_block
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
@@ -158,6 +159,7 @@ Rules:
 
 CONVERSION_PROMPT = """Convert the Informatica mapping documented below to {stack}.
 
+{security_context}
 ## Stack Assignment Rationale
 {rationale}
 {approved_fixes_section}
@@ -368,9 +370,16 @@ async def convert(
     else:
         security_fix_section = ""
 
+    # Load standing rules + learned patterns from the knowledge base
+    try:
+        security_context = build_security_context_block()
+    except Exception:
+        security_context = ""  # never block a conversion due to KB read failure
+
     prompt = CONVERSION_PROMPT.format(
         stack=stack.value,
         rationale=stack_assignment.rationale,
+        security_context=security_context,
         approved_fixes_section=approved_fixes_section + security_fix_section,
         documentation_md=documentation_md[:30_000],
     )

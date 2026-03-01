@@ -363,6 +363,11 @@
     </div>
     <hr/>
 
+    <!-- Security KB pill -->
+    <div id="secKbBadge" style="display:none;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--muted)">
+      🛡 Security KB: <span id="secKbRules">–</span> rules &nbsp;·&nbsp; <span id="secKbPatterns">–</span> learned patterns
+    </div>
+
     <!-- Job list -->
     <div class="section-title">Jobs</div>
     <div class="job-list" id="jobList">
@@ -2567,6 +2572,20 @@ function markdownToHtml(md) {
 // ─────────────────────────────────────────────
 loadJobs();
 setInterval(loadJobs, 5000);
+
+// Load security KB badge once on startup
+(async () => {
+  try {
+    const res  = await fetch('/api/security/knowledge');
+    const data = await res.json();
+    const badge = document.getElementById('secKbBadge');
+    if (badge) {
+      document.getElementById('secKbRules').textContent    = data.rules_count    ?? 0;
+      document.getElementById('secKbPatterns').textContent = data.patterns_count ?? 0;
+      badge.style.display = 'block';
+    }
+  } catch(e) { /* badge is supplemental — never break init */ }
+})();
 
 // ── S2T Full Mapping Modal ────────────────────
 let _s2tAllRecords = [], _s2tUnmappedSrc = [], _s2tUnmappedTgt = [];

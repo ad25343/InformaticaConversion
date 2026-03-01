@@ -14,6 +14,7 @@ from typing import Optional as _Opt
 
 from .db import database as db
 from .limiter import jobs_limiter
+from .security_knowledge import record_findings, knowledge_base_stats
 from .models.schemas import (
     SignOffRecord, SignOffRequest, ReviewDecision, JobStatus,
     CodeSignOffRequest, CodeSignOffRecord, CodeReviewDecision,
@@ -433,11 +434,22 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
             "remediation_round": this_round,
         }
 
-    # APPROVED or ACKNOWLEDGED — resume pipeline from Step 10
+    # APPROVED or ACKNOWLEDGED — capture findings into the security knowledge base,
+    # then resume pipeline from Step 10
     queue = asyncio.Queue()
     _progress_queues[job_id] = queue
 
     state["security_sign_off"] = sec_signoff.model_dump()
+
+    # ── Record findings in the knowledge base so future jobs learn from them ──
+    scan = state.get("security_scan") or {}
+    findings = scan.get("findings") if isinstance(scan, dict) else []
+    if findings:
+        try:
+            n = record_findings(job_id, findings)
+            logger.info("Security KB: recorded %d pattern(s) from job %s", n, job_id)
+        except Exception as kb_err:
+            logger.warning("Security KB: failed to record findings: %s", kb_err)
 
     async def _resume():
         async for progress in orchestrator.resume_after_security_review(job_id, state, filename):
@@ -766,6 +778,25 @@ async def create_batch_jobs(
         "status":        "running",
     }
 
+
+# ─────────────────────────────────────────────
+# Security Knowledge Base (read-only inspection)
+# ─────────────────────────────────────────────
+
+@router.get("/security/knowledge")
+async def get_security_knowledge():
+    """
+    Return a summary of the security knowledge base:
+      - rules_count    — number of active standing rules
+      - patterns_count — number of auto-learned patterns
+      - top_patterns   — top 10 most-recurring patterns across all jobs
+    """
+    return knowledge_base_stats()
+
+
+# ─────────────────────────────────────────────
+# Batch routes
+# ─────────────────────────────────────────────
 
 @router.get("/batches/{batch_id}")
 async def get_batch(batch_id: str):
