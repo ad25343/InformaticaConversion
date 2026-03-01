@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 from io import BytesIO
@@ -274,7 +275,7 @@ def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
             tmp_path = tmp.name
 
         proc = subprocess.run(
-            ["bandit", "-f", "json", "-q", tmp_path],
+            [sys.executable, "-m", "bandit", "-f", "json", "-q", tmp_path],
             capture_output=True,
             text=True,
             timeout=30,
