@@ -146,6 +146,21 @@ def remove_registry_entry(job_id: str) -> None:
         _save_registry(reg)
 
 
+def list_orphaned_registry_entries(db_job_ids: set) -> list[dict]:
+    """Return registry entries whose job_id is not present in the live DB.
+    These are historical jobs whose DB records were removed but whose
+    log files still exist on disk."""
+    reg = _load_registry()
+    entries = []
+    for job_id, entry in reg.items():
+        if job_id not in db_job_ids:
+            # Only include if the log file is still readable
+            path = job_log_path(job_id)
+            entries.append({**entry, "log_readable": path is not None})
+    entries.sort(key=lambda e: e.get("started_at", ""), reverse=True)
+    return entries
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Filename helpers
 # ─────────────────────────────────────────────────────────────────────────────

@@ -263,6 +263,27 @@ async def get_log_registry():
     return {"registry": list_log_registry()}
 
 
+@router.get("/logs/history")
+async def get_log_history():
+    """Return log entries for jobs whose DB records no longer exist (historical jobs)."""
+    from .logger import list_orphaned_registry_entries
+    live_jobs = await db.list_jobs()
+    live_ids  = {j["job_id"] for j in live_jobs}
+    orphans   = list_orphaned_registry_entries(live_ids)
+    return {"history": orphans}
+
+
+@router.get("/logs/history/{job_id}")
+async def get_history_log(job_id: str):
+    """Read the log file for a historical (DB-orphaned) job."""
+    from .logger import read_job_log, job_log_path
+    path = job_log_path(job_id)
+    if not path:
+        raise HTTPException(404, "Log file not found")
+    entries = read_job_log(job_id)
+    return JSONResponse({"job_id": job_id, "entries": entries, "count": len(entries)})
+
+
 # ─────────────────────────────────────────────
 # Human Sign-off (Step 5 gate)
 # ─────────────────────────────────────────────

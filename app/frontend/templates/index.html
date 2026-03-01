@@ -652,9 +652,13 @@ startBtn.addEventListener('click', async () => {
 // ─────────────────────────────────────────────
 async function loadJobs() {
   try {
-    const res = await fetch('/api/jobs');
-    const data = await res.json();
-    renderJobList(data.jobs || []);
+    const [jobsRes, histRes] = await Promise.all([
+      fetch('/api/jobs'),
+      fetch('/api/logs/history'),
+    ]);
+    const jobsData = await jobsRes.json();
+    const histData = await histRes.json();
+    renderJobList(jobsData.jobs || [], histData.history || []);
   } catch(e) { /* ignore poll errors */ }
 }
 
@@ -740,9 +744,9 @@ function renderBatchGroup(batchId, jobs) {
   </div>`;
 }
 
-function renderJobList(jobs) {
+function renderJobList(jobs, history = []) {
   const el = document.getElementById('jobList');
-  if (!jobs.length) {
+  if (!jobs.length && !history.length) {
     el.innerHTML = '<div class="empty" style="padding:20px 0"><div style="font-size:24px">📋</div><div style="font-size:12px;margin-top:8px">No jobs yet</div></div>';
     return;
   }
@@ -791,7 +795,106 @@ function renderJobList(jobs) {
     </div>`;
   }
 
+  // ── Log Archive (orphaned registry entries — DB record gone, log file intact) ──
+  if (history.length) {
+    const archOpen = historyOpenSet ? historyOpen : (active.length === 0);
+    html += `
+    <div class="history-header" onclick="toggleArchive()" style="margin-top:4px">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.7px;color:var(--muted);text-transform:uppercase">Log Archive (${history.length})</span>
+      <span id="archiveChevron" class="history-chevron" style="transform:${archOpen?'rotate(0deg)':'rotate(-90deg)'}">▼</span>
+    </div>
+    <div id="archiveList" style="display:${archOpen?'flex':'none'};flex-direction:column;gap:6px">
+      ${history.map(h => renderArchiveItem(h)).join('')}
+    </div>`;
+  }
+
   el.innerHTML = html;
+}
+
+let archiveOpen = false;
+let archiveOpenSet = false;
+function toggleArchive() {
+  if (!archiveOpenSet) {
+    const list = document.getElementById('archiveList');
+    archiveOpen = list ? list.style.display === 'none' : true;
+  } else {
+    archiveOpen = !archiveOpen;
+  }
+  archiveOpenSet = true;
+  const list    = document.getElementById('archiveList');
+  const chevron = document.getElementById('archiveChevron');
+  if (list)    list.style.display = archiveOpen ? 'flex' : 'none';
+  if (chevron) chevron.style.transform = archiveOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+}
+
+function renderArchiveItem(h) {
+  const name    = esc(h.mapping_name || h.xml_filename || h.job_id.slice(0,8));
+  const status  = esc(h.status || 'unknown');
+  const dateStr = (h.started_at || '').slice(0,10);
+  const isActive = h.job_id === currentJobId;
+  return `<div class="job-item ${isActive?'active':''}"
+    onclick="openHistoryJob('${h.job_id}','${name}')"
+    style="opacity:${h.log_readable?'1':'0.5'}" title="${h.log_readable?'':'Log file missing'}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px">
+      <div style="min-width:0">
+        <div class="job-name">${name}</div>
+        <div class="job-meta"><span class="badge badge-success">${status}</span>&nbsp; ${dateStr}</div>
+      </div>
+      <span style="font-size:11px;color:var(--muted)" title="Archived log">🗄</span>
+    </div>
+  </div>`;
+}
+
+async function openHistoryJob(jobId, name) {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  currentJobId = jobId;
+  await loadJobs();
+
+  const panel = document.getElementById('jobPanel');
+  if (!panel) return;
+
+  // Show a loading state
+  panel.innerHTML = `<div style="padding:32px;color:var(--muted);font-size:13px">Loading log archive…</div>`;
+
+  try {
+    const res  = await fetch(`/api/logs/history/${jobId}`);
+    if (!res.ok) { panel.innerHTML = `<div style="padding:32px;color:var(--danger)">Log file not found on disk.</div>`; return; }
+    const data = await res.json();
+    const entries = data.entries || [];
+
+    const rows = entries.map(e => {
+      const ts   = (e.ts||'').slice(11,19);
+      const step = e.step != null ? `step ${e.step}`.padEnd(6) : '      ';
+      const lvl  = e.level || 'INFO';
+      const msg  = esc(e.message || '');
+      const extra = e.data ? `<span class="log-data">  ${esc(JSON.stringify(e.data))}</span>` : '';
+      const exc   = e.exc  ? `<span class="log-exc">${esc(e.exc)}</span>` : '';
+      return `<div class="log-row">
+        <span class="log-ts">${ts}</span>
+        <span class="log-step">${esc(step)}</span>
+        <span class="log-lvl ${lvl}">${lvl}</span>
+        <span class="log-msg">${msg}${extra}${exc}</span>
+      </div>`;
+    }).join('') || '<div style="color:var(--muted);padding:8px 0;font-size:11px">No log entries found.</div>';
+
+    panel.innerHTML = `
+      <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="panel-title">🗄 ${name}</div>
+          <div class="panel-sub" style="margin-bottom:0">Archived log &nbsp;·&nbsp; ${entries.length} entries &nbsp;·&nbsp; Job ID: ${jobId}</div>
+        </div>
+      </div>
+      <div class="log-panel" style="margin-top:16px">
+        <div class="log-header" style="display:flex;align-items:center;justify-content:space-between">
+          <span class="panel-sub" style="font-weight:700">Pipeline Log (archived)</span>
+        </div>
+        <div class="log-scroll" id="logScroll" style="height:500px;overflow-y:auto">${rows}</div>
+      </div>`;
+    const scroll = document.getElementById('logScroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  } catch(e) {
+    panel.innerHTML = `<div style="padding:32px;color:var(--danger)">Failed to load log: ${esc(String(e))}</div>`;
+  }
 }
 
 // ─────────────────────────────────────────────
