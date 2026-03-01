@@ -184,7 +184,7 @@ New features:
   source files change (path filter); success emails suppressed — notifications sent
   only on scan failure.
 
-### v2.2 — Security Knowledge Base + Reliability (current)
+### v2.2 — Security Knowledge Base + Reliability
 
 Closes the feedback loop between Gate 2 security findings and future code generation so
 the tool evolves with every conversion run.
@@ -214,6 +214,13 @@ New features:
 - **BATCH_CONCURRENCY env var**: batch semaphore configurable via environment (default 3).
 - **E2E mortgage batch test set (Stages 2–6)**: six-stage synthetic mortgage pipeline
   covering all three target stacks and all complexity tiers.
+- **Documentation truncation changed to Gate 1 warning**: previously truncated docs caused
+  a hard pipeline failure. Now the pipeline continues with a `doc_truncated` flag; the
+  Step 3 UI card shows an orange border and TRUNCATED badge; a HIGH (non-blocking)
+  `DOCUMENTATION_TRUNCATED` flag appears in the Gate 1 verification report.
+- **Doc sentinels stripped before state storage**: `<!-- DOC_COMPLETE -->` and
+  `<!-- DOC_TRUNCATED -->` are stripped from `documentation_md` before being stored in
+  state, so they never appear in the UI, PDF report, or downstream agent prompts.
 
 Fixed:
 - Security findings injection in REQUEST_FIX was passing blank descriptions because wrong
@@ -226,6 +233,29 @@ Fixed:
   fixed by using `sys.executable -m bandit` instead of the bare `bandit` shell command.
 - `NameError: name 'os' is not defined` at startup — missing `import os` in `routes.py`.
 - `loadJobs()` silently hiding live jobs when `/api/logs/history` errored.
+
+### v2.2.2 — Verification & Documentation Token Efficiency (current)
+
+Decouples the verification step from documentation and reduces documentation token usage
+to eliminate the truncation-cascade failure mode on large mappings.
+
+Changed:
+- **Verification agent reads the graph, not the docs**: the documentation is human-facing
+  and reviewed visually at Gate 1. Verification now runs graph structural checks
+  (isolated transformations, disconnected sources/targets) and a Claude graph-risk review
+  (hardcoded values, incomplete conditionals, high-risk logic, lineage gaps) — all driven
+  by the mapping graph. Doc string-matching and the doc-based Claude quality call are
+  removed.
+- **Documentation: tier-based depth**: LOW-tier mappings (< 5 transformations) use a
+  single pass — Overview + Transformations + Parameters only. MEDIUM/HIGH/VERY_HIGH use
+  two passes as before.
+- **Documentation Pass 2 no longer receives graph JSON**: Pass 1 output already contains
+  all transformation detail. Removing the redundant payload cuts Pass 2 input tokens by
+  ~50%, giving substantially more headroom before truncation.
+- **Field-level lineage scoped to non-trivial fields**: derived, aggregated, lookup-result,
+  conditional, and type-cast fields get full individual traces; passthrough and rename-only
+  fields are consolidated into a single summary table. Eliminates the dominant source of
+  Pass 2 output bloat on wide mappings.
 
 ### v2.3 — Planned
 

@@ -10,6 +10,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-01 — v2.2.2 (Verification & Documentation Token Efficiency)
+
+### Changed
+- **Verification agent decoupled from documentation** — the verification step no longer
+  reads or string-matches against the documentation text. Documentation is human-facing
+  and reviewed visually by the reviewer at Gate 1; the verification agent's job is to
+  check the mapping graph. (`1211aaf`)
+  - Removed all doc string-matching completeness checks (transformation names, source
+    names, target names, port expressions, parameters — all previously checked as
+    substring presence in `documentation_md`). These checks caused cascading false
+    failures whenever docs were truncated and were checking the wrong artefact.
+  - Removed the doc-based Claude quality review call (`documentation_md[:15000]`).
+  - Replaced with **graph structural checks**: every transformation participates in
+    the data flow, every source has outgoing connectors, every target receives incoming
+    connectors.
+  - Claude quality check now reads a compact **graph summary** (expressions, SQL
+    overrides, filter/join/lookup conditions, connector topology — capped at 20k chars)
+    and flags real conversion risks: hardcoded environment values, high-risk logic,
+    incomplete conditionals, dead logic, lineage gaps.
+  - `accuracy_checks` in the report now reflect code-quality findings from graph
+    analysis rather than documentation text review.
+
+- **Documentation agent: tier-based depth** — documentation scope now scales with
+  mapping complexity instead of always running the full two-pass treatment. (`1211aaf`)
+  - **LOW tier** (< 5 transformations): single pass — Overview + Transformations +
+    Parameters only. No field-level lineage section (irrelevant for simple mappings).
+  - **MEDIUM / HIGH / VERY_HIGH**: two passes as before, but with the two improvements
+    below.
+
+- **Documentation Pass 2 no longer re-sends graph JSON** — Pass 1's output already
+  contains all transformation detail (every port, expression, condition verbatim).
+  Removing the redundant `graph_json` from the Pass 2 prompt eliminates ~80k chars of
+  input tokens, roughly halving Pass 2 input cost and giving far more headroom for
+  Pass 2 output before truncation. (`1211aaf`)
+
+- **Field-level lineage scoped to non-trivial fields** — the Pass 2 lineage prompt now
+  distinguishes between field types. Derived, aggregated, lookup-result, conditional,
+  and type-cast fields get full individual traces. Passthrough and rename-only fields
+  are grouped into a single summary table. This eliminates the dominant source of
+  Pass 2 token bloat on wide mappings with many simple columns. (`1211aaf`)
+
+---
+
 ## 2026-03-01 — v2.2.1 (Documentation Sentinel & Truncation Fixes)
 
 ### Fixed

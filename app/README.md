@@ -69,8 +69,8 @@ batch.zip/
 | 1 | Parse XML | lxml (deterministic) | Fails fast on malformed XML; XXE-hardened parser |
 | 2 | Classify Complexity | Rule-based | LOW / MEDIUM / HIGH / VERY_HIGH |
 | S2T | Source-to-Target Map | Rule-based | Excel workbook generated |
-| 3 | Generate Documentation | Claude | Two-pass (Pass 1: transformations; Pass 2: lineage). 30-second SSE heartbeats keep the UI updated during long runs (SCD2 mappings can take 15–20+ min — normal, async, nothing is blocked). Fails fast if output is incomplete (`<!-- DOC_TRUNCATED -->` sentinel). |
-| 4 | Verify | Deterministic + Claude | 100+ checks; flags orphaned ports, lineage gaps, risks |
+| 3 | Generate Documentation | Claude | **Tier-based**: LOW mappings use a single pass (overview + transformations + parameters). MEDIUM/HIGH/VERY_HIGH use two passes — Pass 1: transformations; Pass 2: lineage (non-trivial fields only). Pass 2 does not re-send the graph JSON. If truncated, the pipeline continues with a Gate 1 warning — no hard fail. 30-second SSE heartbeats keep UI updated during long runs. |
+| 4 | Verify | Deterministic + Claude | Graph structural checks (isolated transforms, disconnected sources/targets) + Claude graph-risk review (hardcoded values, incomplete conditionals, high-risk logic). Does **not** read or check documentation — docs are reviewed visually by the human at Gate 1. |
 | **5** | **Gate 1 — Human Review** | UI sign-off | **APPROVE / REJECT** |
 | 6 | Stack Assignment | Rules + Claude | PySpark / dbt / Python |
 | 7 | Convert | Claude | Production-ready code files + YAML config artifacts. **Security KB injected**: 17 standing rules + auto-learned patterns from prior jobs prepended to every prompt — no wait for the scan to catch known issues |
@@ -178,7 +178,7 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | HIGH | 10–14 transformations | 6 144 |
 | VERY_HIGH | 15+ transformations, or 2+ independent HIGH structural criteria | 8 192 |
 
-**Documentation (Step 3)** always uses two sequential Claude calls with the extended-output beta (64K tokens each, ~128K combined ceiling). Pass 1 covers Overview + all Transformations + Parameters; Pass 2 covers Field-Level Lineage + Session Context + Ambiguities. This eliminates truncation failures on HIGH/VERY_HIGH complexity and SCD2 mappings.
+**Documentation (Step 3)** uses a tier-based strategy. LOW-tier mappings get a single pass (Overview + Transformations + Parameters — no lineage section needed for simple mappings). MEDIUM/HIGH/VERY_HIGH use two passes: Pass 1 covers Overview + all Transformations + Parameters; Pass 2 covers Field-Level Lineage (non-trivial fields only) + Session Context + Ambiguities. Pass 2 does not re-send the graph JSON — Pass 1 output already contains all transformation detail, cutting Pass 2 input tokens by ~50%. If a pass truncates, the pipeline continues with a Gate 1 warning rather than failing.
 
 ---
 
@@ -279,7 +279,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v1.3** | Shipped | Logic Equivalence Check (Step 10 Stage A); XML-grounded rule-by-rule verification of generated code; per-rule VERIFIED/NEEDS_REVIEW/MISMATCH verdicts; equivalence report in Gate 3 and downloadable reports |
 | **v2.0** | Shipped | Batch conversion — one subfolder per mapping ZIP; up to 3 concurrent pipelines; batch tracking (`batches` table, `batch_id` on jobs); batch group view in UI; `POST /api/jobs/batch` + `GET /api/batches/{id}` |
 | **v2.1** | Shipped | Security remediation guidance per finding (B101–B703 lookup + Claude-generated); two-pass documentation (128K combined ceiling, eliminates SCD2 truncation); Gate 2 REQUEST_FIX remediation loop (re-runs Steps 7→8, max 2 rounds, security findings injected into conversion prompt); timestamp timezone fix; CI failure-only notifications |
-| **v2.2** | Current | Security Knowledge Base (17 standing rules + auto-learned patterns; every Gate 2 approval makes future conversions smarter); scan round history + fix-round diff UI; Log Archive sidebar; soft delete; bandit PATH fix; Gate 2 UI fixes |
+| **v2.2** | Shipped | Security Knowledge Base (17 standing rules + auto-learned patterns; every Gate 2 approval makes future conversions smarter); scan round history + fix-round diff UI; Log Archive sidebar; soft delete; bandit PATH fix; Gate 2 UI fixes; doc truncation changed to Gate 1 warning |
+| **v2.2.2** | Current | Verification decoupled from docs (graph structural + risk checks only); tier-based doc depth (LOW = single pass); Pass 2 no longer re-sends graph JSON (~50% input token reduction); field-level lineage scoped to non-trivial fields only |
 | **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
