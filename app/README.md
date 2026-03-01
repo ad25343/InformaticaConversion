@@ -196,6 +196,7 @@ Every file-handling path flows through `backend/security.py`. Key protections:
 | `MAX_ZIP_FILE_COUNT` | No | `200` | Max number of files inside a ZIP |
 | `DOC_MAX_TOKENS_OVERRIDE` | No | — | Force a specific doc token limit — for testing truncation only |
 | `DB_PATH` | No | `app/data/jobs.db` | Override SQLite database location — set to an absolute path for Docker or shared-filesystem deployments |
+| `BATCH_CONCURRENCY` | No | `3` | Maximum number of mapping pipelines that run concurrently in a batch upload — lower to reduce Claude API pressure |
 
 ---
 

@@ -624,8 +624,10 @@ async def create_job_from_zip(
 # Batch Upload (v2.0)
 # ─────────────────────────────────────────────
 
-# Semaphore: cap at 3 concurrent mapping pipelines to respect Claude API limits
-_batch_semaphore = asyncio.Semaphore(3)
+# Semaphore: cap concurrent mapping pipelines to respect Claude API limits.
+# Override with BATCH_CONCURRENCY env var (default: 3).
+_BATCH_CONCURRENCY: int = int(os.environ.get("BATCH_CONCURRENCY", "3"))
+_batch_semaphore = asyncio.Semaphore(_BATCH_CONCURRENCY)
 
 
 def _compute_batch_status(job_statuses: list[str]) -> str:
