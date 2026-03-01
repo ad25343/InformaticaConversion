@@ -10,6 +10,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-01 — v2.2.1 (Documentation Sentinel & Truncation Fixes)
+
+### Fixed
+- **`<!-- DOC_COMPLETE -->` sentinel leaking into UI and agent prompts** — both
+  `DOC_COMPLETE_SENTINEL` and `DOC_TRUNCATION_SENTINEL` are now stripped from
+  `documentation_md` *before* it is stored in state, so the raw HTML comment
+  never appears in the rendered documentation card, the Markdown/PDF report, or
+  any downstream agent prompt (verification, code review, test generation). (`cf3f68d`)
+- **Hard pipeline failure on documentation truncation changed to Gate 1 warning** —
+  previously the pipeline immediately set the job to `failed` when the documentation
+  agent hit its token limit mid-output. Per agreed behaviour ("send a note if we ran
+  out of tokens"), the pipeline now continues: `doc_truncated=True` is stored on the
+  state object, a HIGH (non-blocking) `DOCUMENTATION_TRUNCATED` VerificationFlag is
+  injected into the Step 4 verification report so the human reviewer sees it at Gate 1,
+  and the Step 3 card in the UI shows an orange border, a TRUNCATED badge, and an inline
+  warning banner explaining the situation. (`cf3f68d`)
+
+---
+
 ## 2026-03-01 — v2.2 (Security Knowledge Base, Log Archive, Soft Delete, Gate 2 Fixes)
 
 ### Added
