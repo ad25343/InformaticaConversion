@@ -465,3 +465,39 @@ Addresses all immediate and short-term items from the external code review.
 ---
 
 *Commit hashes reference the short SHA for each change. Run `git show <hash>` for full diff.*
+
+## v2.4.0 — 2026-03-02
+
+### feat: Pre-conversion Mapping Manifest with Reviewer Override Loop
+
+**Why it exists:** Iterative post-conversion fixes caused by naming convention surprises
+(e.g. a developer naming an SQ something unrelated to its source) will now be caught
+*before* conversion runs rather than discovered in the output.
+
+**What it does:**
+
+Step 1.5 — runs immediately after XML parsing (non-blocking):
+- Analyses the parser graph dict and scores every source→SQ/Lookup connection:
+  - HIGH — direct connector, exact SQ_SOURCENAME, or Lookup reference
+  - MEDIUM — abbreviated SQ name match (SQ stem found in source name)
+  - LOW — weak/partial token overlap, orphaned ports, lineage gaps
+  - UNMAPPED — no connection found at all
+- Surfaces expressions (to convert), lookups, and unresolved parameters
+- Writes a three-sheet xlsx:
+  - **Summary** — per-mapping counts, review_required flag
+  - **Full Lineage** — all items colour-coded GREEN/AMBER/YELLOW
+  - **Review Required** — only LOW/UNMAPPED rows + editable **Reviewer Override** column
+
+**The reviewer loop:**
+1. Reviewer opens the manifest xlsx, fills in the Override column for yellow rows
+2. Re-uploads the annotated xlsx
+3. Conversion agent reads overrides via `load_overrides()` and injects them into the
+   conversion prompt — reviewer answers take precedence over all tool inferences
+
+**Files changed:**
+- `app/backend/agents/manifest_agent.py` — new (590 lines)
+- `app/backend/models/schemas.py` — ManifestConfidence, ManifestItemType,
+  ManifestItem, ManifestReport, ManifestOverride
+- `app/backend/agents/conversion_agent.py` — manifest_overrides param +
+  `_build_manifest_override_section()`
+- `app/backend/orchestrator.py` — Step 1.5 wired in, overrides passed to convert()
