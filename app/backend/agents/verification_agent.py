@@ -406,6 +406,15 @@ async def verify(
     # false DEAD_LOGIC flags for ports that feed derivations but aren't wired downstream.
     expr_input_ports: set[str] = set()   # "TRANSFORM_NAME.PORT_NAME" strings
 
+    # Track RANKINDEX ports on Rank transformations — these are never wired downstream
+    # in the standard Sorter→Rank(N=1) dedup pattern, and must not be flagged as dead.
+    rank_index_ports: set[str] = set()   # "TRANSFORM_NAME.RANKINDEX" strings
+    for t in all_transformations:
+        if t.get("type") == "Rank":
+            for p in t.get("ports", []):
+                if p["name"] == "RANKINDEX" and "OUTPUT" in p.get("porttype", ""):
+                    rank_index_ports.add(f"{t['name']}.RANKINDEX")
+
     for t in all_transformations:
         # Skip target definitions — they have no outgoing connectors by design
         if t.get("type", "").lower() in ("target definition", "target"):
@@ -488,27 +497,65 @@ async def verify(
 
     claude_flags = await _run_claude_quality_checks(
         graph, mapping_name, expr_input_ports,
+        rank_index_ports=rank_index_ports,
         tier=complexity.tier,
     )
-    # Post-filter: suppress any DEAD_LOGIC flags Claude raised for ports we know are
-    # expression-input-only — they are NOT dead, they feed derivations within the same transform.
-    def _is_expr_input_flag(f: VerificationFlag) -> bool:
+    # Post-filter: suppress DEAD_LOGIC flags Claude raised for known no-action ports.
+    #   1. Expression-input-only ports: INPUT/OUTPUT passthroughs that feed derivations
+    #      within the same transformation — they are not dead, the value IS consumed.
+    #   2. RANKINDEX ports on Rank transformations: the deduplication is intrinsic to
+    #      the Rank; RANKINDEX never needs a downstream connection.
+    def _is_no_action_flag(f: VerificationFlag) -> bool:
         if f.flag_type != "DEAD_LOGIC":
             return False
-        return any(eip.split(".")[-1] in f.location for eip in expr_input_ports)
+        # Expr-input suppression: check if any expr_input port name appears in the location
+        if any(eip.split(".")[-1] in f.location for eip in expr_input_ports):
+            return True
+        # RANKINDEX suppression: check if any rank_index_port string appears in the location
+        if any(rip.split(".")[-1] in f.location for rip in rank_index_ports):
+            return True
+        return False
 
-    flags.extend(f for f in claude_flags if not _is_expr_input_flag(f))
+    flags.extend(f for f in claude_flags if not _is_no_action_flag(f))
 
-    # Build accuracy checks from Claude graph review
+    # Build accuracy checks from Claude graph review.
+    # These checks reflect whether the qualitative review RAN successfully — not whether
+    # findings were clean.  The actual risk findings (HIGH_RISK, INCOMPLETE_LOGIC, etc.)
+    # are surfaced as FLAGS with severity, description, and recommendations.  Failing a
+    # check here solely because Claude found something would cause a misleading
+    # "REQUIRES REMEDIATION" status on a perfectly convertible mapping.
+    #
+    # A check FAILS only if the Claude review call itself could not complete (API error,
+    # timeout, etc.) — in which case the result is a single REVIEW_REQUIRED flag from the
+    # exception handler, and the reviewer should re-run.
+    claude_errored = (
+        len(claude_flags) == 1
+        and claude_flags[0].flag_type == "REVIEW_REQUIRED"
+        and "Claude quality check could not complete" in claude_flags[0].description
+    )
+    high_risk_count = sum(1 for f in claude_flags if f.flag_type in ("HIGH_RISK", "INCOMPLETE_LOGIC"))
+    env_value_count = sum(1 for f in claude_flags if f.flag_type == "ENVIRONMENT_SPECIFIC_VALUE")
+
     accuracy_checks.append(CheckResult(
-        name="No high-risk logic patterns detected (Claude graph review)",
-        passed=all(f.flag_type not in ("HIGH_RISK", "INCOMPLETE_LOGIC") for f in claude_flags),
-        detail="See flags section for details" if any(f.flag_type in ("HIGH_RISK", "INCOMPLETE_LOGIC") for f in claude_flags) else None
+        name="Claude graph review completed (high-risk pattern check)",
+        passed=not claude_errored,
+        detail=(
+            "Claude quality check could not complete — re-run verification. "
+            "See flags section for details."
+        ) if claude_errored else (
+            f"{high_risk_count} high-risk / incomplete-logic flag(s) raised — see FLAGS section."
+            if high_risk_count else None
+        )
     ))
     accuracy_checks.append(CheckResult(
-        name="No hardcoded environment values in expressions (Claude graph review)",
-        passed=all(f.flag_type != "ENVIRONMENT_SPECIFIC_VALUE" for f in claude_flags),
-        detail="See flags section for details" if any(f.flag_type == "ENVIRONMENT_SPECIFIC_VALUE" for f in claude_flags) else None
+        name="Claude graph review completed (environment value check)",
+        passed=not claude_errored,
+        detail=(
+            "Claude quality check could not complete — re-run verification."
+        ) if claude_errored else (
+            f"{env_value_count} hardcoded environment value flag(s) raised — see FLAGS section."
+            if env_value_count else None
+        )
     ))
 
     # ─────────────────────────────────────────
@@ -578,6 +625,43 @@ def _build_graph_summary(graph: dict) -> str:
                 if val:
                     lines.append(f"    {attr_key}: {str(val)[:300]}")
 
+            # Rank transformation config — emit dedup-critical attributes so Claude
+            # knows whether RANKINDEX=1 means latest/earliest and what the group key is.
+            if t["type"] == "Rank":
+                attribs = t.get("table_attribs", {})
+                n_ranks = attribs.get("Number Of Ranks", "")
+                rank_dir = attribs.get("Rank", "")          # TOP or BOTTOM
+                rank_by  = attribs.get("Rank By", "")       # sort-by port (optional)
+                rank_info = []
+                if n_ranks:
+                    rank_info.append(f"Number Of Ranks={n_ranks}")
+                if rank_dir:
+                    rank_info.append(f"Rank={rank_dir}")
+                if rank_by:
+                    rank_info.append(f"Rank By={rank_by}")
+                # Also collect ports that are sort keys (porttype may contain "INPUT/OUTPUT" +
+                # the port being ranked is identified by being an I/O port passed through).
+                # Group-by keys in Rank transformations are the INPUT/OUTPUT ports that are
+                # NOT the ranked field — they are the partition key.
+                if rank_info:
+                    lines.append(f"    rank_config: {', '.join(rank_info)}")
+
+            # Sorter transformation config — emit sort key(s) with direction so Claude
+            # can reason about the order data arrives at downstream Rank/Filter transforms.
+            # sort_key_position and sort_direction are captured by the parser from the
+            # SORTKEYPOSITION and SORTDIRECTION attributes on Sorter TRANSFORMFIELD elements.
+            if t["type"] == "Sorter":
+                sort_keys = []
+                for p in t.get("ports", []):
+                    pos  = p.get("sort_key_position", "")
+                    dirn = p.get("sort_direction", "")
+                    if pos and dirn:
+                        sort_keys.append((int(pos), p["name"], dirn))
+                if sort_keys:
+                    sort_keys.sort()
+                    parts = [f"{name} {dirn}" for _, name, dirn in sort_keys]
+                    lines.append(f"    sort_keys: {', '.join(parts)}")
+
             # Port list (names + types only, for connectivity context)
             port_names = [
                 f"{p['name']}({'I' if 'INPUT' in p.get('porttype','') else ''}"
@@ -609,6 +693,7 @@ async def _run_claude_quality_checks(
     graph: dict,
     mapping_name: str,
     expr_input_ports: set[str] | None = None,
+    rank_index_ports: set[str] | None = None,
     tier: ComplexityTier = ComplexityTier.MEDIUM,
 ) -> list[VerificationFlag]:
     """Ask Claude to identify qualitative risks in the mapping graph.
@@ -631,6 +716,18 @@ these as DEAD_LOGIC:
 {port_list}
 """
 
+    rank_index_note = ""
+    if rank_index_ports:
+        ri_list = ", ".join(sorted(rank_index_ports))
+        rank_index_note = f"""
+IMPORTANT — the following are RANKINDEX output ports on Rank transformations: {ri_list}
+RANKINDEX is Informatica's internal rank counter. When a Rank transformation is configured
+with "Number Of Ranks = N", it outputs ONLY the top-N rows per group — no downstream Filter
+on RANKINDEX=1 is needed or expected. Do NOT flag RANKINDEX as DEAD_LOGIC or ORPHANED_PORT.
+If you see rank_config in the graph summary for these transformations, that shows the
+deduplication is correctly configured in the Rank itself.
+"""
+
     # Build a compact graph summary for Claude — focus on expressions, SQL, and connectors.
     # Full graph JSON can be very large; we extract only what's needed for risk analysis.
     graph_summary = _build_graph_summary(graph)
@@ -638,7 +735,7 @@ these as DEAD_LOGIC:
     prompt = f"""You are a senior data engineer reviewing an Informatica PowerCenter mapping called '{mapping_name}' before automated conversion to dbt/PySpark.
 
 Review the mapping graph below and identify ONLY real conversion risks — do not invent problems.
-{expr_input_note}
+{expr_input_note}{rank_index_note}
 Look for:
 1. REVIEW_REQUIRED — logic that is unclear, ambiguous, or open to multiple interpretations
 2. DEAD_LOGIC — transformation or port that has no effect on output data (exclude expression-input ports listed above)

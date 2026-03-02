@@ -208,6 +208,16 @@ def _extract_transformation(trans_el: etree._Element, flags) -> dict:
             "expression": field.get("EXPRESSION", ""),
             "default":    field.get("DEFAULTVALUE", ""),
         }
+        # Sorter-specific: capture sort key position and direction so the graph
+        # summary can tell Claude the exact sort order (e.g. APPRAISAL_DATE DESC).
+        # These attributes only appear on Sorter TRANSFORMFIELD elements.
+        if ttype == "Sorter":
+            sort_pos  = field.get("SORTKEYPOSITION", "")
+            sort_dir  = field.get("SORTDIRECTION", "")
+            if sort_pos:
+                port["sort_key_position"] = sort_pos
+            if sort_dir:
+                port["sort_direction"] = sort_dir
         ports.append(port)
         if port["expression"]:
             expressions.append({
