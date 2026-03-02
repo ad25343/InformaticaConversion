@@ -10,6 +10,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-02 — v2.3.4 (Security KB — Auto-Promotion + Rule Sync)
+
+### Security
+- **Pattern auto-promotion to standing rules** — new `promote_patterns_to_rules(threshold=3)`
+  function in `security_knowledge.py`. Any pattern in `security_patterns.json` that has
+  appeared in 3 or more distinct Gate 2 decisions is automatically promoted to a standing
+  rule in `security_rules.yaml` (as a `rule_auto_*` entry). Auto-promotion fires after every
+  `record_findings()` call, so no manual intervention is needed. Promoted patterns are marked
+  `promoted: true` in the JSON store so they are not processed again.
+- **`_DEFAULT_RULES` now derived from `security_rules.yaml`** — the 132-line hardcoded
+  duplicate list is replaced by `_load_default_rules_from_yaml()`, which reads the live YAML
+  at module load time. The YAML is now the single source of truth; the in-memory fallback
+  is always in sync regardless of how many rules are added.
+- **`knowledge_base_stats()` exposes `auto_promoted_count`** — visible via
+  `GET /api/security/knowledge` and the sidebar badge.
+
+### How the full feedback loop now works
+1. Code is generated — all 21 standing rules + top-15 learned patterns injected into prompt.
+2. Gate 2 scan runs — findings recorded in `security_patterns.json`.
+3. `record_findings()` auto-calls `promote_patterns_to_rules(threshold=3)`.
+4. Any pattern seen in ≥ 3 jobs is promoted to a standing rule in `security_rules.yaml`.
+5. Next conversion prompt includes the promoted rule as a non-negotiable requirement.
+6. The pattern can no longer appear in generated code — the loop is closed.
+
+---
+
 ## 2026-03-02 — v2.3.3 (Security Rules Expansion + Best Practices Guide)
 
 ### Security
