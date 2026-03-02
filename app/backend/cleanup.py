@@ -98,3 +98,71 @@ async def run_cleanup_loop() -> None:
                 log.info("Scheduled cleanup complete: %s", result)
         except Exception as exc:
             log.error("Cleanup loop error: %s", exc, exc_info=True)
+
+
+# ── GAP #16 — Timeout watchdog ──────────────────────────────────────────────
+# Active-pipeline statuses that indicate a job is being processed by Claude.
+# These statuses should not persist beyond STUCK_JOB_TIMEOUT_MINUTES.
+_ACTIVE_STATUSES = {
+    "parsing", "classifying", "documenting", "verifying",
+    "assigning_stack", "converting", "security_scanning",
+}
+STUCK_JOB_TIMEOUT_MINUTES = int(getattr(_cfg, "stuck_job_timeout_minutes", 45))
+WATCHDOG_POLL_SECONDS = 60   # check every minute
+
+
+async def _watchdog_tick() -> int:
+    """Mark jobs stuck in active statuses for longer than the timeout as FAILED.
+    Returns the number of jobs timed out."""
+    from .db.database import DB_PATH
+    import aiosqlite
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.utcnow() - timedelta(minutes=STUCK_JOB_TIMEOUT_MINUTES)).isoformat()
+    timed_out = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
+        async with db.execute(
+            f"SELECT job_id, status, updated_at FROM jobs "
+            f"WHERE status IN ({placeholders}) AND updated_at < ? AND deleted_at IS NULL",
+            (*_ACTIVE_STATUSES, cutoff),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        now = datetime.utcnow().isoformat()
+        for row in rows:
+            log.warning(
+                "Watchdog: job %s stuck in status '%s' since %s (>%dm) — marking FAILED",
+                row["job_id"], row["status"], row["updated_at"], STUCK_JOB_TIMEOUT_MINUTES,
+            )
+            await db.execute(
+                "UPDATE jobs SET status='failed', updated_at=?, "
+                "state_json=state_json WHERE job_id=?",
+                (now, row["job_id"]),
+            )
+            timed_out += 1
+        if timed_out:
+            await db.commit()
+    return timed_out
+
+
+async def run_watchdog_loop() -> None:
+    """
+    GAP #16 — Background watchdog that kills jobs stuck in active statuses.
+    Polls every WATCHDOG_POLL_SECONDS, marks jobs FAILED after
+    STUCK_JOB_TIMEOUT_MINUTES of no state updates.
+    Start with asyncio.create_task() during app lifespan.
+    """
+    log.info(
+        "Stuck-job watchdog started (timeout=%dm, poll=%ds)",
+        STUCK_JOB_TIMEOUT_MINUTES, WATCHDOG_POLL_SECONDS,
+    )
+    while True:
+        await asyncio.sleep(WATCHDOG_POLL_SECONDS)
+        try:
+            n = await _watchdog_tick()
+            if n:
+                log.warning("Watchdog timed out %d stuck job(s)", n)
+        except Exception as exc:
+            log.error("Watchdog loop error: %s", exc, exc_info=True)

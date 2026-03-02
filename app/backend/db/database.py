@@ -223,6 +223,52 @@ async def create_batch(source_zip: str, mapping_count: int) -> str:
     return batch_id
 
 
+async def create_batch_atomic(
+    source_zip: str,
+    mappings: list[dict],   # [{"filename", "xml", "workflow_xml", "parameter_file"}]
+) -> tuple[str, list[str]]:
+    """
+    GAP #4 — Atomic batch creation.
+    Creates the batch record AND all job records in a single transaction.
+    On any failure the entire batch is rolled back — no orphaned jobs.
+    Returns (batch_id, [job_id, ...]) in insertion order.
+    """
+    batch_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    job_ids: list[str] = [str(uuid.uuid4()) for _ in mappings]
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("BEGIN")
+            await db.execute(
+                "INSERT INTO batches (batch_id, source_zip, mapping_count, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (batch_id, source_zip, len(mappings), now, now),
+            )
+            for job_id, m in zip(job_ids, mappings):
+                await db.execute(
+                    "INSERT INTO jobs "
+                    "(job_id, filename, xml_content, workflow_xml_content, "
+                    " parameter_file_content, status, current_step, state_json, "
+                    " created_at, updated_at, batch_id) "
+                    "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?)",
+                    (
+                        job_id,
+                        m["filename"],
+                        m["xml"],
+                        m.get("workflow_xml"),
+                        m.get("parameter_file"),
+                        now, now,
+                        batch_id,
+                    ),
+                )
+            await db.execute("COMMIT")
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+    return batch_id, job_ids
+
+
 async def get_batch(batch_id: str) -> Optional[dict]:
     """Return the batch record (without jobs). Returns None if not found."""
     async with aiosqlite.connect(DB_PATH) as db:

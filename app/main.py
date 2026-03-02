@@ -26,7 +26,7 @@ from backend.auth import (
     SECRET_KEY,
 )
 from backend.limiter import login_limiter
-from backend.cleanup import run_cleanup_loop
+from backend.cleanup import run_cleanup_loop, run_watchdog_loop
 
 _startup_log = logging.getLogger("conversion.startup")
 
@@ -72,6 +72,9 @@ async def lifespan(app: FastAPI):
 
     # ── Start background job cleanup loop ─────────────────────────────────
     asyncio.create_task(run_cleanup_loop())
+
+    # ── GAP #16 — Start stuck-job timeout watchdog ────────────────────────
+    asyncio.create_task(run_watchdog_loop())
 
     yield
 

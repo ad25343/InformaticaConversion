@@ -812,24 +812,31 @@ async def create_batch_jobs(
     if not mapping_results:
         raise HTTPException(400, "No valid mapping folders found in the batch ZIP.")
 
-    # Create a batch record
-    batch_id = await db.create_batch(file.filename, len(mapping_results))
+    # GAP #4 — Create batch record + all jobs atomically in one transaction.
+    # If any insertion fails, the whole batch is rolled back — no orphaned jobs.
+    mappings_payload = [
+        {
+            "filename":       parsed.mapping_filename or file.filename,
+            "xml":            parsed.mapping_xml,
+            "workflow_xml":   parsed.workflow_xml,
+            "parameter_file": parsed.parameter_file,
+        }
+        for parsed in mapping_results
+    ]
+    try:
+        batch_id, job_ids = await db.create_batch_atomic(file.filename, mappings_payload)
+    except Exception as exc:
+        logger.error("Atomic batch creation failed: %s", exc, exc_info=True)
+        raise HTTPException(500, f"Failed to create batch jobs: {exc}")
+
     logger.info(
-        "Batch created: batch_id=%s source_zip=%s mapping_count=%d",
+        "Batch created (atomic): batch_id=%s source_zip=%s mapping_count=%d",
         batch_id, file.filename, len(mapping_results),
     )
 
-    # Create all job records up-front so callers can track them immediately
     job_entries: list[dict] = []
-    for parsed in mapping_results:
+    for job_id, parsed in zip(job_ids, mapping_results):
         mapping_fname = parsed.mapping_filename or file.filename
-        job_id = await db.create_job(
-            mapping_fname,
-            parsed.mapping_xml,
-            workflow_xml_content=parsed.workflow_xml,
-            parameter_file_content=parsed.parameter_file,
-            batch_id=batch_id,
-        )
         queue: asyncio.Queue = asyncio.Queue()
         _progress_queues[job_id] = queue
         job_entries.append({"job_id": job_id, "filename": mapping_fname, "parsed": parsed})

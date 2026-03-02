@@ -454,7 +454,12 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         await update_job(job_id, status.value, step, patch)
         return {"step": step, "status": status.value, "message": message}
 
+    import copy
     from .models.schemas import ComplexityReport, ParseReport
+
+    # GAP #2 — deep copy state so mutations during this resume don't corrupt
+    # the DB-persisted dict if the task is interrupted mid-run.
+    state = copy.deepcopy(state)
 
     sign_off = state.get("sign_off", {})
     log.info(
@@ -462,6 +467,17 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         f"reviewer={sign_off.get('reviewer_name')}",
         step=5
     )
+
+    # GAP #6 — validate required state keys before touching anything
+    _required = ("parse_report", "complexity", "documentation_md", "graph")
+    _missing  = [k for k in _required if not state.get(k)]
+    if _missing:
+        msg = f"State reconstruction failed — missing keys: {_missing}. Re-upload and re-run."
+        log.step_failed(6, "State reconstruction", msg)
+        log.finalize("failed", steps_completed=5)
+        log.close()
+        yield await emit(6, JobStatus.FAILED, msg, {"error": msg})
+        return
 
     try:
         parse_report     = ParseReport(**state["parse_report"])
@@ -846,10 +862,23 @@ async def resume_after_security_fix_request(
         await update_job(job_id, status.value, step, patch)
         return {"step": step, "status": status.value, "message": message}
 
+    import copy
     from .models.schemas import (
         ComplexityReport, ParseReport, SessionParseReport,
         StackAssignment, ConversionOutput, SecurityScanReport,
     )
+
+    # GAP #2 — deep copy, GAP #6 — validate
+    state = copy.deepcopy(state)
+    _required = ("documentation_md", "graph", "stack_assignment")
+    _missing  = [k for k in _required if not state.get(k)]
+    if _missing:
+        msg = f"State reconstruction failed — missing keys: {_missing}. Re-upload and re-run."
+        log.step_failed(7, "State reconstruction", msg)
+        log.finalize("failed", steps_completed=7)
+        log.close()
+        yield await emit(7, JobStatus.FAILED, msg, {"error": msg})
+        return
 
     try:
         documentation_md  = state["documentation_md"]
@@ -1044,10 +1073,23 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         await update_job(job_id, status.value, step, patch)
         return {"step": step, "status": status.value, "message": message}
 
+    import copy
     from .models.schemas import (
         SecurityReviewDecision, ComplexityReport, ParseReport,
         VerificationReport, SessionParseReport,
     )
+
+    # GAP #2 + GAP #6
+    state = copy.deepcopy(state)
+    _required = ("documentation_md", "graph", "stack_assignment", "conversion")
+    _missing  = [k for k in _required if not state.get(k)]
+    if _missing:
+        msg = f"State reconstruction failed — missing keys: {_missing}. Re-upload and re-run."
+        log.step_failed(10, "State reconstruction", msg)
+        log.finalize("failed", steps_completed=9)
+        log.close()
+        yield await emit(10, JobStatus.FAILED, msg, {"error": msg})
+        return
 
     sec_signoff = state.get("security_sign_off", {})
     decision_str = sec_signoff.get("decision", "APPROVED")
