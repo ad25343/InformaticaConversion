@@ -10,6 +10,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-02 — v2.3.6 (Verification — Rank/Sorter Accuracy Improvements)
+
+### Fixed
+- **Parser captures Sorter sort keys** — `SORTKEYPOSITION` and `SORTDIRECTION` attributes
+  on Sorter `TRANSFORMFIELD` elements are now stored in the port dict (`sort_key_position`,
+  `sort_direction`). Previously discarded; the graph summary could not show sort order.
+- **Graph summary surfaces Rank config and Sorter sort keys** — `_build_graph_summary()`
+  now emits `rank_config` (Number Of Ranks, Rank TOP/BOTTOM) for every Rank transformation
+  and `sort_keys` (field + direction) for every Sorter. Eliminates false REVIEW_REQUIRED
+  on Rank dedup mappings where Claude could not determine whether RANKINDEX=1 = latest/earliest.
+- **RANKINDEX DEAD_LOGIC suppression** — `rank_index_ports` collected from all Rank
+  transformations; passed to Claude with a prompt note explaining the intrinsic-filter
+  pattern. Post-filter extended to also suppress any DEAD_LOGIC Claude raises on RANKINDEX.
+- **Accuracy check semantics** — Renamed "No high-risk logic patterns detected" →
+  "Claude graph review completed". Check now PASSES when Claude ran (findings in FLAGS)
+  and FAILS only if the API call itself errored. Previously, correctly finding HIGH_RISK
+  patterns caused a FAILED check and a misleading REQUIRES_REMEDIATION overall status.
+
+---
+
 ## 2026-03-02 — v2.3.5 (Verification — Source Connectivity False Positive Fixes)
 
 ### Fixed

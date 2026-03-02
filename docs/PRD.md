@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.3.5
+**Version:** 2.3.6
 **Author:** ad25343
 **Last Updated:** 2026-03-02
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -274,7 +274,23 @@ Addresses all immediate and short-term items from the external code review.
 - **Pydantic `Settings` class**: `backend/config.py` centralises all 20+ env var reads.
   Replaces scattered `os.environ.get()` calls across 10+ files.
 
-### v2.3.5 — Verification Source Connectivity False Positive Fixes (current)
+### v2.3.6 — Verification Rank/Sorter Accuracy Improvements (current)
+
+Fixed:
+- **Parser captures Sorter sort keys** — `SORTKEYPOSITION` and `SORTDIRECTION` on Sorter
+  `TRANSFORMFIELD` elements are now stored per port. Previously discarded; Claude had no
+  visibility into the sort order feeding a downstream Rank.
+- **Graph summary shows Rank config + Sorter sort order** — `_build_graph_summary()` emits
+  `rank_config` (Number Of Ranks, Rank=TOP/BOTTOM) and `sort_keys` (field + direction).
+  Eliminates false REVIEW_REQUIRED on Rank dedup mappings.
+- **RANKINDEX DEAD_LOGIC suppression** — `rank_index_ports` collected and passed to Claude
+  with an explicit prompt note. Post-filter also catches any DEAD_LOGIC Claude raises on
+  RANKINDEX even if the prompt note is disregarded.
+- **Accuracy check semantics corrected** — "No high-risk logic patterns detected" renamed
+  to "Claude graph review completed". Passes when Claude ran; fails only on API error. High-
+  risk findings surface as FLAGS — they no longer trigger a misleading REQUIRES_REMEDIATION.
+
+### v2.3.5 — Verification Source Connectivity False Positive Fixes
 
 Fixed:
 - **Abbreviated SQ names**: source connectivity check now tests bidirectionally — if the SQ

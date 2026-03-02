@@ -286,7 +286,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.3.2** | Shipped | Verification flag auto-handling: conversion agent addresses all auto-fixable flags in code (pass-through stubs, config extraction, TODO comments, manual stubs); source SQ connectivity false positive fixed |
 | **v2.3.3** | Shipped | 5 new security rules (Oracle TCPS, log injection, macro SQL injection, hardcoded business constants) — 17→21 standing rules; Best Practices Guide security section added |
 | **v2.3.4** | Shipped | Security KB auto-promotion: patterns seen in ≥3 Gate 2 decisions auto-promoted to standing rules; `_DEFAULT_RULES` now synced from YAML (single source of truth) |
-| **v2.3.5** | Current | Verification false positive fixes: abbreviated SQ names (SQ_APPRAISALS for CORELOGIC_APPRAISALS), Lookup reference sources (REF_COUNTY_LIMITS via LKP), and RANKINDEX orphaned port on Rank transformations now correctly handled |
+| **v2.3.5** | Shipped | Verification false positive fixes: abbreviated SQ names (SQ_APPRAISALS for CORELOGIC_APPRAISALS), Lookup reference sources (REF_COUNTY_LIMITS via LKP), and RANKINDEX orphaned port on Rank transformations now correctly handled |
+| **v2.3.6** | Current | Rank/Sorter accuracy: parser captures sort keys; graph summary shows Rank config + Sorter sort order to Claude; RANKINDEX DEAD_LOGIC suppressed; accuracy check semantics fixed so HIGH_RISK findings no longer cause misleading REQUIRES_REMEDIATION |
 | **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
