@@ -214,14 +214,13 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     except Exception as e:
         log.warning(f"Manifest generation failed (non-blocking): {e}", step=1)
 
-    import base64
+    # manifest_xlsx_b64 is NOT stored in state — it can be large (150KB+ base64)
+    # and is regenerated on demand via GET /jobs/{job_id}/manifest.xlsx
     yield await emit(1, JobStatus.PARSING, "Parse complete", {
-        "parse_report": parse_report.model_dump(),
-        "graph": graph,
+        "parse_report":    parse_report.model_dump(),
+        "graph":           graph,
         "manifest_report": manifest_report.model_dump() if manifest_report else None,
-        "manifest_xlsx_b64": (
-            base64.b64encode(manifest_xlsx_bytes).decode() if manifest_xlsx_bytes else None
-        ),
+        "has_manifest":    manifest_report is not None,
     })
 
     # ── STEP 2 — CLASSIFY ─────────────────────────────────────

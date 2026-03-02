@@ -4,11 +4,41 @@ Simple and portable for MVP. Swap to Postgres by changing DATABASE_URL.
 """
 import json
 import uuid
+import zlib
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
 import aiosqlite
+
+# ── State compression ────────────────────────────────────────────────────────
+# state_json is stored as either:
+#   - plain JSON text (legacy jobs)
+#   - "z:" + base64(zlib.compress(json)) — compressed jobs (v2.4.3+)
+# Compression typically reduces state size by 70-80% for text-heavy content.
+_COMPRESS_PREFIX = "z:"
+_MAX_LOG_ENTRIES = 300   # pipeline_log entries kept in state (older entries dropped)
+
+
+def _encode_state(state: dict) -> str:
+    """Serialize and compress state dict for storage."""
+    # Cap pipeline_log to avoid unbounded growth
+    if "pipeline_log" in state and isinstance(state["pipeline_log"], list):
+        state["pipeline_log"] = state["pipeline_log"][-_MAX_LOG_ENTRIES:]
+    raw = json.dumps(state, separators=(",", ":"))
+    compressed = zlib.compress(raw.encode(), level=6)
+    return _COMPRESS_PREFIX + base64.b64encode(compressed).decode()
+
+
+def _decode_state(stored: str) -> dict:
+    """Deserialize state — handles both compressed and legacy plain-JSON formats."""
+    if not stored:
+        return {}
+    if stored.startswith(_COMPRESS_PREFIX):
+        compressed = base64.b64decode(stored[len(_COMPRESS_PREFIX):])
+        return json.loads(zlib.decompress(compressed).decode())
+    return json.loads(stored)   # legacy plain JSON
 
 import os  # noqa: F401  kept for backward-compat imports elsewhere
 from ..config import settings as _cfg
@@ -128,7 +158,7 @@ async def get_job(job_id: str) -> Optional[dict]:
             if not row:
                 return None
             d = dict(row)
-            d["state"] = json.loads(d["state_json"])
+            d["state"] = _decode_state(d["state_json"])
             return d
 
 
@@ -170,11 +200,11 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT state_json FROM jobs WHERE job_id = ?", (job_id,)) as cur:
             row = await cur.fetchone()
-            current = json.loads(row[0]) if row else {}
+            current = _decode_state(row[0]) if row else {}
         current.update(state_patch)
         await db.execute(
             "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=? WHERE job_id=?",
-            (status, step, json.dumps(current), now, job_id),
+            (status, step, _encode_state(current), now, job_id),
         )
         await db.commit()
 
@@ -217,7 +247,7 @@ async def get_batch_jobs(batch_id: str) -> List[dict]:
             result = []
             for row in rows:
                 d = dict(row)
-                state = json.loads(d.pop("state_json", "{}"))
+                state = _decode_state(d.pop("state_json", ""))
                 d["complexity"] = state.get("complexity", {}).get("tier") if state.get("complexity") else None
                 d["batch_id"] = batch_id
                 result.append(d)
@@ -249,7 +279,7 @@ async def list_deleted_jobs() -> List[dict]:
             result = []
             for row in rows:
                 d = dict(row)
-                state = json.loads(d.pop("state_json", "{}"))
+                state = _decode_state(d.pop("state_json", ""))
                 d["mapping_name"] = state.get("mapping_name") or state.get("complexity", {})
                 d["log_readable"] = True   # log file preserved on disk
                 result.append(d)
@@ -326,7 +356,7 @@ async def list_jobs() -> List[dict]:
             result = []
             for row in rows:
                 d = dict(row)
-                state = json.loads(d.pop("state_json", "{}"))
+                state = _decode_state(d.pop("state_json", ""))
                 d["complexity"] = state.get("complexity", {}).get("tier") if state.get("complexity") else None
                 result.append(d)
             return result

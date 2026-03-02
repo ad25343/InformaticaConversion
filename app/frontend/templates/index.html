@@ -955,7 +955,7 @@ function renderJobPanel(job) {
         <span class="lbl">Download report:</span>
         <button class="btn btn-ghost btn-sm" title="Download full report as Markdown" onclick="downloadReportMd()">📄 .md</button>
         <button class="btn btn-ghost btn-sm" title="Open print-ready report — use browser Save as PDF" onclick="openPrintReport()">🖨️ PDF</button>
-        ${state.manifest_xlsx_b64 ? `<button class="btn btn-ghost btn-sm" title="Download pre-conversion manifest — fill in yellow rows, re-upload before converting" onclick="downloadManifestXlsx()" style="color:#c07000;border-color:#c07000">📊 Manifest</button>` : ''}
+        ${state.has_manifest || state.manifest_report ? `<button class="btn btn-ghost btn-sm" title="Download pre-conversion manifest — fill in yellow rows, re-upload before converting" onclick="downloadManifestXlsx()" style="color:#c07000;border-color:#c07000">📊 Manifest</button>` : ''}
       </div>
     </div>
     ${renderStepper(job.current_step, job.status)}
@@ -2092,7 +2092,11 @@ async function submitSignoff(jobId, decision, flags) {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Server error ${res.status}: ${text.slice(0, 300)}`);
+    }
+    await res.json();
     // Reload job state in either case (approved or rejected)
     await openJob(jobId);
   } catch(e) {
@@ -2305,17 +2309,13 @@ ${body}
   win.document.close();
 }
 
-function downloadManifestXlsx() {
+async function downloadManifestXlsx() {
   const job = window._currentJob;
   if (!job) return;
-  const state = job.state || {};
-  const b64 = state.manifest_xlsx_b64;
-  if (!b64) { alert('Manifest not available for this job.'); return; }
-  // Decode base64 → binary → Blob
-  const binary = atob(b64);
-  const bytes  = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  // Manifest is generated on demand by the API — not stored in state
+  const resp = await fetch(`/api/jobs/${job.job_id}/manifest.xlsx`);
+  if (!resp.ok) { alert('Manifest not available for this job.'); return; }
+  const blob = await resp.blob();
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   const safe = (job.filename || 'mapping').replace(/[^a-z0-9_\-\.]/gi, '_').replace(/\.xml$/i, '');

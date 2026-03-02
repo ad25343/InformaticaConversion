@@ -9,6 +9,7 @@ import os
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, BackgroundTasks, Form, Request
+from starlette.background import BackgroundTask
 from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
 from typing import Optional as _Opt
 
@@ -185,10 +186,15 @@ async def stream_progress(job_id: str):
             yield f"data: {json.dumps({'type': 'state', 'status': current['status'], 'step': current['current_step']})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
+    async def _cleanup():
+        # GAP #11 — release the queue once the stream is done to prevent memory leak
+        _progress_queues.pop(job_id, None)
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=BackgroundTask(_cleanup),
     )
 
 
@@ -603,6 +609,32 @@ async def download_s2t_excel(job_id: str):
         str(path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=path.name,
+    )
+
+
+@router.get("/jobs/{job_id}/manifest.xlsx")
+async def download_manifest_xlsx(job_id: str):
+    """
+    Generate and return the pre-conversion mapping manifest xlsx on demand.
+    The manifest is NOT stored in state (too large); it is regenerated from the
+    graph dict each time this endpoint is called.
+    """
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    graph = job.get("state", {}).get("graph")
+    if not graph:
+        raise HTTPException(404, "Manifest not available — job has not completed parsing yet")
+
+    from .agents import manifest_agent
+    import io as _io
+    report = manifest_agent.build_manifest(graph)
+    xlsx_bytes = manifest_agent.write_xlsx_bytes(report)
+    safe = job.get("filename", "mapping").replace(".xml", "").replace(" ", "_")
+    return StreamingResponse(
+        _io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="manifest_{safe}.xlsx"'},
     )
 
 
