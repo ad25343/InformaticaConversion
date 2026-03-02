@@ -2308,7 +2308,7 @@ ${body}
 function downloadManifestXlsx() {
   const job = window._currentJob;
   if (!job) return;
-  const state = job.state_data || {};
+  const state = job.state || {};
   const b64 = state.manifest_xlsx_b64;
   if (!b64) { alert('Manifest not available for this job.'); return; }
   // Decode base64 → binary → Blob
