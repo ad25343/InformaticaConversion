@@ -41,9 +41,22 @@ _DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Standing rules (security_rules.yaml)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_DEFAULT_RULES = {
-    "rules": [
-        {
+def _load_default_rules_from_yaml() -> dict:
+    """
+    Load standing rules directly from security_rules.yaml for use as the
+    in-code fallback. Called once at module level so _DEFAULT_RULES is always
+    in sync with the YAML without maintaining a duplicate hardcoded list.
+    """
+    try:
+        with RULES_PATH.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        if data.get("rules"):
+            return data
+    except Exception:
+        pass
+    # Absolute last resort if the file truly doesn't exist yet — single sentinel rule
+    return {
+        "rules": [{
             "id": "rule_creds_001",
             "severity": "CRITICAL",
             "category": "credentials",
@@ -53,132 +66,13 @@ _DEFAULT_RULES = {
                 "Never assign literals like password='abc123' or api_key='sk-...'."
             ),
             "enabled": True,
-        },
-        {
-            "id": "rule_sql_001",
-            "severity": "HIGH",
-            "category": "injection",
-            "description": "Never construct SQL queries by string concatenation or f-strings with user/external data.",
-            "guidance": (
-                "Use parameterised queries: cursor.execute('SELECT * FROM t WHERE id = ?', (val,)). "
-                "For SQLAlchemy use ORM or text() with bindparams."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_exec_001",
-            "severity": "HIGH",
-            "category": "code-execution",
-            "description": "Avoid eval(), exec(), and compile() on dynamic or external input.",
-            "guidance": (
-                "If dynamic evaluation is genuinely required, use ast.literal_eval() "
-                "for safe literal expressions only."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_subprocess_001",
-            "severity": "HIGH",
-            "category": "injection",
-            "description": "Never pass unsanitised external data to subprocess, os.system, or shell=True.",
-            "guidance": (
-                "Use subprocess.run([...], shell=False) with a fixed command list. "
-                "Validate and whitelist any user-supplied arguments before passing them."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_xml_001",
-            "severity": "HIGH",
-            "category": "xxe",
-            "description": "Disable DTD loading and external entity resolution when parsing XML.",
-            "guidance": (
-                "Use defusedxml.ElementTree or configure lxml with "
-                "resolve_entities=False, no_network=True, forbid_dtd=True."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_zip_001",
-            "severity": "HIGH",
-            "category": "path-traversal",
-            "description": "Validate ZIP entry paths before extraction to prevent Zip Slip attacks.",
-            "guidance": (
-                "Resolve each entry to an absolute path and confirm it starts with "
-                "the intended extraction directory. Reject entries containing '..' or "
-                "absolute paths."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_assert_001",
-            "severity": "MEDIUM",
-            "category": "logic",
-            "description": "Do not use assert statements as security or input-validation guards.",
-            "guidance": (
-                "assert is stripped by Python's -O optimisation flag. "
-                "Replace with explicit if/raise: if not condition: raise ValueError('...')"
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_hash_001",
-            "severity": "MEDIUM",
-            "category": "cryptography",
-            "description": "Do not use MD5 or SHA-1 for security-sensitive hashing (passwords, tokens, signatures).",
-            "guidance": (
-                "Use hashlib.sha256() or higher for general hashing. "
-                "For passwords use bcrypt, scrypt, or argon2 via a dedicated library."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_random_001",
-            "severity": "MEDIUM",
-            "category": "cryptography",
-            "description": "Do not use the random module for security-sensitive values (tokens, session IDs, salts).",
-            "guidance": (
-                "Use secrets.token_hex(), secrets.token_urlsafe(), or os.urandom() "
-                "for cryptographically secure random values."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_logging_001",
-            "severity": "MEDIUM",
-            "category": "data-exposure",
-            "description": "Never log sensitive values: passwords, tokens, PII, or connection strings.",
-            "guidance": (
-                "Mask or omit sensitive fields before logging. "
-                "Use a log filter or structured logging with explicit field exclusions."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_tls_001",
-            "severity": "MEDIUM",
-            "category": "transport",
-            "description": "Do not disable TLS/SSL certificate verification.",
-            "guidance": (
-                "Never set verify=False in requests or ssl_context.check_hostname=False. "
-                "Use proper CA bundles for internal certificates instead."
-            ),
-            "enabled": True,
-        },
-        {
-            "id": "rule_tempfile_001",
-            "severity": "LOW",
-            "category": "file-handling",
-            "description": "Use tempfile.NamedTemporaryFile or tempfile.mkstemp for temporary files; never predictable paths.",
-            "guidance": (
-                "Predictable /tmp/myapp_temp.txt paths are vulnerable to symlink and "
-                "race-condition attacks. The tempfile module creates files with random names "
-                "and correct permissions automatically."
-            ),
-            "enabled": True,
-        },
-    ]
-}
+        }]
+    }
+
+
+# _DEFAULT_RULES is now derived from the YAML file itself — always in sync,
+# never a stale hardcoded copy.
+_DEFAULT_RULES = _load_default_rules_from_yaml()
 
 
 def load_rules() -> list[dict]:
@@ -304,6 +198,21 @@ def record_findings(job_id: str, findings: list[dict]) -> int:
     _save_patterns_raw(data)
     log.info("security_knowledge: recorded %d findings from job %s (%d total patterns)",
              updated, job_id, len(patterns))
+
+    # Auto-promote any patterns that have now hit the recurrence threshold (≥3 jobs).
+    # This closes the feedback loop: scan findings become non-negotiable standing rules
+    # without any manual intervention.
+    try:
+        promoted = promote_patterns_to_rules(threshold=3)
+        if promoted:
+            log.info(
+                "security_knowledge: auto-promoted %d pattern(s) to standing rules "
+                "after recording findings from job %s",
+                promoted, job_id,
+            )
+    except Exception as exc:
+        log.warning("security_knowledge: auto-promotion failed (non-blocking): %s", exc)
+
     return updated
 
 
@@ -381,12 +290,116 @@ def build_security_context_block(top_n_patterns: int = 15) -> str:
     return "\n".join(lines)
 
 
+def promote_patterns_to_rules(threshold: int = 3) -> int:
+    """
+    Auto-promote recurring patterns into standing rules in security_rules.yaml.
+
+    Any pattern in security_patterns.json whose occurrence count >= `threshold`
+    and that does not already have a matching standing rule is promoted:
+      - A new rule entry is written to security_rules.yaml with severity, description,
+        and remediation from the pattern.
+      - The pattern is marked `promoted: true` in security_patterns.json so it is
+        not promoted again.
+
+    This closes the feedback loop: every scan approval makes the tool smarter,
+    and patterns that appear repeatedly become non-negotiable standing rules
+    rather than just "recurring issue" hints.
+
+    Returns the number of rules newly promoted.
+    """
+    data     = _load_patterns_raw()
+    patterns = data.get("patterns", [])
+
+    # Load current rules to check for duplicates
+    try:
+        with RULES_PATH.open("r", encoding="utf-8") as fh:
+            rules_data = yaml.safe_load(fh) or {"rules": []}
+    except Exception:
+        rules_data = {"rules": []}
+
+    existing_rules = rules_data.get("rules", [])
+
+    # Build a set of existing rule identifiers for dedup
+    existing_ids = {r.get("id", "") for r in existing_rules}
+    existing_names = {
+        (r.get("test_name") or r.get("description", ""))[:60].lower().replace(" ", "_")
+        for r in existing_rules
+    }
+
+    promoted = 0
+    for pattern in patterns:
+        if pattern.get("promoted"):
+            continue  # already done
+        if pattern.get("occurrences", 0) < threshold:
+            continue
+
+        # Build a candidate rule ID from the test_name or test_id
+        raw_key = _normalise_key(pattern)
+        rule_id = f"rule_auto_{raw_key[:40]}"
+        short_name = raw_key[:60].lower()
+
+        # Skip if an equivalent rule already exists
+        if rule_id in existing_ids or short_name in existing_names:
+            pattern["promoted"] = True  # mark so we don't re-check
+            continue
+
+        severity = pattern.get("severity", "MEDIUM")
+        # Clamp to recognised severities
+        if severity not in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            severity = "MEDIUM"
+
+        description = pattern.get("description") or pattern.get("test_name") or raw_key
+        guidance    = (
+            pattern.get("remediation")
+            or "Review all occurrences of this pattern in generated code and apply the fix described above."
+        )
+
+        new_rule = {
+            "id":          rule_id,
+            "severity":    severity,
+            "category":    pattern.get("source", "scan-finding"),
+            "description": f"[Auto-promoted from {pattern.get('occurrences', threshold)}× scan finding] {description}",
+            "guidance":    guidance,
+            "enabled":     True,
+        }
+
+        existing_rules.append(new_rule)
+        existing_ids.add(rule_id)
+        existing_names.add(short_name)
+        pattern["promoted"]    = True
+        pattern["promoted_to"] = rule_id
+        promoted += 1
+        log.info(
+            "security_knowledge: promoted pattern '%s' (%dx) to standing rule %s",
+            raw_key, pattern["occurrences"], rule_id,
+        )
+
+    if promoted:
+        rules_data["rules"] = existing_rules
+        try:
+            with RULES_PATH.open("w", encoding="utf-8") as fh:
+                yaml.dump(rules_data, fh, default_flow_style=False,
+                          allow_unicode=True, sort_keys=False)
+        except Exception as exc:
+            log.warning("security_knowledge: could not write promoted rules: %s", exc)
+            return 0
+
+        data["patterns"] = patterns
+        _save_patterns_raw(data)
+        log.info("security_knowledge: promoted %d pattern(s) to standing rules", promoted)
+
+    return promoted
+
+
 def knowledge_base_stats() -> dict:
     """Return a summary dict for API/UI consumption."""
     rules    = load_rules()
     patterns = load_top_patterns(limit=200)
+    auto_rules    = [r for r in rules if r.get("id", "").startswith("rule_auto_")]
+    promoted_pats = [p for p in patterns if p.get("promoted")]
     return {
-        "rules_count":    len(rules),
-        "patterns_count": len(patterns),
-        "top_patterns":   patterns[:10],
+        "rules_count":         len(rules),
+        "auto_promoted_count": len(auto_rules),
+        "patterns_count":      len(patterns),
+        "top_patterns":        patterns[:10],
     }
