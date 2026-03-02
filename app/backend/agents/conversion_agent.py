@@ -163,7 +163,7 @@ CONVERSION_PROMPT = """Convert the Informatica mapping documented below to {stac
 {security_context}
 ## Stack Assignment Rationale
 {rationale}
-{approved_fixes_section}{flag_handling_section}
+{approved_fixes_section}{flag_handling_section}{manifest_override_section}
 ## Full Mapping Documentation (your source of truth)
 {documentation_md}
 
@@ -304,6 +304,39 @@ def _build_flag_handling_section(verification_flags: list[dict]) -> str:
     )
 
 
+def _build_manifest_override_section(overrides: list[dict]) -> str:
+    """
+    Build a prompt section listing reviewer-confirmed overrides from the manifest xlsx.
+    These take precedence over anything the tool inferred from naming patterns.
+    Returns empty string if no overrides were supplied.
+    """
+    if not overrides:
+        return ""
+
+    lines: list[str] = []
+    for o in overrides:
+        location  = o.get("location", "")
+        itype     = o.get("item_type", "")
+        override  = o.get("reviewer_override", "").strip()
+        notes     = o.get("notes", "")
+        if not override or override.upper() in ("", "N/A"):
+            continue
+        note_str = f" (Note: {notes})" if notes else ""
+        lines.append(f"- [{itype}] {location} → Reviewer confirmed: {override}{note_str}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\n## 📋 Reviewer-Confirmed Manifest Overrides — These Take Precedence\n"
+        "A human reviewer examined the pre-conversion manifest and supplied the following "
+        "corrections. Use these INSTEAD OF any tool-inferred connection or determination "
+        "for the listed items. Do not second-guess these — they are authoritative:\n\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 def _build_yaml_artifacts(spr: SessionParseReport) -> dict[str, str]:
     """
     Generate connections.yaml and runtime_config.yaml from Step 0 session data.
@@ -417,6 +450,7 @@ async def convert(
     security_findings: list[dict] | None = None,
     session_parse_report: Optional[SessionParseReport] = None,
     verification_flags: list[dict] | None = None,
+    manifest_overrides: list[dict] | None = None,
 ) -> ConversionOutput:
     """
     Generate converted code for the assigned target stack.
@@ -427,6 +461,9 @@ async def convert(
     verification_flags  — flags from Step 4 verification; Claude auto-handles each
                           (stubs, TODOs, config extraction) so the conversion is never blocked
                           by issues that can be addressed in code
+    manifest_overrides  — reviewer-supplied overrides from the pre-conversion manifest xlsx;
+                          these take precedence over tool-inferred connections for any
+                          ambiguous or unmapped items
     """
     client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
     stack = stack_assignment.assigned_stack
@@ -491,12 +528,16 @@ async def convert(
         [f.model_dump() if hasattr(f, "model_dump") else f for f in (verification_flags or [])]
     )
 
+    # Build manifest overrides section — reviewer-confirmed connections and gap resolutions
+    manifest_override_section = _build_manifest_override_section(manifest_overrides or [])
+
     prompt = CONVERSION_PROMPT.format(
         stack=stack.value,
         rationale=stack_assignment.rationale,
         security_context=security_context,
         approved_fixes_section=approved_fixes_section + security_fix_section,
         flag_handling_section=flag_handling_section,
+        manifest_override_section=manifest_override_section,
         documentation_md=documentation_md[:30_000],
     )
 

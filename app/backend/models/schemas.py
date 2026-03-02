@@ -452,6 +452,62 @@ class JobSummary(BaseModel):
 # Batch Conversion (v2.0)
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────
+# Mapping Manifest
+# ─────────────────────────────────────────────
+
+class ManifestConfidence(str, Enum):
+    HIGH    = "HIGH"      # Tool is certain — direct connector or exact SQ name
+    MEDIUM  = "MEDIUM"    # Abbreviated name match — likely correct, worth a glance
+    LOW     = "LOW"       # Weak match — reviewer should confirm
+    UNMAPPED = "UNMAPPED" # No connection found — reviewer MUST fill in override
+
+
+class ManifestItemType(str, Enum):
+    SOURCE_LINEAGE   = "SOURCE_LINEAGE"    # Source → SQ → … → Target
+    ORPHANED_PORT    = "ORPHANED_PORT"     # Port with no downstream connector
+    LINEAGE_GAP      = "LINEAGE_GAP"       # Field present in source, missing at target
+    ENV_VALUE        = "ENV_VALUE"         # Hard-coded env-specific value
+    EXPRESSION       = "EXPRESSION"        # Expression logic to be converted
+    LOOKUP           = "LOOKUP"            # Lookup transformation detail
+    PARAMETER        = "PARAMETER"         # Unresolved parameter/variable
+
+
+class ManifestItem(BaseModel):
+    """One reviewable row in the mapping manifest."""
+    mapping_name:       str
+    item_type:          ManifestItemType
+    location:           str               # e.g. "SQ_APPRAISALS.LOAN_ID"
+    description:        str               # Human-readable summary
+    tool_determination: str               # What the tool inferred
+    confidence:         ManifestConfidence
+    reviewer_override:  Optional[str] = None   # Filled in by reviewer in xlsx
+    notes:              Optional[str] = None
+
+
+class ManifestReport(BaseModel):
+    """Full pre-conversion manifest for one XML file."""
+    mapping_names:        List[str]
+    source_count:         int
+    target_count:         int
+    transformation_count: int
+    high_confidence:      int
+    medium_confidence:    int
+    low_confidence:       int
+    unmapped_count:       int
+    review_required:      bool          # True if any LOW or UNMAPPED items exist
+    items:                List[ManifestItem]
+    generated_at:         str           # ISO timestamp
+
+
+class ManifestOverride(BaseModel):
+    """A single reviewer-supplied override read back from the xlsx."""
+    location:          str
+    item_type:         ManifestItemType
+    reviewer_override: str
+    notes:             Optional[str] = None
+
+
 class BatchStatus(str, Enum):
     """Overall status of a batch, computed from its constituent job statuses."""
     RUNNING  = "running"   # At least one job is still in-flight

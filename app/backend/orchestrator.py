@@ -13,7 +13,7 @@ from .db.database import get_xml, get_session_files, update_job
 from .models.schemas import JobStatus
 from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
-    session_parser_agent, security_agent
+    session_parser_agent, security_agent, manifest_agent
 from .agents.documentation_agent import DOC_TRUNCATION_SENTINEL, DOC_COMPLETE_SENTINEL
 from .logger import JobLogger
 from .security import scan_xml_for_secrets
@@ -193,8 +193,36 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.step_complete(1, "Parse XML",
                       f"{sum(parse_report.objects_found.values())} objects, "
                       f"{len(parse_report.mapping_names)} mapping(s)")
-    yield await emit(1, JobStatus.PARSING, "Parse complete",
-                     {"parse_report": parse_report.model_dump(), "graph": graph})
+
+    # ── STEP 1.5 — MANIFEST (non-blocking) ────────────────────
+    # Generate a pre-conversion manifest immediately after parsing.
+    # The manifest surfaces every source→target connection with a confidence
+    # score and flags any ambiguous or unmapped items for human review.
+    # This step never blocks the pipeline — it emits the manifest report and
+    # xlsx bytes for the UI to surface, then continues.
+    manifest_report = None
+    manifest_xlsx_bytes: bytes | None = None
+    try:
+        manifest_report = manifest_agent.build_manifest(graph)
+        manifest_xlsx_bytes = manifest_agent.write_xlsx_bytes(manifest_report)
+        log.info(
+            f"Manifest built — {manifest_report.source_count} sources, "
+            f"review_required={manifest_report.review_required}, "
+            f"low/unmapped={manifest_report.unmapped_count + manifest_report.low_confidence}",
+            step=1,
+        )
+    except Exception as e:
+        log.warning(f"Manifest generation failed (non-blocking): {e}", step=1)
+
+    import base64
+    yield await emit(1, JobStatus.PARSING, "Parse complete", {
+        "parse_report": parse_report.model_dump(),
+        "graph": graph,
+        "manifest_report": manifest_report.model_dump() if manifest_report else None,
+        "manifest_xlsx_b64": (
+            base64.b64encode(manifest_xlsx_bytes).decode() if manifest_xlsx_bytes else None
+        ),
+    })
 
     # ── STEP 2 — CLASSIFY ─────────────────────────────────────
     log.step_start(2, "Classify Complexity")
@@ -526,12 +554,23 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
                 data={"flag_types": [f["flag_type"] for f in v_flags_raw]},
             )
 
+    # Load manifest overrides if the reviewer submitted an annotated manifest xlsx
+    manifest_overrides: list[dict] | None = None
+    _manifest_overrides_raw = state.get("manifest_overrides")
+    if _manifest_overrides_raw:
+        manifest_overrides = _manifest_overrides_raw
+        log.info(
+            f"Applying {len(manifest_overrides)} manifest override(s) from reviewer",
+            step=7,
+        )
+
     try:
         conversion_output = await conversion_agent.convert(
             stack_assignment, documentation_md, graph,
             accepted_fixes=accepted_fixes or None,
             session_parse_report=session_parse_report,
             verification_flags=v_flags_raw or None,
+            manifest_overrides=manifest_overrides,
         )
         file_list = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())
@@ -883,6 +922,7 @@ async def resume_after_security_fix_request(
             security_findings=security_findings_to_fix or None,
             session_parse_report=session_parse_report,
             verification_flags=v_flags_fix or None,
+            manifest_overrides=manifest_overrides,
         )
         file_list   = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())
