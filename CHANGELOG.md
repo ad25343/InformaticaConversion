@@ -501,3 +501,30 @@ Step 1.5 — runs immediately after XML parsing (non-blocking):
 - `app/backend/agents/conversion_agent.py` — manifest_overrides param +
   `_build_manifest_override_section()`
 - `app/backend/orchestrator.py` — Step 1.5 wired in, overrides passed to convert()
+
+## v2.4.3 — 2026-03-02
+
+### fix: State compression, queue leak, DB indices, sign-off 500
+
+- **GAP #3** — State compressed with zlib (~50x). pipeline_log capped at 300 entries. manifest_xlsx no longer stored in state — served via `/jobs/{id}/manifest.xlsx` API endpoint on demand.
+- **GAP #11** — SSE stream `stream_progress()` now cleans up its queue via `BackgroundTask` when the connection closes.
+- **GAP #12** — DB indices guaranteed to apply on every startup.
+- **Sign-off bug** — Frontend now checks `res.ok` before `res.json()` — no more "Unexpected token I" crash masking the real server error.
+
+## v2.4.4 — 2026-03-02
+
+### fix: Atomic batch, deep copy, state validation, timeout watchdog
+
+- **GAP #4** — `create_batch_atomic()` creates batch + all jobs in one SQLite transaction. On failure, everything rolls back — no orphaned jobs.
+- **GAP #2** — All resume functions deep-copy state before mutating. Partial writes on crash no longer corrupt persisted state.
+- **GAP #6** — Required state keys validated before Pydantic construction on every resume. Missing keys return a clear FAILED message instead of unhandled KeyError.
+- **GAP #16** — `run_watchdog_loop()` polls every 60s. Jobs stuck in active pipeline statuses for 45+ minutes are automatically marked FAILED.
+
+## v2.4.5 — 2026-03-02
+
+### fix: Claude output validation, model deprecation, download guard, graceful shutdown
+
+- **GAP #7** — `_validate_conversion_files()` checks every generated file: empty, placeholder-only (>60% TODOs), Python syntax errors, missing SparkSession/SELECT. Issues added to ConversionOutput.notes.
+- **GAP #13** — Startup model probe: 404 from Anthropic logs an ERROR with the deprecated model string and instructions to update .env.
+- **GAP #14** — Download endpoint enforces extension allowlist (.py .sql .yaml .yml .txt .md .json .sh). Path traversal stripped before check.
+- **GAP #15** — Graceful shutdown: lifespan cancels all in-flight asyncio pipeline tasks on SIGTERM/SIGINT.
