@@ -146,3 +146,53 @@ rules:
     is closed with a final SELECT, and no SQL block is left open. Truncated output
     causes silent data loss or pipeline failures at runtime."
   enabled: true
+
+- id: rule_oracle_tls_001
+  severity: HIGH
+  category: transport
+  description: "Oracle database connections in dbt profiles.yml must use TCPS (TLS-encrypted)
+    protocol — never plain TCP."
+  guidance: "In profiles.yml, set 'protocol: tcps' and provide a valid 'ssl_server_dn_match'
+    or 'ssl_server_cert_dn' entry. Plain TCP connections transmit credentials and
+    query results unencrypted. Example: 'host: myhost.example.com', 'port: 2484',
+    'protocol: tcps'. Never use port 1521 with plain 'protocol: tcp' for production
+    Oracle connections."
+  enabled: true
+
+- id: rule_log_injection_001
+  severity: HIGH
+  category: injection
+  description: "Never interpolate unsanitised external or user-supplied values directly
+    into log messages or error strings — this enables log injection attacks."
+  guidance: "Sanitise values before including them in log output: strip newlines
+    and carriage returns (value.replace('\\n','\\\\n').replace('\\r','\\\\r')),
+    or use structured logging fields instead of string interpolation. In dbt macros,
+    use '{{ log(''message: '' ~ var_name | replace(\"\\n\",\" \"), info=true) }}'
+    rather than raw variable concatenation. Never log raw business input values,
+    rate parameters, or tax codes without sanitisation."
+  enabled: true
+
+- id: rule_macro_sql_injection_001
+  severity: HIGH
+  category: injection
+  description: "dbt macro parameters must be validated and quoted before use in
+    SQL — passing macro arguments directly into SQL strings enables SQL injection."
+  guidance: "In dbt macros, always apply adapter.dispatch quoting or explicit quoting
+    to any parameter used in a SQL context: '{{ adapter.quote(table_name) }}' for
+    identifiers, '{{ dbt_utils.safe_add(...) }}' for expressions. Never interpolate
+    a macro argument directly into a SQL string: avoid 'SELECT * FROM {{ table_name }}'
+    in favour of 'SELECT * FROM {{ adapter.quote(table_name) }}'."
+  enabled: true
+
+- id: rule_hardcoded_business_constant_001
+  severity: MEDIUM
+  category: maintainability
+  description: "Business logic constants (tax rates, thresholds, fee percentages,
+    status codes, SLA days) must not be hardcoded inline — they belong in dbt vars,
+    a config model, or an environment variable."
+  guidance: "In dbt, use '{{ var(''tax_rate'', 0.085) }}' defined in dbt_project.yml
+    vars block, or a dedicated seed/config model. In PySpark/Python, place constants
+    in the CONFIG dict at the top of the file. Inline magic numbers make regulatory
+    changes (e.g. a tax rate update) require code deploys rather than config updates,
+    and they are invisible in audit trails."
+  enabled: true
