@@ -955,6 +955,7 @@ function renderJobPanel(job) {
         <span class="lbl">Download report:</span>
         <button class="btn btn-ghost btn-sm" title="Download full report as Markdown" onclick="downloadReportMd()">📄 .md</button>
         <button class="btn btn-ghost btn-sm" title="Open print-ready report — use browser Save as PDF" onclick="openPrintReport()">🖨️ PDF</button>
+        ${state.manifest_xlsx_b64 ? `<button class="btn btn-ghost btn-sm" title="Download pre-conversion manifest — fill in yellow rows, re-upload before converting" onclick="downloadManifestXlsx()" style="color:#c07000;border-color:#c07000">📊 Manifest</button>` : ''}
       </div>
     </div>
     ${renderStepper(job.current_step, job.status)}
@@ -2302,6 +2303,26 @@ ${body}
   }
   win.document.write(html);
   win.document.close();
+}
+
+function downloadManifestXlsx() {
+  const job = window._currentJob;
+  if (!job) return;
+  const state = job.state_data || {};
+  const b64 = state.manifest_xlsx_b64;
+  if (!b64) { alert('Manifest not available for this job.'); return; }
+  // Decode base64 → binary → Blob
+  const binary = atob(b64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = (job.filename || 'mapping').replace(/[^a-z0-9_\-\.]/gi, '_').replace(/\.xml$/i, '');
+  a.href     = url;
+  a.download = `manifest_${safe}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // Enhanced markdown→HTML converter for the print window

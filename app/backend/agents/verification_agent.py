@@ -364,6 +364,30 @@ async def verify(
                 detail=f"Type '{t['type']}' is UNSUPPORTED — conversion of entire mapping is BLOCKED"
             ))
 
+    # Filter transformations must have a condition — if the condition is absent the
+    # converted code will pass ALL records through, silently dropping business logic.
+    # Check table_attribs["Filter Condition"] which is where the parser stores it.
+    for t in all_transformations:
+        if t.get("type") != "Filter":
+            continue
+        filter_cond = t.get("table_attribs", {}).get("Filter Condition", "").strip()
+        self_checks.append(CheckResult(
+            name=f"Filter '{t['name']}' has a condition",
+            passed=bool(filter_cond),
+            detail=None if filter_cond else (
+                f"Filter '{t['name']}' has no Filter Condition attribute in the XML. "
+                "The converted code will pass ALL records — verify the XML is complete."
+            )
+        ))
+        if not filter_cond:
+            flags.append(_make_flag(
+                "INCOMPLETE_LOGIC",
+                t["name"],
+                f"Filter transformation '{t['name']}' has no Filter Condition in the mapping XML. "
+                "Conversion will generate a PASS-THROUGH stub with a TODO comment.",
+                blocking=False,
+            ))
+
     # Unresolved parameters?
     for param in parse_report.unresolved_parameters:
         flags.append(_make_flag(
@@ -618,12 +642,29 @@ def _build_graph_summary(graph: dict) -> str:
                 if e and e != expr.get("port", ""):  # skip trivial pass-throughs
                     lines.append(f"    expr  {expr['port']} = {e[:300]}")
 
-            # SQL / filter / join / lookup conditions
+            # SQL / filter / join / lookup conditions.
+            # The parser stores these in table_attribs using the Informatica XML attribute
+            # names (e.g. "Filter Condition", "Source Filter", "Sql Query").  We normalise
+            # them here so Claude always sees a consistent key name in the summary.
+            _ATTRIB_MAP = {
+                "Filter Condition":   "filter_condition",   # Filter transformation
+                "Source Filter":      "source_filter",      # Source Qualifier
+                "Sql Query":          "sql_override",       # Source Qualifier custom SQL
+                "User Defined Join":  "join_condition",     # Source Qualifier join
+                "Lookup condition":   "lookup_condition",   # Lookup
+                "Pre SQL":            "pre_sql",
+                "Post SQL":           "post_sql",
+            }
+            table_attribs = t.get("table_attribs", {})
+            for attrib_name, summary_key in _ATTRIB_MAP.items():
+                val = table_attribs.get(attrib_name, "").strip()
+                if val:
+                    lines.append(f"    {summary_key}: {val[:300]}")
+            # Legacy fallback — some older parser versions stored these as top-level keys
             for attr_key in ("sql_override", "filter_condition", "join_condition",
                              "lookup_condition", "pre_sql", "post_sql"):
-                val = t.get(attr_key) or t.get("attributes", {}).get(attr_key, "")
-                if val:
-                    lines.append(f"    {attr_key}: {str(val)[:300]}")
+                if t.get(attr_key):
+                    lines.append(f"    {attr_key}: {str(t[attr_key])[:300]}")
 
             # Rank transformation config — emit dedup-critical attributes so Claude
             # knows whether RANKINDEX=1 means latest/earliest and what the group key is.
