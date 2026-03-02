@@ -266,21 +266,41 @@ async def verify(
 
     # Every source participates in the data flow?
     # In Informatica's architecture, SOURCE elements never appear directly as FROMINSTANCE
-    # in CONNECTOR elements — they always connect through a Source Qualifier (SQ_*).
-    # We check: (a) direct match (non-standard), (b) SQ_{name} is in the flow,
-    # (c) any connected SQ whose name contains the source name (handles abbreviations).
+    # in CONNECTOR elements — they always connect through a Source Qualifier (SQ_*) or a
+    # Lookup transformation (for reference/dimension tables).
+    #
+    # We check four patterns:
+    #   (a) Direct CONNECTOR match (non-standard but possible in older mappings)
+    #   (b) SQ_{src_name} is in the connected SQ set (exact standard naming)
+    #   (c) src_name is a substring of a connected SQ name (e.g. SQ_ORDERS for STAGING_ORDERS)
+    #   (d) SQ name without the SQ_ prefix is a substring of src_name — handles abbreviated SQs
+    #       e.g. SQ_APPRAISALS for source CORELOGIC_APPRAISALS ("APPRAISALS" in "CORELOGIC_APPRAISALS")
+    #   (e) src_name matches a Lookup transformation's "Lookup table name" attribute — reference
+    #       tables used in Lookups have no Source Qualifier; they are read directly by the LKP.
     sq_connected = {
         t["name"]
         for m in graph.get("mappings", [])
         for t in m.get("transformations", [])
         if t.get("type") == "Source Qualifier" and t["name"] in connected_instances
     }
+    # Build a set of source names that are referenced as Lookup table sources.
+    # In Informatica XML the Lookup table is stored as TABLEATTRIBUTE NAME="Lookup table name".
+    # The parser stores these under transformation["table_attribs"].
+    lookup_source_names = {
+        t.get("table_attribs", {}).get("Lookup table name", "").strip()
+        for m in graph.get("mappings", [])
+        for t in m.get("transformations", [])
+        if t.get("type") == "Lookup"
+    } - {""}  # remove empty strings
+
     for src in graph.get("sources", []):
         src_name = src["name"]
         has_out = (
-            any(c.get("from_instance") == src_name for c in all_connectors)   # direct
-            or f"SQ_{src_name}" in sq_connected                                 # standard SQ naming
-            or any(src_name in sq_name for sq_name in sq_connected)             # partial match
+            any(c.get("from_instance") == src_name for c in all_connectors)        # (a) direct
+            or f"SQ_{src_name}" in sq_connected                                      # (b) exact SQ
+            or any(src_name in sq_name for sq_name in sq_connected)                  # (c) src in SQ name
+            or any(sq_name.replace("SQ_", "") in src_name for sq_name in sq_connected)  # (d) SQ abbrev
+            or src_name in lookup_source_names                                       # (e) Lookup source
         )
         completeness_checks.append(CheckResult(
             name=f"Source '{src_name}' participates in data flow",
@@ -423,6 +443,14 @@ async def verify(
                 # The raw pass-through isn't wired, but the value IS consumed by derived fields.
                 # No action needed — this is by design. Skip flagging entirely to avoid noise.
                 # (Claude is told about these ports explicitly so it won't raise DEAD_LOGIC either.)
+            elif t.get("type") == "Rank" and port_name == "RANKINDEX":
+                # RANKINDEX is Informatica's internal rank counter output on Rank transformations.
+                # When the Rank is configured with "Number Of Ranks = N", only the top-N rows are
+                # output per group — the filtering is intrinsic to the transformation.  RANKINDEX
+                # never needs to be wired to a downstream Filter to achieve deduplication; the
+                # classic Informatica dedup pattern (Sorter → Rank[N=1]) works without connecting
+                # RANKINDEX at all.  Flagging it as ORPHANED_PORT is a false positive.
+                pass
             else:
                 flags.append(_make_flag(
                     "ORPHANED_PORT",

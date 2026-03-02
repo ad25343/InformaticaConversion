@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.2
+**Version:** 2.3.5
 **Author:** ad25343
-**Last Updated:** 2026-03-01
+**Last Updated:** 2026-03-02
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -274,7 +274,21 @@ Addresses all immediate and short-term items from the external code review.
 - **Pydantic `Settings` class**: `backend/config.py` centralises all 20+ env var reads.
   Replaces scattered `os.environ.get()` calls across 10+ files.
 
-### v2.3.2 — Verification Flag Auto-Handling (current)
+### v2.3.5 — Verification Source Connectivity False Positive Fixes (current)
+
+Fixed:
+- **Abbreviated SQ names**: source connectivity check now tests bidirectionally — if the SQ
+  name (minus prefix) is a substring of the source name, the source is in-flow. Resolves
+  false FAILED for patterns like `CORELOGIC_APPRAISALS` → `SQ_APPRAISALS`.
+- **Lookup reference sources**: sources used as Lookup tables (e.g. `REF_COUNTY_LIMITS` via
+  `LKP_COUNTY_LIMITS`) have no Source Qualifier. The check now inspects each Lookup
+  transformation's `"Lookup table name"` attribute. These sources are now correctly marked
+  as participating in data flow.
+- **RANKINDEX orphaned port**: Rank transformations with `Number Of Ranks = 1` emit only the
+  top-ranked row per group — deduplication is intrinsic; RANKINDEX never needs a downstream
+  Filter connection. The false ORPHANED_PORT flag on `RANKINDEX` ports is suppressed.
+
+### v2.3.2 — Verification Flag Auto-Handling
 
 Fixed:
 - **Source connectivity false positive**: the verification check always failed for Informatica

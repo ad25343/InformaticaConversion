@@ -10,6 +10,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-02 — v2.3.5 (Verification — Source Connectivity False Positive Fixes)
+
+### Fixed
+- **Abbreviated SQ names no longer fail source connectivity check** — the check now tests
+  bidirectionally: if the SQ name (minus the `SQ_` prefix) is a substring of the source name,
+  the source is considered in-flow. Fixes false FAILED for patterns like source
+  `CORELOGIC_APPRAISALS` connected through `SQ_APPRAISALS` (abbreviated naming convention).
+- **Lookup reference sources no longer fail source connectivity check** — sources that feed a
+  Lookup transformation (e.g. `REF_COUNTY_LIMITS` via `LKP_COUNTY_LIMITS`) have no Source
+  Qualifier; the parser now checks whether the source name appears as the `"Lookup table name"`
+  attribute on any Lookup transformation in the mapping. These sources are now correctly
+  reported as participating in data flow.
+- **`RANKINDEX` no longer flagged as ORPHANED_PORT on Rank transformations** — in Informatica's
+  Sorter → Rank(N=1) deduplication pattern, RANKINDEX is an internal counter that is never
+  wired downstream. The rank filter is intrinsic (the transformation only outputs the top-N
+  rows per group); no explicit downstream Filter on RANKINDEX=1 is required. The false
+  ORPHANED_PORT flag has been suppressed for RANKINDEX on Rank-type transformations.
+
+### Impact
+Running verification on `m_APPRAISAL_RANK_DEDUP.xml` (and similar mappings with abbreviated
+SQ names or Oracle lookup reference tables) now produces an accurate report: the two FAILED
+source checks and the RANKINDEX orphan flag are eliminated. The remaining flags — LINEAGE_GAP
+on `LKP_COUNTY_LIMITS.IN_LIMIT_YEAR`, HIGH_RISK on conforming loan classification, and
+ORPHANED_PORT for BEDROOMS/BATHROOMS/APPRAISER_ID — are genuine findings that warrant review.
+
+---
+
 ## 2026-03-02 — v2.3.4 (Security KB — Auto-Promotion + Rule Sync)
 
 ### Security
