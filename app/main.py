@@ -70,13 +70,41 @@ async def lifespan(app: FastAPI):
             len(recovered),
         )
 
+    # ── GAP #13 — Model deprecation check ────────────────────────────────
+    try:
+        import anthropic as _anthropic
+        _probe = _anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+        await _probe.messages.create(
+            model=_cfg.claude_model, max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except _anthropic.NotFoundError:
+        _startup_log.error(
+            "MODEL DEPRECATED: '%s' returned 404 — update claude_model in .env "
+            "to a current model string. All jobs will fail until this is fixed.",
+            _cfg.claude_model,
+        )
+    except Exception:
+        pass  # network / auth errors are non-fatal at startup
+
     # ── Start background job cleanup loop ─────────────────────────────────
     asyncio.create_task(run_cleanup_loop())
 
     # ── GAP #16 — Start stuck-job timeout watchdog ────────────────────────
     asyncio.create_task(run_watchdog_loop())
 
+    # ── GAP #15 — Graceful shutdown ───────────────────────────────────────
     yield
+
+    # Cancel any in-flight pipeline tasks so they don't outlive the process
+    from backend.routes import _active_tasks
+    if _active_tasks:
+        _startup_log.info("Shutdown: cancelling %d active pipeline task(s)…", len(_active_tasks))
+        for _task in list(_active_tasks.values()):
+            _task.cancel()
+        import asyncio as _asyncio
+        await _asyncio.gather(*_active_tasks.values(), return_exceptions=True)
+        _startup_log.info("Shutdown: all pipeline tasks cancelled.")
 
 
 app = FastAPI(

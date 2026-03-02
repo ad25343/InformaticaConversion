@@ -647,6 +647,17 @@ async def download_file(job_id: str, filename: str):
     files = conversion.get("files", {})
     if filename not in files:
         raise HTTPException(404, f"File '{filename}' not found in conversion output")
+
+    # GAP #14 — Validate the filename is safe before serving
+    # Reject path traversal attempts and non-whitelisted extensions
+    import pathlib
+    _safe_name = pathlib.PurePosixPath(filename).name  # strip any directory components
+    _ALLOWED_EXTS = {".py", ".sql", ".yaml", ".yml", ".txt", ".md", ".json", ".sh", ".cfg", ".ini", ".toml"}
+    _ext = pathlib.PurePosixPath(_safe_name).suffix.lower()
+    if _ext not in _ALLOWED_EXTS:
+        logger.warning("Blocked download of disallowed extension: job=%s filename=%s", job_id, filename)
+        raise HTTPException(400, f"File extension '{_ext}' is not permitted for download.")
+
     return JSONResponse({"filename": filename, "content": files[filename]})
 
 

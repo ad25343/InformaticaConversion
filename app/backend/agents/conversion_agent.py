@@ -337,6 +337,66 @@ def _build_manifest_override_section(overrides: list[dict]) -> str:
     )
 
 
+def _validate_conversion_files(files: dict[str, str], stack) -> list[str]:
+    """
+    GAP #7 — Non-blocking content validation of Claude-generated files.
+    Returns a list of warning strings (empty = all clean).
+    """
+    import ast
+    issues: list[str] = []
+
+    for fname, content in files.items():
+        stripped = content.strip()
+
+        # 1. Empty file
+        if not stripped:
+            issues.append(
+                f"⚠️ VALIDATION: '{fname}' is empty — Claude may have failed to generate content."
+            )
+            continue
+
+        # 2. Placeholder-only file — mostly TODOs with very little real code
+        lines = [l.strip() for l in stripped.splitlines() if l.strip()]
+        code_lines = [
+            l for l in lines
+            if l and not l.startswith("#") and not l.startswith('"""') and not l.startswith("'''")
+        ]
+        todo_lines = [l for l in lines if "TODO" in l.upper() or "FIXME" in l.upper() or "STUB" in l.upper()]
+        if code_lines and len(todo_lines) / max(len(code_lines), 1) > 0.6:
+            issues.append(
+                f"⚠️ VALIDATION: '{fname}' is mostly TODO stubs ({len(todo_lines)} TODO lines vs "
+                f"{len(code_lines)} code lines) — Claude may not have had enough context to fully convert."
+            )
+
+        # 3. Python syntax check — catches malformed generated code early
+        if fname.endswith((".py", ".pyx")) and len(stripped) < 500_000:
+            try:
+                ast.parse(stripped)
+            except SyntaxError as e:
+                issues.append(
+                    f"⚠️ VALIDATION: '{fname}' has a Python syntax error at line {e.lineno}: {e.msg}. "
+                    "The file was saved but will not run without fixing this."
+                )
+
+        # 4. PySpark jobs should reference SparkSession
+        if stack.value in ("PYSPARK", "HYBRID") and fname.endswith(".py"):
+            if "SparkSession" not in content and "spark" not in content.lower()[:2000]:
+                issues.append(
+                    f"⚠️ VALIDATION: '{fname}' appears to be a PySpark job but contains no "
+                    "SparkSession reference — verify the conversion output is complete."
+                )
+
+        # 5. dbt models should have a SELECT or {{ ref(
+        if stack.value == "DBT" and fname.endswith(".sql"):
+            if "select" not in content.lower() and "{{" not in content:
+                issues.append(
+                    f"⚠️ VALIDATION: '{fname}' appears to be a dbt model but contains no SELECT or "
+                    "Jinja block — the model may be empty or malformed."
+                )
+
+    return issues
+
+
 def _build_yaml_artifacts(spr: SessionParseReport) -> dict[str, str]:
     """
     Generate connections.yaml and runtime_config.yaml from Step 0 session data.
@@ -605,6 +665,12 @@ async def convert(
             "Conversion output did not use the expected file delimiter format. "
             "Raw response saved. Re-running the job should resolve this."
         )
+
+    # ── GAP #7 — Claude output content validation ─────────────────────────
+    # Run non-blocking checks on every generated file.  Issues are added to
+    # notes so the reviewer sees them, but they never block the pipeline.
+    _validation_issues = _validate_conversion_files(files, stack)
+    notes.extend(_validation_issues)
 
     # ── v1.1: inject YAML config artifacts if session data is available ─────
     if session_parse_report and session_parse_report.session_config:
