@@ -10,6 +10,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 2026-03-02 — v2.3.3 (Security Rules Expansion + Best Practices Guide)
+
+### Security
+- **5 new standing rules in `security_rules.yaml`** (17 → 21 rules). All injected
+  into every conversion prompt via `build_security_context_block()` — patterns that
+  caused Gate 2 findings will no longer appear in freshly generated code:
+  - `rule_oracle_tls_001` (HIGH): Oracle connections must use TCPS protocol (port 2484,
+    `ssl_server_dn_match: on`), never plain TCP (port 1521). Prevents credential and
+    query data from being transmitted unencrypted.
+  - `rule_log_injection_001` (HIGH): values interpolated into log/error messages must
+    have newlines and control characters stripped before use. Applies to dbt macros,
+    PySpark logging, and Python error strings.
+  - `rule_macro_sql_injection_001` (HIGH): dbt macro parameters used as SQL identifiers
+    must be wrapped with `adapter.quote()`. Never interpolate bare macro arguments
+    into SQL strings or WHERE clauses.
+  - `rule_hardcoded_business_constant_001` (MEDIUM): tax rates, fee percentages,
+    thresholds, and status codes must live in dbt vars / config dicts / env vars —
+    not hardcoded inline. Inline constants are an audit and regulatory change risk.
+
+### Docs
+- **Best Practices Guide — new Security section (Section 9, 6 subsections)**:
+  - 9.1 Secrets & Credentials — `env_var()` rules for profiles.yml, no-default
+    requirement for security-sensitive variables
+  - 9.2 Oracle TCPS — correct vs. incorrect settings table (protocol, port,
+    ssl_server_dn_match)
+  - 9.3 SQL injection in dbt macros — `adapter.quote()`, Jinja in WHERE clauses,
+    hooks with external input
+  - 9.4 Log injection — what the finding means, correct sanitisation pattern with
+    before/after examples
+  - 9.5 Hardcoded business constants — correct config-driven patterns per stack
+    (dbt vars, PySpark CONFIG dict, Python env var)
+  - 9.6 How the Security Knowledge Base evolves (standing rules + auto-learned patterns)
+  - Previous sections 9 and 10 renumbered to 10 and 11
+
+---
+
 ## 2026-03-01 — v2.3.2 (Verification Flag Auto-Handling + Source SQ Fix)
 
 ### Fixed

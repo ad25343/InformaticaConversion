@@ -283,7 +283,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.2.2** | Shipped | Verification decoupled from docs (graph structural + risk checks only); tier-based doc depth (LOW = single pass); Pass 2 no longer re-sends graph JSON (~50% input token reduction); field-level lineage scoped to non-trivial fields only |
 | **v2.3.0** | Shipped | Code review hardening: bcrypt passwords, Claude API retry (exponential backoff), XML input validation, DB indices, `/health` endpoint, pydantic Settings class |
 | **v2.3.1** | Shipped | Error handling: WRONG_FILE_TYPE detection for workflow-in-mapping-slot; empty mapping guard; error message propagation to UI error card; tailored actionable hints for known failure patterns |
-| **v2.3.2** | Current | Verification flag auto-handling: conversion agent addresses all auto-fixable flags in code (pass-through stubs, config extraction, TODO comments, manual stubs); source SQ connectivity false positive fixed |
+| **v2.3.2** | Shipped | Verification flag auto-handling: conversion agent addresses all auto-fixable flags in code (pass-through stubs, config extraction, TODO comments, manual stubs); source SQ connectivity false positive fixed |
+| **v2.3.3** | Current | 5 new security rules (Oracle TCPS, log injection, macro SQL injection, hardcoded business constants) — 17→21 standing rules; Best Practices Guide security section added |
 | **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
 | **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
 
