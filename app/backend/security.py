@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -267,13 +268,21 @@ def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
         )
         return result
 
-    # Write to a temp file so bandit can process it
+    # Write to a temp file so bandit can process it.
+    # mkstemp() + immediate chmod(0o600) ensures the file is owner-read/write only
+    # before any content is written — NamedTemporaryFile defaults to 0o644 (world-readable).
+    tmp_path: str = ""
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".py", mode="w", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(code)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=".py")
+        try:
+            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(code)
+            fd = -1  # ownership transferred to fdopen
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            raise
 
         proc = subprocess.run(
             [sys.executable, "-m", "bandit", "-f", "json", "-q", tmp_path],
@@ -316,7 +325,8 @@ def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
     except Exception as exc:
         result["error"] = f"bandit scan error: {exc}"
     finally:
-        Path(tmp_path).unlink(missing_ok=True) if "tmp_path" in dir() else None
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
     return result
 

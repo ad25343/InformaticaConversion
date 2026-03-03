@@ -14,6 +14,7 @@ from ..models.schemas import (
     ComplexityReport, ComplexityTier, StackAssignment,
     ConversionOutput, TargetStack, ParseReport, SessionParseReport
 )
+from ._client import make_client
 from ..security_knowledge import build_security_context_block
 
 from ..config import settings as _cfg
@@ -77,7 +78,7 @@ def _is_sql_friendly(trans_types: list[str]) -> bool:
 
 async def _get_stack_rationale(stack: TargetStack, complexity: ComplexityReport,
                                 trans_types: list) -> str:
-    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+    client = make_client()
     prompt = (
         f"A mapping has been assigned to {stack.value}.\n"
         f"Complexity tier: {complexity.tier.value}\n"
@@ -594,7 +595,7 @@ async def convert(
                           these take precedence over tool-inferred connections for any
                           ambiguous or unmapped items
     """
-    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+    client = make_client()
     stack = stack_assignment.assigned_stack
 
     system_map = {

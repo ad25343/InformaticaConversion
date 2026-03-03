@@ -23,6 +23,7 @@ Limits are configurable via environment variables (read once at startup):
 Format: "<count>/<unit>"  where unit is second | minute | hour | day
 Examples: "20/minute", "100/hour", "5/minute"
 """
+import asyncio
 import os
 import time
 from collections import defaultdict
@@ -66,25 +67,29 @@ class RateLimiter:
     def __init__(self, limit_str: str) -> None:
         self.max_calls, self.period = _parse(limit_str)
         self._windows: Dict[str, List[float]] = defaultdict(list)
+        # asyncio.Lock prevents two concurrent coroutines from both reading count N,
+        # both passing the < max_calls check, and both appending — bypassing the limit.
+        self._lock = asyncio.Lock()
 
     async def __call__(self, request: Request) -> None:
         ip = request.client.host if request.client else "unknown"
         now = time.monotonic()
 
-        # Sliding window — discard timestamps older than the period
-        window = [t for t in self._windows[ip] if now - t < self.period]
+        async with self._lock:
+            # Sliding window — discard timestamps older than the period
+            window = [t for t in self._windows[ip] if now - t < self.period]
 
-        if len(window) >= self.max_calls:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Rate limit exceeded — maximum {self.max_calls} requests "
-                    f"per {self.period}s from this IP. Please wait and retry."
-                ),
-            )
+            if len(window) >= self.max_calls:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Rate limit exceeded — maximum {self.max_calls} requests "
+                        f"per {self.period}s from this IP. Please wait and retry."
+                    ),
+                )
 
-        window.append(now)
-        self._windows[ip] = window
+            window.append(now)
+            self._windows[ip] = window
 
 
 # ── Singleton instances ───────────────────────────────────────────────────────

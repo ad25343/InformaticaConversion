@@ -42,12 +42,22 @@ async def lifespan(app: FastAPI):
     configure_app_logging(log_level)
     await init_db()
 
-    # ── Security startup warnings ──────────────────────────────────────────
+    # ── Security startup guards ────────────────────────────────────────────
     if SECRET_KEY == "change-me-in-production-please":
-        _startup_log.warning(
-            "SECURITY WARNING: SECRET_KEY is set to the default insecure value. "
-            "Set a strong random SECRET_KEY in your .env before deploying to production."
-        )
+        if _cfg.app_password:
+            # APP_PASSWORD is set → this is a real deployment. Hard-fail so the
+            # operator cannot accidentally ship with a token-forgeable secret key.
+            raise RuntimeError(
+                "FATAL: SECRET_KEY is the default insecure placeholder while "
+                "APP_PASSWORD is set (production mode). Generate a strong key with:\n"
+                "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+                "and set SECRET_KEY in your .env file. Refusing to start."
+            )
+        else:
+            _startup_log.warning(
+                "SECURITY WARNING: SECRET_KEY is the default insecure value. "
+                "Set a strong random SECRET_KEY in your .env before any non-local deployment."
+            )
     if not _cfg.app_password:
         _startup_log.warning(
             "SECURITY WARNING: APP_PASSWORD is not set. "
@@ -70,7 +80,7 @@ async def lifespan(app: FastAPI):
             len(recovered),
         )
 
-    # ── GAP #13 — Model deprecation check ────────────────────────────────
+    # ── GAP #13 — Model deprecation + API key check ───────────────────────
     try:
         import anthropic as _anthropic
         _probe = _anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
@@ -84,17 +94,41 @@ async def lifespan(app: FastAPI):
             "to a current model string. All jobs will fail until this is fixed.",
             _cfg.claude_model,
         )
-    except Exception:
-        pass  # network / auth errors are non-fatal at startup
+    except _anthropic.AuthenticationError:
+        _startup_log.error(
+            "API KEY INVALID: Anthropic rejected the key in ANTHROPIC_API_KEY. "
+            "All jobs will fail until a valid key is provided in .env."
+        )
+    except _anthropic.PermissionDeniedError:
+        _startup_log.error(
+            "API PERMISSION DENIED: the configured API key lacks required access. "
+            "All jobs will fail until key permissions are corrected."
+        )
+    except Exception as _probe_exc:
+        # Genuine network/rate-limit/timeout — non-fatal; will surface on first job
+        _startup_log.warning(
+            "Startup API probe inconclusive (%s: %s) — will retry on first job.",
+            type(_probe_exc).__name__, str(_probe_exc)[:120],
+        )
 
     # ── Start background job cleanup loop ─────────────────────────────────
-    asyncio.create_task(run_cleanup_loop())
+    _bg_cleanup = asyncio.create_task(run_cleanup_loop())
+    _bg_cleanup.set_name("cleanup_loop")
 
     # ── GAP #16 — Start stuck-job timeout watchdog ────────────────────────
-    asyncio.create_task(run_watchdog_loop())
+    _bg_watchdog = asyncio.create_task(run_watchdog_loop())
+    _bg_watchdog.set_name("watchdog_loop")
+
+    _bg_tasks = [_bg_cleanup, _bg_watchdog]
 
     # ── GAP #15 — Graceful shutdown ───────────────────────────────────────
     yield
+
+    # Cancel background loops
+    for _bg in _bg_tasks:
+        _bg.cancel()
+    await asyncio.gather(*_bg_tasks, return_exceptions=True)
+    _startup_log.info("Shutdown: background loops cancelled.")
 
     # Cancel any in-flight pipeline tasks so they don't outlive the process
     from backend.routes import _active_tasks
@@ -102,15 +136,14 @@ async def lifespan(app: FastAPI):
         _startup_log.info("Shutdown: cancelling %d active pipeline task(s)…", len(_active_tasks))
         for _task in list(_active_tasks.values()):
             _task.cancel()
-        import asyncio as _asyncio
-        await _asyncio.gather(*_active_tasks.values(), return_exceptions=True)
+        await asyncio.gather(*_active_tasks.values(), return_exceptions=True)
         _startup_log.info("Shutdown: all pipeline tasks cancelled.")
 
 
 app = FastAPI(
     title="Informatica Conversion Tool",
     description="Converts Informatica PowerCenter mappings to Python, PySpark, or dbt",
-    version="1.1.0",
+    version="2.6.1",
     lifespan=lifespan,
     # Hide docs behind auth in production — set SHOW_DOCS=false in .env
     docs_url="/docs" if _cfg.show_docs else None,
@@ -133,6 +166,9 @@ if _allowed_origins:
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
+    _startup_log.info("CORS enabled for origins: %s", _allowed_origins)
+else:
+    _startup_log.info("CORS: same-origin only (CORS_ORIGINS not set; no cross-origin headers emitted)")
 
 # ── Static files (always public — just CSS/JS assets) ────
 static_dir = Path(__file__).parent / "frontend" / "static"

@@ -37,6 +37,7 @@ from ..models.schemas import (
     SecurityScanReport,
 )
 from ..security import scan_python_with_bandit, scan_yaml_for_secrets
+from ._client import make_sync_client
 
 log = logging.getLogger("conversion.security_agent")
 
@@ -357,7 +358,7 @@ async def scan(
         prompt = _SECURITY_PROMPT.format(stack=stack, files_section=files_section)
 
         try:
-            client = anthropic.Anthropic()
+            client = make_sync_client()
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=2048,
@@ -402,9 +403,16 @@ async def scan(
     else:
         recommendation = "APPROVED"
 
+    # ── Audit-grade logging: one structured line per finding for grep/SIEM ─────
+    for _f in all_findings:
+        log.info(
+            "SECURITY_FINDING mapping=%s file=%s severity=%s tool=%s test=%s line=%s — %s",
+            name, _f.filename, _f.severity, _f.tool, _f.test_id, _f.line, _f.text[:120],
+        )
     log.info(
-        "security_agent: done — critical=%d high=%d medium=%d low=%d recommendation=%s",
-        critical_count, high_count, medium_count, low_count, recommendation,
+        "SECURITY_DECISION mapping=%s recommendation=%s "
+        "critical=%d high=%d medium=%d low=%d",
+        name, recommendation, critical_count, high_count, medium_count, low_count,
     )
 
     return SecurityScanReport(

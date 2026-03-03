@@ -6,8 +6,11 @@ to logs/jobs/<job_id>.log (one JSON line per event).
 """
 from __future__ import annotations
 import asyncio
+import logging as _logging
 import traceback
 from typing import AsyncGenerator
+
+_orch_log = _logging.getLogger("conversion.orchestrator")
 
 from .db.database import get_xml, get_session_files, update_job
 from .db import database as _db
@@ -41,7 +44,15 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
         patch["pipeline_log"] = log.get_buffer()
-        await update_job(job_id, status.value, step, patch)
+        try:
+            await update_job(job_id, status.value, step, patch)
+        except Exception as _db_exc:
+            # DB write failed — log it but still return the SSE event so the
+            # client receives the status update even if persistence failed.
+            _orch_log.error(
+                "emit() DB write failed (job=%s step=%d status=%s): %s",
+                job_id, step, status.value, _db_exc,
+            )
         return {"step": step, "status": status.value, "message": message}
 
     # ── STEP 0 — SESSION & PARAMETER PARSE (v1.1) ─────────────
@@ -453,7 +464,15 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
         patch["pipeline_log"] = log.get_buffer()
-        await update_job(job_id, status.value, step, patch)
+        try:
+            await update_job(job_id, status.value, step, patch)
+        except Exception as _db_exc:
+            # DB write failed — log it but still return the SSE event so the
+            # client receives the status update even if persistence failed.
+            _orch_log.error(
+                "emit() DB write failed (job=%s step=%d status=%s): %s",
+                job_id, step, status.value, _db_exc,
+            )
         return {"step": step, "status": status.value, "message": message}
 
     import copy
@@ -861,7 +880,15 @@ async def resume_after_security_fix_request(
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
         patch["pipeline_log"] = log.get_buffer()
-        await update_job(job_id, status.value, step, patch)
+        try:
+            await update_job(job_id, status.value, step, patch)
+        except Exception as _db_exc:
+            # DB write failed — log it but still return the SSE event so the
+            # client receives the status update even if persistence failed.
+            _orch_log.error(
+                "emit() DB write failed (job=%s step=%d status=%s): %s",
+                job_id, step, status.value, _db_exc,
+            )
         return {"step": step, "status": status.value, "message": message}
 
     import copy
@@ -1082,7 +1109,15 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
         patch["pipeline_log"] = log.get_buffer()
-        await update_job(job_id, status.value, step, patch)
+        try:
+            await update_job(job_id, status.value, step, patch)
+        except Exception as _db_exc:
+            # DB write failed — log it but still return the SSE event so the
+            # client receives the status update even if persistence failed.
+            _orch_log.error(
+                "emit() DB write failed (job=%s step=%d status=%s): %s",
+                job_id, step, status.value, _db_exc,
+            )
         return {"step": step, "status": status.value, "message": message}
 
     import copy
@@ -1287,7 +1322,15 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
         patch["pipeline_log"] = log.get_buffer()
-        await update_job(job_id, status.value, step, patch)
+        try:
+            await update_job(job_id, status.value, step, patch)
+        except Exception as _db_exc:
+            # DB write failed — log it but still return the SSE event so the
+            # client receives the status update even if persistence failed.
+            _orch_log.error(
+                "emit() DB write failed (job=%s step=%d status=%s): %s",
+                job_id, step, status.value, _db_exc,
+            )
         return {"step": step, "status": status.value, "message": message}
 
     code_signoff = state.get("code_sign_off", {})

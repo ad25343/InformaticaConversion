@@ -6,6 +6,9 @@ import asyncio
 import json
 import logging
 import os
+import re
+import time
+import uuid as _uuid_mod
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, BackgroundTasks, Form, Request
@@ -32,8 +35,56 @@ from .job_exporter import build_output_zip
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
-_ROUTE_START_TIME = __import__("time").monotonic()
-_VERSION = "2.4.9"
+_ROUTE_START_TIME = time.monotonic()
+_VERSION = "2.6.1"
+
+# ── Security helpers ────────────────────────────────────────────────────────
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+# Allowed MIME types for file uploads (enforced in addition to extension checks)
+_ALLOWED_XML_CONTENT_TYPES = {
+    "text/xml", "application/xml", "text/plain",
+    "application/octet-stream",   # some clients send this for .xml
+}
+_ALLOWED_ZIP_CONTENT_TYPES = {
+    "application/zip", "application/x-zip-compressed",
+    "application/octet-stream",
+}
+
+
+def _validate_job_id(job_id: str) -> str:
+    """FastAPI dependency — raise 400 if job_id is not a valid UUID.
+
+    Prevents path-traversal/injection attacks using crafted job_id strings.
+    Usage: job_id: str
+    """
+    if not _UUID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id format.")
+    return job_id
+
+
+def _validate_xml_content_type(upload: UploadFile) -> None:
+    """Reject uploads whose declared content-type is clearly not XML/text."""
+    ct = (upload.content_type or "").split(";")[0].strip().lower()
+    if ct and ct not in _ALLOWED_XML_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported content type '{ct}' — expected XML or plain text.",
+        )
+
+
+def _validate_zip_content_type(upload: UploadFile) -> None:
+    """Reject uploads whose declared content-type is clearly not a ZIP archive."""
+    ct = (upload.content_type or "").split(";")[0].strip().lower()
+    if ct and ct not in _ALLOWED_ZIP_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported content type '{ct}' — expected a ZIP archive.",
+        )
 
 # ── Active pipeline tasks (in-memory for MVP) ─────
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -97,6 +148,7 @@ async def create_job(
     """
     if not file.filename.lower().endswith(".xml"):
         raise HTTPException(400, "Mapping file must be a .xml Informatica export")
+    _validate_xml_content_type(file)
 
     mapping_content = await file.read()
     validate_upload_size(mapping_content, label=file.filename)
@@ -167,6 +219,7 @@ async def stream_progress(job_id: str):
     """Server-Sent Events stream for real-time pipeline progress."""
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -232,6 +285,7 @@ async def delete_job(job_id: str):
 
     flagged = await db.delete_job(job_id)
     if not flagged:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found or already deleted")
 
     # S2T Excel is an intermediate artefact — still clean it up.
@@ -252,6 +306,7 @@ async def delete_job(job_id: str):
 async def get_job(job_id: str):
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     return {
         "job_id":       job["job_id"],
@@ -277,6 +332,7 @@ async def get_job_logs(job_id: str, format: str = "json"):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     entries = read_job_log(job_id)
@@ -305,6 +361,7 @@ async def download_job_log(job_id: str):
     """Download the raw JSONL log file for a job (meaningful filename)."""
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     path = job_log_path(job_id)
@@ -368,6 +425,7 @@ async def get_history_log(job_id: str):
     from .logger import read_job_log, job_log_path
     path = job_log_path(job_id)
     if not path:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Log file not found")
     entries = read_job_log(job_id)
     return JSONResponse({"job_id": job_id, "entries": entries, "count": len(entries)})
@@ -382,6 +440,7 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
     """Submit human review decision. If APPROVED, resumes pipeline."""
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     if job["status"] != JobStatus.AWAITING_REVIEW.value:
         raise HTTPException(400, f"Job is not awaiting review (status: {job['status']})")
@@ -452,6 +511,7 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     if job["status"] != JobStatus.AWAITING_SEC_REVIEW.value:
         raise HTTPException(400, f"Job is not awaiting security review (status: {job['status']})")
@@ -572,6 +632,7 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     if job["status"] != JobStatus.AWAITING_CODE_REVIEW.value:
         raise HTTPException(400, f"Job is not awaiting code review (status: {job['status']})")
@@ -649,6 +710,7 @@ async def get_job_audit(job_id: str):
     """Return all gate-decision audit entries for a job, oldest first.
 
     Each entry contains: audit_id, gate (gate1/gate2/gate3), event_type,
+    _validate_job_id(job_id)
     reviewer_name, reviewer_role, decision, notes, extra, created_at.
     """
     job = await db.get_job(job_id)
@@ -667,6 +729,7 @@ async def download_s2t_excel(job_id: str):
     """Download the Source-to-Target mapping Excel workbook for a job."""
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     path = s2t_excel_path(job_id)
@@ -690,6 +753,7 @@ async def download_manifest_xlsx(job_id: str):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     graph = job.get("state", {}).get("graph")
     if not graph:
@@ -722,6 +786,7 @@ async def upload_manifest_overrides(job_id: str, file: UploadFile = File(...)):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     if job["status"] != JobStatus.AWAITING_REVIEW.value:
@@ -785,6 +850,7 @@ async def upload_manifest_overrides(job_id: str, file: UploadFile = File(...)):
 async def download_file(job_id: str, filename: str):
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     conversion = job["state"].get("conversion", {})
     files = conversion.get("files", {})
@@ -809,6 +875,7 @@ async def download_test_file(job_id: str, filename: str):
     """Download a generated test file by path (e.g. tests/test_conversion.py)."""
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
     test_report = job["state"].get("test_report", {})
     files = test_report.get("test_files", {})
@@ -835,6 +902,7 @@ async def download_output_zip(job_id: str):
     """
     job = await db.get_job(job_id)
     if not job:
+        _validate_job_id(job_id)
         raise HTTPException(404, "Job not found")
 
     state = job.get("state", {})
@@ -884,6 +952,7 @@ async def create_job_from_zip(
     if not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "File must be a .zip archive")
 
+    _validate_zip_content_type(file)
     zip_bytes = await file.read()
     validate_upload_size(zip_bytes, label=file.filename)
 

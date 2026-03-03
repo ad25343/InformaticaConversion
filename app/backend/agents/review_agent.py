@@ -29,6 +29,7 @@ from ..models.schemas import (
     LogicEquivalenceCheck, LogicEquivalenceReport,
     ConversionOutput, ParseReport, VerificationReport,
 )
+from ._client import make_client
 
 from ..config import settings as _cfg
 MODEL = _cfg.claude_model
@@ -310,7 +311,7 @@ async def review(
     parse_report: ParseReport,
     xml_content: str = "",   # v1.3 — original Informatica XML for equivalence check
 ) -> CodeReviewReport:
-    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+    client = make_client()
 
     # Stage A — Logic Equivalence (runs when xml_content is available)
     equivalence_report: LogicEquivalenceReport | None = None

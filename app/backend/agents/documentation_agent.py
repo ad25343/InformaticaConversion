@@ -32,6 +32,7 @@ import anthropic
 
 from typing import Optional
 from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport, SessionParseReport
+from ._client import make_client
 
 log = logging.getLogger("conversion.documentation_agent")
 
@@ -39,7 +40,7 @@ from ..config import settings as _cfg
 MODEL = _cfg.claude_model
 
 _DOC_MAX_TOKENS       = 64_000
-_EXTENDED_OUTPUT_BETA = "output-128k-2025-02-19"
+_EXTENDED_OUTPUT_BETA = getattr(_cfg, "extended_output_beta", "output-128k-2025-02-19")
 
 # Sentinel appended to the markdown when Claude hit the token limit on either pass.
 # The orchestrator checks for this before advancing to Step 4 and fails the job
@@ -284,7 +285,7 @@ async def document(
       DOC_COMPLETE_SENTINEL    — completed without truncation; safe to advance
       DOC_TRUNCATION_SENTINEL  — hit the token limit; orchestrator injects a warning flag
     """
-    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+    client = make_client()
 
     parse_summary = (
         f"Parse Status: {parse_report.parse_status}\n"

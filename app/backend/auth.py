@@ -3,8 +3,9 @@ Simple session-based authentication.
 Password is set via APP_PASSWORD in .env.
 Sessions are signed cookies using itsdangerous.
 
-Password hashing uses bcrypt (work factor 12) — bcrypt is deliberately slow
-so brute-force attacks are computationally expensive even if the hash leaks.
+Password hashing uses bcrypt — bcrypt is deliberately slow so brute-force
+attacks are computationally expensive even if the hash leaks.
+Work factor is configurable via BCRYPT_ROUNDS (default: 12 ≈ 250ms).
 """
 from __future__ import annotations
 import bcrypt
@@ -25,7 +26,7 @@ _signer = URLSafeTimedSerializer(SECRET_KEY)
 # Hash the app password once at startup.  bcrypt.hashpw() is called only here;
 # subsequent checks use bcrypt.checkpw() which is safe against timing attacks.
 _APP_PASSWORD_HASH: bytes | None = (
-    bcrypt.hashpw(APP_PASSWORD.encode(), bcrypt.gensalt(rounds=12))
+    bcrypt.hashpw(APP_PASSWORD.encode(), bcrypt.gensalt(rounds=settings.bcrypt_rounds))
     if APP_PASSWORD else None
 )
 

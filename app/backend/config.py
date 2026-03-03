@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     app_password: str = ""
     secret_key: str = "change-me-in-production-please"
     session_hours: int = 8
+    bcrypt_rounds: int = 12   # work factor for bcrypt password hashing (12 ≈ 250ms)
 
     # ── Server ──────────────────────────────────────────────────────────────
     host: str = "0.0.0.0"
@@ -74,6 +75,12 @@ class Settings(BaseSettings):
     doc_max_tokens_override: int | None = None
     # Hard timeout (seconds) for the verification Claude call.
     verify_timeout_secs: int = 300
+    # Hard timeout (seconds) applied to every Claude API call in all agents.
+    # Prevents pipelines from stalling indefinitely when the Anthropic API hangs.
+    agent_timeout_secs: int = 300
+    # Anthropic beta header for extended output (documentation agent).
+    # Update when Anthropic promotes a newer beta.
+    extended_output_beta: str = "output-128k-2025-02-19"
 
 
 # Single shared instance — imported by all modules

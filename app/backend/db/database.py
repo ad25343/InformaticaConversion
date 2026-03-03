@@ -3,6 +3,7 @@ SQLite database layer — stores job state as JSON blobs.
 Simple and portable for MVP. Swap to Postgres by changing DATABASE_URL.
 """
 import json
+import logging
 import uuid
 import zlib
 import base64
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Optional, List
 
 import aiosqlite
+
+_db_log = logging.getLogger("conversion.db")
 
 # ── State compression ────────────────────────────────────────────────────────
 # state_json is stored as either:
@@ -33,13 +36,25 @@ def _encode_state(state: dict) -> str:
 
 
 def _decode_state(stored: str) -> dict:
-    """Deserialize state — handles both compressed and legacy plain-JSON formats."""
+    """Deserialize state — handles both compressed and legacy plain-JSON formats.
+
+    Returns an empty dict rather than raising on corrupted data so a single
+    bad row cannot crash a list-jobs call or pipeline query.
+    """
     if not stored:
         return {}
-    if stored.startswith(_COMPRESS_PREFIX):
-        compressed = base64.b64decode(stored[len(_COMPRESS_PREFIX):])
-        return json.loads(zlib.decompress(compressed).decode())
-    return json.loads(stored)   # legacy plain JSON
+    try:
+        if stored.startswith(_COMPRESS_PREFIX):
+            compressed = base64.b64decode(stored[len(_COMPRESS_PREFIX):])
+            return json.loads(zlib.decompress(compressed).decode())
+        return json.loads(stored)   # legacy plain JSON
+    except Exception as exc:
+        _db_log.error(
+            "State deserialization failed (returning {}). "
+            "Stored value prefix: %.80r — error: %s",
+            stored, exc,
+        )
+        return {}
 
 import os  # noqa: F401  kept for backward-compat imports elsewhere
 from ..config import settings as _cfg
@@ -145,7 +160,16 @@ async def init_db():
         # WAL allows concurrent reads alongside a single writer, eliminating
         # the "database is locked" errors that batches hit in journal mode.
         # synchronous=NORMAL is safe with WAL (no data loss on OS crash).
-        await db.execute("PRAGMA journal_mode=WAL")
+        async with db.execute("PRAGMA journal_mode=WAL") as _cur:
+            _row = await _cur.fetchone()
+            _mode = _row[0].lower() if _row else "unknown"
+            if _mode != "wal":
+                _db_log.warning(
+                    "SQLite WAL mode requested but journal_mode='%s'. "
+                    "DB may be on NFS/tmpfs/cloud FS — WAL is unsupported there. "
+                    "Concurrent write contention will use the fallback locking mode.",
+                    _mode,
+                )
         await db.execute("PRAGMA synchronous=NORMAL")
 
         await db.execute(CREATE_TABLE)

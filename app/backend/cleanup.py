@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-from .db.database import DB_PATH
+from .db.database import DB_PATH, _connect
 from .logger import job_log_path
 from .agents.s2t_agent import s2t_excel_path
 
@@ -42,7 +42,7 @@ async def cleanup_old_jobs() -> dict[str, int]:
     ).isoformat()
 
     # ── Collect job IDs to delete ───────────────────────────────────────────
-    async with aiosqlite.connect(DB_PATH) as conn:
+    async with _connect() as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
             "SELECT job_id FROM jobs WHERE created_at < ?", (cutoff,)
@@ -67,10 +67,14 @@ async def cleanup_old_jobs() -> dict[str, int]:
                     log.warning("Could not delete file for job %s: %s", job_id, exc)
 
     # ── Delete rows from DB ─────────────────────────────────────────────────
-    async with aiosqlite.connect(DB_PATH) as conn:
+    # Defensive: job_ids is already checked above, but guard again to prevent
+    # "IN ()" invalid SQL if the list somehow becomes empty before this point.
+    if not job_ids:
+        return {"deleted_jobs": 0, "deleted_files": deleted_files}
+    async with _connect() as conn:
         placeholders = ",".join("?" * len(job_ids))
         await conn.execute(
-            f"DELETE FROM jobs WHERE job_id IN ({placeholders})", job_ids
+            f"DELETE FROM jobs WHERE job_id IN ({placeholders})", tuple(job_ids)
         )
         await conn.commit()
 
@@ -114,13 +118,11 @@ WATCHDOG_POLL_SECONDS = 60   # check every minute
 async def _watchdog_tick() -> int:
     """Mark jobs stuck in active statuses for longer than the timeout as FAILED.
     Returns the number of jobs timed out."""
-    from .db.database import DB_PATH
-    import aiosqlite
     from datetime import datetime, timedelta
 
     cutoff = (datetime.utcnow() - timedelta(minutes=STUCK_JOB_TIMEOUT_MINUTES)).isoformat()
     timed_out = 0
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
         async with db.execute(

@@ -15,8 +15,9 @@ import anthropic
 from typing import Optional
 from ..models.schemas import (
     VerificationReport, VerificationFlag, CheckResult,
-    ComplexityTier, ComplexityReport, ParseReport, SessionParseReport
+    ComplexityTier, ComplexityReport, ParseReport, SessionParseReport,
 )
+from ._client import make_client
 
 from ..config import settings as _cfg
 MODEL = _cfg.claude_model
@@ -744,7 +745,7 @@ async def _run_claude_quality_checks(
     conversion risks: hardcoded values, high-risk logic, ambiguous expressions, dead
     logic, and incomplete conditionals — all detectable from the raw graph data.
     """
-    client = anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
+    client = make_client()
 
     expr_input_note = ""
     if expr_input_ports:
