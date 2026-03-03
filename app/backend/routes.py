@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
 _ROUTE_START_TIME = __import__("time").monotonic()
-_VERSION = "2.2.2"
+_VERSION = "2.4.9"
 
 # ── Active pipeline tasks (in-memory for MVP) ─────
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -979,11 +979,34 @@ async def create_batch_jobs(
         job_entries.append({"job_id": job_id, "filename": mapping_fname, "parsed": parsed})
 
     # Launch all pipelines concurrently (semaphore caps at 3 in-flight)
+    # GAP #8 — Wrap in try/except/finally so the sentinel is always placed on the
+    # queue even when the async generator or the semaphore acquisition itself raises.
+    # Without this, an unexpected exception would leave the SSE stream hanging
+    # indefinitely and the task exception would be silently discarded by asyncio.
     async def _run_with_semaphore(j_id: str, fname: str):
-        async with _batch_semaphore:
-            async for progress in orchestrator.run_pipeline(j_id, fname):
-                await _progress_queues[j_id].put(progress)
-            await _progress_queues[j_id].put(None)  # sentinel
+        try:
+            async with _batch_semaphore:
+                async for progress in orchestrator.run_pipeline(j_id, fname):
+                    await _progress_queues[j_id].put(progress)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Batch pipeline crashed unexpectedly: job_id=%s error=%s",
+                j_id, exc, exc_info=True,
+            )
+            # Mark the job FAILED in the DB so the batch status rolls up correctly.
+            try:
+                await db.update_job(j_id, JobStatus.FAILED.value, -1,
+                                    {"error": f"Batch runner crashed: {exc}"})
+            except Exception:  # pragma: no cover
+                logger.exception("Failed to mark crashed batch job as FAILED: job_id=%s", j_id)
+            # Push a synthetic FAILED progress event so any open SSE stream closes cleanly.
+            await _progress_queues[j_id].put(
+                {"step": -1, "status": JobStatus.FAILED.value,
+                 "message": f"Pipeline crashed: {exc}"}
+            )
+        finally:
+            # Sentinel always placed — closes the SSE generator regardless of outcome.
+            await _progress_queues[j_id].put(None)
 
     for entry in job_entries:
         task = asyncio.create_task(

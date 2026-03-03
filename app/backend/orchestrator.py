@@ -941,6 +941,16 @@ async def resume_after_security_fix_request(
             if f.flag_type in actionable_flag_types
         ]
 
+    # Extract manifest overrides from state if present (from reviewer feedback)
+    manifest_overrides: list[dict] | None = None
+    _manifest_overrides_raw = state.get("manifest_overrides")
+    if _manifest_overrides_raw:
+        manifest_overrides = _manifest_overrides_raw
+        log.info(
+            f"Applying {len(manifest_overrides)} manifest override(s) from reviewer",
+            step=7,
+        )
+
     try:
         conversion_output = await conversion_agent.convert(
             stack_assignment,
