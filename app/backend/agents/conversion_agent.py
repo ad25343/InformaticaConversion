@@ -121,12 +121,26 @@ PYSPARK_SYSTEM = """You are a senior data engineer converting Informatica PowerC
 Rules:
 - Work ONLY from the documentation provided — never invent logic not documented there
 - Use DataFrame API only (no RDD)
-- Define schema explicitly — no inferred schemas
-- Use native Spark functions — UDFs only as last resort, document why
-- Add structured logging (row counts) at each major step
-- Externalize all hardcoded env-specific values to a config dict at the top
+- Define schema explicitly using StructType / StructField — no inferred schemas
+- Use native Spark functions (pyspark.sql.functions as F) — UDFs only as last resort; if used, document why
+- Column references: always use F.col("name") — never string-only access in expressions
+- Add structured logging (row counts) at each major step: logger.info("After <step>: %d rows", df.count())
+- Externalize ALL hardcoded env-specific values to a config dict at the top of the file
 - Add inline comments for every business rule
-- Where no direct Spark equivalent exists, comment the design decision
+
+Informatica-to-PySpark pattern guide (apply where relevant):
+- LOOKUP transformation → use broadcast join for small lookup tables (< 100 MB):
+    df.join(F.broadcast(lookup_df), on=join_key, how="left")
+- AGGREGATOR transformation → use groupBy().agg()
+- SORTER transformation → use orderBy()
+- ROUTER transformation → split into multiple filtered DataFrames with .filter()
+- JOINER transformation → use .join() with appropriate join type
+- SCD Type 2 → use Window functions:
+    w = Window.partitionBy("natural_key").orderBy(F.desc("effective_date"))
+    df.withColumn("rank", F.row_number().over(w)).filter(F.col("rank") == 1)
+- UNION transformation → use unionByName(allowMissingColumns=True)
+- Sequence generator → use F.monotonically_increasing_id() or row_number() over an ordered window
+
 - Output complete, runnable Python files
 """ + _DW_AUDIT_RULES
 
@@ -142,6 +156,18 @@ Rules:
 - Define sources in sources.yml (required)
 - Add tests only for primary keys and not-null on critical fields — keep schema YMLs lean
 - Combine all model schema docs into a single schema.yml per folder rather than one YML per model
+
+Informatica-to-dbt pattern guide (apply where relevant):
+- Large target tables that load incrementally → use incremental materialisation:
+    {{ config(materialized='incremental', unique_key='<pk_column>') }}
+    {% if is_incremental() %} WHERE updated_at > (SELECT MAX(updated_at) FROM {{ this }}) {% endif %}
+- Surrogate key generation (replaces Informatica sequence generators):
+    {{ dbt_utils.generate_surrogate_key(['col1', 'col2']) }} AS surrogate_key
+- SCD Type 2 → use dbt snapshots (dbt_project/snapshots/) with strategy: timestamp or check
+- LOOKUP transformation → use a ref() join to the lookup model; never hardcode lookup values inline
+- ROUTER transformation → use separate CTEs or models with explicit WHERE filters
+- Reusable expression logic → extract to a dbt macro in macros/
+
 - Output complete, runnable SQL model files
 """ + _DW_AUDIT_RULES
 
@@ -149,12 +175,25 @@ PYTHON_SYSTEM = """You are a senior data engineer converting Informatica PowerCe
 
 Rules:
 - Work ONLY from the documentation provided — never invent logic not documented there
-- One function per logical transformation step
-- Functions must be independently testable
-- Add type hints to all functions
-- Structured JSON logging
-- Externalize config — no hardcoded values
-- Use chunked reading for larger files
+- One function per logical transformation step; functions must be independently testable
+- Add type hints to all functions and return values
+- Structured JSON logging at each step with row counts
+- Externalize ALL config — no hardcoded values; use a CONFIG dict or config file
+- Use context managers for all DB/file connections (with statement — ensures cleanup)
+- Use try/finally blocks around any resource acquisition not covered by context managers
+- Use chunked reading for large files: pd.read_csv(..., chunksize=50_000)
+- Use pyarrow-backed dtypes where available for memory efficiency (dtype_backend="pyarrow")
+
+Informatica-to-Pandas pattern guide (apply where relevant):
+- LOOKUP transformation → use pd.merge(..., how="left") on the key fields
+- AGGREGATOR transformation → use groupby().agg()
+- SORTER transformation → use sort_values()
+- ROUTER transformation → split into filtered DataFrames with boolean masks
+- JOINER transformation → use pd.merge() with appropriate how parameter
+- SCD Type 2 → use sort + drop_duplicates with keep="first" after ordering by effective date
+- UNION transformation → use pd.concat([df1, df2], ignore_index=True)
+- Sequence generator → use df.reset_index(drop=True).index + start_value
+
 - Output complete, runnable Python files
 """ + _DW_AUDIT_RULES
 
@@ -337,62 +376,92 @@ def _build_manifest_override_section(overrides: list[dict]) -> str:
     )
 
 
-def _validate_conversion_files(files: dict[str, str], stack) -> list[str]:
+def _validate_conversion_files(
+    files: dict[str, str],
+    stack,
+    _cache: dict | None = None,
+) -> list[str]:
     """
     GAP #7 — Non-blocking content validation of Claude-generated files.
     Returns a list of warning strings (empty = all clean).
+
+    v2.6.0 scale improvements:
+    - Optional _cache dict keyed by hash(content) → issues list.  Re-used
+      across remediation rounds so unchanged files are never re-validated.
+    - TODO ratio check now skips files > 150 KB (pathological edge case).
+    - dbt SELECT check uses content[:5000] instead of full content.lower().
+    - SparkSession check already scoped to content[:2000] (unchanged).
     """
     import ast
+    import hashlib
+
+    if _cache is None:
+        _cache = {}
+
     issues: list[str] = []
 
     for fname, content in files.items():
+        # ── Cache check: skip re-validating content we've already seen ────
+        _key = hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+        if _key in _cache:
+            issues.extend(_cache[_key])
+            continue
+
+        file_issues: list[str] = []
         stripped = content.strip()
 
         # 1. Empty file
         if not stripped:
-            issues.append(
+            file_issues.append(
                 f"⚠️ VALIDATION: '{fname}' is empty — Claude may have failed to generate content."
             )
+            _cache[_key] = file_issues
+            issues.extend(file_issues)
             continue
 
-        # 2. Placeholder-only file — mostly TODOs with very little real code
-        lines = [l.strip() for l in stripped.splitlines() if l.strip()]
-        code_lines = [
-            l for l in lines
-            if l and not l.startswith("#") and not l.startswith('"""') and not l.startswith("'''")
-        ]
-        todo_lines = [l for l in lines if "TODO" in l.upper() or "FIXME" in l.upper() or "STUB" in l.upper()]
-        if code_lines and len(todo_lines) / max(len(code_lines), 1) > 0.6:
-            issues.append(
-                f"⚠️ VALIDATION: '{fname}' is mostly TODO stubs ({len(todo_lines)} TODO lines vs "
-                f"{len(code_lines)} code lines) — Claude may not have had enough context to fully convert."
-            )
+        # 2. Placeholder-only file — skip for very large files (> 150 KB)
+        if len(stripped) <= 150_000:
+            lines = [l.strip() for l in stripped.splitlines() if l.strip()]
+            code_lines = [
+                l for l in lines
+                if l and not l.startswith("#") and not l.startswith('"""') and not l.startswith("'''")
+            ]
+            todo_lines = [l for l in lines if "TODO" in l.upper() or "FIXME" in l.upper() or "STUB" in l.upper()]
+            if code_lines and len(todo_lines) / max(len(code_lines), 1) > 0.6:
+                file_issues.append(
+                    f"⚠️ VALIDATION: '{fname}' is mostly TODO stubs ({len(todo_lines)} TODO lines vs "
+                    f"{len(code_lines)} code lines) — Claude may not have had enough context to fully convert."
+                )
 
-        # 3. Python syntax check — catches malformed generated code early
+        # 3. Python syntax check (size-guarded at 500 KB — unchanged)
         if fname.endswith((".py", ".pyx")) and len(stripped) < 500_000:
             try:
                 ast.parse(stripped)
             except SyntaxError as e:
-                issues.append(
+                file_issues.append(
                     f"⚠️ VALIDATION: '{fname}' has a Python syntax error at line {e.lineno}: {e.msg}. "
                     "The file was saved but will not run without fixing this."
                 )
 
-        # 4. PySpark jobs should reference SparkSession
+        # 4. PySpark jobs should reference SparkSession (scoped to first 2 KB)
         if stack.value in ("PYSPARK", "HYBRID") and fname.endswith(".py"):
             if "SparkSession" not in content and "spark" not in content.lower()[:2000]:
-                issues.append(
+                file_issues.append(
                     f"⚠️ VALIDATION: '{fname}' appears to be a PySpark job but contains no "
                     "SparkSession reference — verify the conversion output is complete."
                 )
 
-        # 5. dbt models should have a SELECT or {{ ref(
+        # 5. dbt models should have a SELECT or {{ ref( (scoped to first 5 KB)
         if stack.value == "DBT" and fname.endswith(".sql"):
-            if "select" not in content.lower() and "{{" not in content:
-                issues.append(
+            head = content[:5000].lower()
+            if "select" not in head and "{{" not in content[:5000]:
+                file_issues.append(
                     f"⚠️ VALIDATION: '{fname}' appears to be a dbt model but contains no SELECT or "
                     "Jinja block — the model may be empty or malformed."
                 )
+
+        _cache[_key] = file_issues
+        issues.extend(file_issues)
 
     return issues
 

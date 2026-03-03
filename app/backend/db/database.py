@@ -6,6 +6,7 @@ import json
 import uuid
 import zlib
 import base64
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -48,6 +49,18 @@ _default_db = Path(__file__).parent.parent.parent / "data" / "jobs.db"
 DB_PATH = Path(_cfg.db_path) if _cfg.db_path else _default_db
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+
+# ── Connection helper (v2.6.0) ───────────────────────────────────────────────
+# All DB access goes through _connect() so every connection gets:
+#   - busy_timeout=5000   — wait up to 5 s instead of raising "database is locked"
+#   - WAL mode is persistent on the file (set once in init_db); no per-connection PRAGMA needed
+@asynccontextmanager
+async def _connect():
+    """Open a DB connection with the standard per-connection PRAGMAs applied."""
+    async with _connect() as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        yield db
+
 CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id                  TEXT PRIMARY KEY,
@@ -60,7 +73,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     state_json              TEXT NOT NULL DEFAULT '{}',
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    batch_id                TEXT
+    batch_id                TEXT,
+    complexity_tier         TEXT
 );
 """
 
@@ -97,6 +111,12 @@ _V2_1_MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN deleted_at TEXT",
 ]
 
+# v2.6.0 — complexity_tier column (first-class, indexed, no state decompress needed for listing)
+_V2_6_MIGRATIONS = [
+    "ALTER TABLE jobs ADD COLUMN complexity_tier TEXT",
+]
+CREATE_COMPLEXITY_INDEX = "CREATE INDEX IF NOT EXISTS idx_jobs_complexity_tier ON jobs(complexity_tier);"
+
 # v2.4.6 — GAP #17: immutable audit trail for all gate decisions
 CREATE_AUDIT_TABLE = """
 CREATE TABLE IF NOT EXISTS job_audit_log (
@@ -120,7 +140,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON job_audit_log(created_at DESC);
 
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
+        # ── v2.6.0: WAL mode — persistent on the file, set once here ─────
+        # WAL allows concurrent reads alongside a single writer, eliminating
+        # the "database is locked" errors that batches hit in journal mode.
+        # synchronous=NORMAL is safe with WAL (no data loss on OS crash).
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
+
         await db.execute(CREATE_TABLE)
         await db.execute(CREATE_BATCH_TABLE)
         # Create indices (idempotent — IF NOT EXISTS)
@@ -153,6 +180,13 @@ async def init_db():
             _idx_sql = _idx_sql.strip()
             if _idx_sql:
                 await db.execute(_idx_sql)
+        # v2.6.0 — complexity_tier column + index
+        for sql in _V2_6_MIGRATIONS:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # column already present
+        await db.execute(CREATE_COMPLEXITY_INDEX)
         await db.commit()
 
 
@@ -165,7 +199,7 @@ async def create_job(
 ) -> str:
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO jobs "
             "(job_id, filename, xml_content, workflow_xml_content, parameter_file_content, "
@@ -178,7 +212,7 @@ async def create_job(
 
 
 async def get_job(job_id: str) -> Optional[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)) as cur:
             row = await cur.fetchone()
@@ -191,7 +225,7 @@ async def get_job(job_id: str) -> Optional[dict]:
 
 async def get_xml(job_id: str) -> Optional[str]:
     """Return only the primary mapping XML (backward-compatible)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT xml_content FROM jobs WHERE job_id = ?", (job_id,)) as cur:
             row = await cur.fetchone()
             return row[0] if row else None
@@ -206,7 +240,7 @@ async def get_session_files(job_id: str) -> Optional[dict]:
       - parameter_file_content  (parameter file — may be None)
     Returns None if the job does not exist.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT xml_content, workflow_xml_content, parameter_file_content "
             "FROM jobs WHERE job_id = ?",
@@ -229,9 +263,17 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
     write-lock before the first read so two concurrent update_job() calls for
     the same job_id cannot both read the same state snapshot and then race to
     overwrite each other.
+
+    v2.6.0: also writes complexity_tier to its own column when the patch
+    contains a complexity dict, so listing jobs never needs to decompress state.
     """
     now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    # Extract complexity_tier if the patch carries it
+    _tier: Optional[str] = None
+    if "complexity" in state_patch and isinstance(state_patch["complexity"], dict):
+        _tier = state_patch["complexity"].get("tier")
+
+    async with _connect() as db:
         try:
             await db.execute("BEGIN IMMEDIATE")
             async with db.execute(
@@ -240,11 +282,18 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
                 row = await cur.fetchone()
                 current = _decode_state(row[0]) if row else {}
             current.update(state_patch)
-            await db.execute(
-                "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=?"
-                " WHERE job_id=?",
-                (status, step, _encode_state(current), now, job_id),
-            )
+            if _tier:
+                await db.execute(
+                    "UPDATE jobs SET status=?, current_step=?, state_json=?, "
+                    "updated_at=?, complexity_tier=? WHERE job_id=?",
+                    (status, step, _encode_state(current), now, _tier, job_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=?"
+                    " WHERE job_id=?",
+                    (status, step, _encode_state(current), now, job_id),
+                )
             await db.execute("COMMIT")
         except Exception:
             try:
@@ -258,7 +307,7 @@ async def create_batch(source_zip: str, mapping_count: int) -> str:
     """Create a batch record and return its batch_id."""
     batch_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO batches (batch_id, source_zip, mapping_count, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -282,7 +331,7 @@ async def create_batch_atomic(
     now = datetime.utcnow().isoformat()
     job_ids: list[str] = [str(uuid.uuid4()) for _ in mappings]
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         try:
             await db.execute("BEGIN")
             await db.execute(
@@ -316,7 +365,7 @@ async def create_batch_atomic(
 
 async def get_batch(batch_id: str) -> Optional[dict]:
     """Return the batch record (without jobs). Returns None if not found."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM batches WHERE batch_id = ?", (batch_id,)
@@ -327,7 +376,7 @@ async def get_batch(batch_id: str) -> Optional[dict]:
 
 async def get_batch_jobs(batch_id: str) -> List[dict]:
     """Return all jobs belonging to a batch, minimal fields only."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json "
@@ -349,7 +398,7 @@ async def delete_job(job_id: str) -> bool:
     """Soft-delete a job by stamping deleted_at. Returns True if the row was found.
     The record is retained so log files and audit history remain accessible."""
     now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "UPDATE jobs SET deleted_at = ?, updated_at = ? WHERE job_id = ? AND deleted_at IS NULL",
             (now, now, job_id),
@@ -360,7 +409,7 @@ async def delete_job(job_id: str) -> bool:
 
 async def list_deleted_jobs() -> List[dict]:
     """Return soft-deleted jobs, newest first, for the Log Archive sidebar."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT job_id, filename, status, current_step, created_at, deleted_at, state_json, batch_id "
@@ -411,7 +460,7 @@ async def recover_stuck_jobs() -> List[str]:
     )
     placeholders = ",".join("?" * len(_STUCK_STATUSES))
     now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             f"SELECT job_id FROM jobs WHERE status IN ({placeholders})",
@@ -436,21 +485,33 @@ async def recover_stuck_jobs() -> List[str]:
     return job_ids
 
 
-async def list_jobs() -> List[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+async def count_jobs() -> int:
+    """Return the total number of non-deleted jobs (for pagination metadata)."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE deleted_at IS NULL"
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
+async def list_jobs(limit: int = 20, offset: int = 0) -> List[dict]:
+    """Return jobs newest-first with pagination.
+
+    v2.6.0: reads complexity_tier from its dedicated column — no state
+    decompression needed on the listing path.
+    """
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT job_id, filename, status, current_step, created_at, updated_at, state_json, batch_id "
-            "FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50"
+            "SELECT job_id, filename, status, current_step, created_at, updated_at, "
+            "       complexity_tier, batch_id "
+            "FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC "
+            "LIMIT ? OFFSET ?",
+            (limit, offset),
         ) as cur:
             rows = await cur.fetchall()
-            result = []
-            for row in rows:
-                d = dict(row)
-                state = _decode_state(d.pop("state_json", ""))
-                d["complexity"] = state.get("complexity", {}).get("tier") if state.get("complexity") else None
-                result.append(d)
-            return result
+            return [dict(row) for row in rows]
 
 
 # ── GAP #17: Audit trail ──────────────────────────────────────────────────────
@@ -476,7 +537,7 @@ async def add_audit_entry(
     audit_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
     extra_json = json.dumps(extra) if extra else None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO job_audit_log "
             "(audit_id, job_id, gate, event_type, reviewer_name, reviewer_role, "
@@ -494,7 +555,7 @@ async def add_audit_entry(
 
 async def get_audit_log(job_id: str) -> List[dict]:
     """Return all audit entries for a job, oldest first."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT audit_id, job_id, gate, event_type, reviewer_name, reviewer_role, "

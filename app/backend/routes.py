@@ -204,9 +204,25 @@ async def stream_progress(job_id: str):
 # ─────────────────────────────────────────────
 
 @router.get("/jobs")
-async def list_jobs():
-    jobs = await db.list_jobs()
-    return {"jobs": jobs}
+async def list_jobs(page: int = 1, page_size: int = 20):
+    """List jobs newest-first with pagination.
+
+    Query params:
+      page      — 1-based page number (default 1)
+      page_size — jobs per page (default 20, max 100)
+    """
+    page_size = min(max(page_size, 1), 100)
+    page      = max(page, 1)
+    offset    = (page - 1) * page_size
+    jobs      = await db.list_jobs(limit=page_size, offset=offset)
+    total     = await db.count_jobs()
+    return {
+        "jobs":      jobs,
+        "total":     total,
+        "page":      page,
+        "page_size": page_size,
+        "pages":     max(1, -(-total // page_size)),   # ceiling division
+    }
 
 
 @router.delete("/jobs/{job_id}")
