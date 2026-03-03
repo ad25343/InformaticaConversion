@@ -57,7 +57,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def _connect():
     """Open a DB connection with the standard per-connection PRAGMAs applied."""
-    async with _connect() as db:
+    async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA busy_timeout=5000")
         yield db
 
