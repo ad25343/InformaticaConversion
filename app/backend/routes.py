@@ -386,6 +386,17 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
     await db.update_job(job_id, JobStatus.AWAITING_REVIEW.value, 5,
                         {"sign_off": sign_off.model_dump()})
 
+    # GAP #17 — immutable audit record for Gate 1 decision
+    await db.add_audit_entry(
+        job_id=job_id,
+        gate="gate1",
+        event_type=payload.decision.lower(),
+        reviewer_name=payload.reviewer_name,
+        reviewer_role=payload.reviewer_role,
+        decision=payload.decision,
+        notes=payload.notes,
+    )
+
     if payload.decision == ReviewDecision.REJECTED:
         await db.update_job(job_id, JobStatus.BLOCKED.value, 5, {})
         logger.info("Job rejected: job_id=%s", job_id)
@@ -449,6 +460,18 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
 
     await db.update_job(job_id, JobStatus.AWAITING_SEC_REVIEW.value, 9,
                         {"security_sign_off": sec_signoff.model_dump()})
+
+    # GAP #17 — immutable audit record for Gate 2 decision
+    await db.add_audit_entry(
+        job_id=job_id,
+        gate="gate2",
+        event_type=payload.decision.lower(),
+        reviewer_name=payload.reviewer_name,
+        reviewer_role=payload.reviewer_role,
+        decision=payload.decision,
+        notes=payload.notes,
+        extra={"remediation_round": prev_round},
+    )
 
     if payload.decision == SecurityReviewDecision.FAILED:
         await db.update_job(job_id, JobStatus.BLOCKED.value, 9, {})
@@ -550,6 +573,17 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     await db.update_job(job_id, JobStatus.AWAITING_CODE_REVIEW.value, 12,
                         {"code_sign_off": code_signoff.model_dump()})
 
+    # GAP #17 — immutable audit record for Gate 3 decision
+    await db.add_audit_entry(
+        job_id=job_id,
+        gate="gate3",
+        event_type=payload.decision.lower(),
+        reviewer_name=payload.reviewer_name,
+        reviewer_role=payload.reviewer_role,
+        decision=payload.decision,
+        notes=payload.notes,
+    )
+
     # REJECTED — block the job immediately
     if payload.decision == CodeReviewDecision.REJECTED:
         await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
@@ -587,6 +621,24 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
         "job_id": job_id,
         "decision": payload.decision,
     }
+
+
+# ─────────────────────────────────────────────
+# Audit trail  (GAP #17)
+# ─────────────────────────────────────────────
+
+@router.get("/jobs/{job_id}/audit")
+async def get_job_audit(job_id: str):
+    """Return all gate-decision audit entries for a job, oldest first.
+
+    Each entry contains: audit_id, gate (gate1/gate2/gate3), event_type,
+    reviewer_name, reviewer_role, decision, notes, extra, created_at.
+    """
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    entries = await db.get_audit_log(job_id)
+    return {"job_id": job_id, "entries": entries}
 
 
 # ─────────────────────────────────────────────

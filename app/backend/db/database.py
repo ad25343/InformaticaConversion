@@ -97,6 +97,27 @@ _V2_1_MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN deleted_at TEXT",
 ]
 
+# v2.4.6 — GAP #17: immutable audit trail for all gate decisions
+CREATE_AUDIT_TABLE = """
+CREATE TABLE IF NOT EXISTS job_audit_log (
+    audit_id      TEXT PRIMARY KEY,
+    job_id        TEXT NOT NULL,
+    gate          TEXT NOT NULL,
+    event_type    TEXT NOT NULL,
+    reviewer_name TEXT NOT NULL,
+    reviewer_role TEXT,
+    decision      TEXT NOT NULL,
+    notes         TEXT,
+    extra_json    TEXT,
+    created_at    TEXT NOT NULL
+);
+"""
+CREATE_AUDIT_INDICES = """
+CREATE INDEX IF NOT EXISTS idx_audit_job_id  ON job_audit_log(job_id);
+CREATE INDEX IF NOT EXISTS idx_audit_gate    ON job_audit_log(gate);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON job_audit_log(created_at DESC);
+"""
+
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -126,6 +147,12 @@ async def init_db():
                 await db.execute(sql)
             except Exception:
                 pass  # column already present
+        # v2.4.6 — audit trail table (CREATE IF NOT EXISTS, fully idempotent)
+        await db.execute(CREATE_AUDIT_TABLE)
+        for _idx_sql in CREATE_AUDIT_INDICES.strip().split(";"):
+            _idx_sql = _idx_sql.strip()
+            if _idx_sql:
+                await db.execute(_idx_sql)
         await db.commit()
 
 
@@ -196,17 +223,35 @@ async def get_session_files(job_id: str) -> Optional[dict]:
 
 
 async def update_job(job_id: str, status: str, step: int, state_patch: dict):
+    """GAP #1 — Uses BEGIN IMMEDIATE to prevent concurrent write races.
+
+    SQLite has no SELECT...FOR UPDATE syntax.  BEGIN IMMEDIATE acquires a
+    write-lock before the first read so two concurrent update_job() calls for
+    the same job_id cannot both read the same state snapshot and then race to
+    overwrite each other.
+    """
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT state_json FROM jobs WHERE job_id = ?", (job_id,)) as cur:
-            row = await cur.fetchone()
-            current = _decode_state(row[0]) if row else {}
-        current.update(state_patch)
-        await db.execute(
-            "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=? WHERE job_id=?",
-            (status, step, _encode_state(current), now, job_id),
-        )
-        await db.commit()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT state_json FROM jobs WHERE job_id = ?", (job_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                current = _decode_state(row[0]) if row else {}
+            current.update(state_patch)
+            await db.execute(
+                "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=?"
+                " WHERE job_id=?",
+                (status, step, _encode_state(current), now, job_id),
+            )
+            await db.execute("COMMIT")
+        except Exception:
+            try:
+                await db.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
 
 
 async def create_batch(source_zip: str, mapping_count: int) -> str:
@@ -406,3 +451,68 @@ async def list_jobs() -> List[dict]:
                 d["complexity"] = state.get("complexity", {}).get("tier") if state.get("complexity") else None
                 result.append(d)
             return result
+
+
+# ── GAP #17: Audit trail ──────────────────────────────────────────────────────
+
+async def add_audit_entry(
+    job_id: str,
+    gate: str,
+    event_type: str,
+    reviewer_name: str,
+    reviewer_role: Optional[str],
+    decision: str,
+    notes: Optional[str] = None,
+    extra: Optional[dict] = None,
+) -> str:
+    """Insert one immutable audit record for a gate decision.
+
+    gate       — 'gate1' | 'gate2' | 'gate3'
+    event_type — decision value lowercased ('approved', 'rejected',
+                  'acknowledged', 'request_fix', 'failed')
+    extra      — gate-specific payload (e.g. {'remediation_round': 1})
+    Returns the new audit_id (UUID string).
+    """
+    audit_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    extra_json = json.dumps(extra) if extra else None
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO job_audit_log "
+            "(audit_id, job_id, gate, event_type, reviewer_name, reviewer_role, "
+            " decision, notes, extra_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                audit_id, job_id, gate, event_type,
+                reviewer_name, reviewer_role,
+                decision, notes, extra_json, now,
+            ),
+        )
+        await db.commit()
+    return audit_id
+
+
+async def get_audit_log(job_id: str) -> List[dict]:
+    """Return all audit entries for a job, oldest first."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT audit_id, job_id, gate, event_type, reviewer_name, reviewer_role, "
+            "       decision, notes, extra_json, created_at "
+            "FROM job_audit_log WHERE job_id = ? ORDER BY created_at ASC",
+            (job_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if d.get("extra_json"):
+            try:
+                d["extra"] = json.loads(d["extra_json"])
+            except Exception:
+                d["extra"] = None
+        else:
+            d["extra"] = None
+        del d["extra_json"]
+        result.append(d)
+    return result
