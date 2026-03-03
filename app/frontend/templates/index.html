@@ -1257,6 +1257,23 @@ function renderJobPanel(job) {
               <textarea id="flag_note_${i}" placeholder="Rationale or resolution description…" style="width:100%;margin-top:8px;height:60px;resize:vertical;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:12px"></textarea>
             </div>`).join('')}
         </div>` : ''}
+      <!-- Manifest re-upload -->
+      <div style="background:rgba(192,112,0,.07);border:1px solid rgba(192,112,0,.35);border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="font-size:12px;font-weight:700;color:#c07000;margin-bottom:6px">📊 MANIFEST OVERRIDES <span style="font-weight:400;color:var(--muted)">(optional)</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+          Download the manifest, fill in the <strong style="color:var(--text)">Reviewer Override</strong> column for any red (LOW/UNMAPPED) rows, then upload the annotated file here.
+          The conversion agent will treat your corrections as ground truth — resolving lineage gaps before generating code.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label id="manifestUploadLabel" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;color:var(--text)">
+            📁 Choose annotated manifest…
+            <input type="file" id="manifestFileInput" accept=".xlsx" style="display:none" onchange="handleManifestFileChosen(this, '${job.job_id}')"/>
+          </label>
+          <button id="manifestUploadBtn" class="btn btn-ghost btn-sm" style="color:#c07000;border-color:#c07000;display:none" onclick="uploadManifest('${job.job_id}')">⬆ Upload Overrides</button>
+          <span id="manifestUploadStatus" style="font-size:12px"></span>
+        </div>
+      </div>
+
       <div class="signoff-form">
         <div class="form-group">
           <label>Reviewer Name</label>
@@ -2323,6 +2340,50 @@ async function downloadManifestXlsx() {
   a.download = `manifest_${safe}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Manifest re-upload helpers
+function handleManifestFileChosen(input, jobId) {
+  const btn    = document.getElementById('manifestUploadBtn');
+  const status = document.getElementById('manifestUploadStatus');
+  const label  = document.getElementById('manifestUploadLabel');
+  if (!input.files || !input.files[0]) return;
+  const fname = input.files[0].name;
+  if (label) label.innerHTML = `📁 ${fname} <input type="file" id="manifestFileInput" accept=".xlsx" style="display:none" onchange="handleManifestFileChosen(this,'${jobId}')"/>`;
+  if (btn) btn.style.display = 'inline-flex';
+  if (status) status.textContent = '';
+}
+
+async function uploadManifest(jobId) {
+  const input  = document.getElementById('manifestFileInput');
+  const btn    = document.getElementById('manifestUploadBtn');
+  const status = document.getElementById('manifestUploadStatus');
+  if (!input || !input.files || !input.files[0]) {
+    if (status) { status.textContent = '⚠ No file selected.'; status.style.color = '#f87171'; }
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Uploading…'; }
+  if (status) { status.textContent = ''; }
+
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/manifest-upload`, { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (status) { status.textContent = `✗ ${data.detail || 'Upload failed.'}`; status.style.color = '#f87171'; }
+    } else {
+      const n = data.override_count || 0;
+      if (status) {
+        status.innerHTML = `<span style="color:#4ade80;font-weight:600">✓ ${n} override${n !== 1 ? 's' : ''} stored</span>${n === 0 ? ' <span style="color:var(--muted)">(no Override column values found — check the Review Required sheet)</span>' : ''}`;
+      }
+      if (btn) btn.style.display = 'none';
+    }
+  } catch (e) {
+    if (status) { status.textContent = `✗ Network error: ${e.message}`; status.style.color = '#f87171'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⬆ Upload Overrides'; }
+  }
 }
 
 // Enhanced markdown→HTML converter for the print window
