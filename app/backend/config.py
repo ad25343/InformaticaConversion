@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # ── Batch conversion ────────────────────────────────────────────────────
     batch_concurrency: int = 3
 
+    # ── Job export (disk write) ─────────────────────────────────────────────
+    # Directory where completed job artifacts are written after Gate 3 approval.
+    # Defaults to <repo_root>/jobs if left empty.  Set to an absolute path for
+    # Docker or CI deployments.  Set to "disabled" to suppress disk writes entirely.
+    output_dir: str = ""
+
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.
     doc_max_tokens_override: int | None = None

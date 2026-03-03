@@ -27,6 +27,7 @@ from .logger import read_job_log, read_job_log_raw, job_log_path, list_log_regis
 from .agents.s2t_agent import s2t_excel_path
 from .security import validate_upload_size, ZipExtractionError
 from .zip_extractor import extract_informatica_zip, extract_batch_zip
+from .job_exporter import build_output_zip
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
@@ -798,6 +799,44 @@ async def download_test_file(job_id: str, filename: str):
     if filename not in files:
         raise HTTPException(404, f"Test file '{filename}' not found")
     return JSONResponse({"filename": filename, "content": files[filename]})
+
+
+# ─────────────────────────────────────────────
+# Output ZIP Download (v2.5.0)
+# ─────────────────────────────────────────────
+
+@router.get("/jobs/{job_id}/output.zip")
+async def download_output_zip(job_id: str):
+    """
+    Download all generated conversion output files as a ZIP archive.
+
+    Bundles every file from state["conversion"]["files"] into a single
+    ZIP preserving folder structure.  Built directly from DB state so it
+    works regardless of whether the job folder has been written to disk.
+
+    Only available for jobs that have reached AWAITING_CODE_REVIEW or
+    COMPLETE status (i.e. conversion has run).
+    """
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    state = job.get("state", {})
+    conversion = state.get("conversion", {})
+    files = conversion.get("files", {})
+    if not files:
+        raise HTTPException(404, "No output files found — conversion has not completed for this job.")
+
+    zip_bytes = build_output_zip(state)
+    mapping_name = conversion.get("mapping_name", job_id)
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in mapping_name)
+    filename = f"{safe_name}_output.zip"
+
+    return StreamingResponse(
+        iter([zip_bytes]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─────────────────────────────────────────────

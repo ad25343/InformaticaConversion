@@ -10,7 +10,9 @@ import traceback
 from typing import AsyncGenerator
 
 from .db.database import get_xml, get_session_files, update_job
+from .db import database as _db
 from .models.schemas import JobStatus
+from .job_exporter import export_job
 from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
     session_parser_agent, security_agent, manifest_agent
@@ -1294,5 +1296,16 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
     log.info("✅ Code review approved — pipeline complete", step=12)
     log.finalize("complete", steps_completed=12)
     log.close()
+
+    # ── Export all job artifacts to disk (non-fatal if it fails) ─────────
+    try:
+        job_record = await _db.get_job(job_id)
+        if job_record:
+            export_path = await export_job(job_id, job_record, state)
+            if export_path:
+                log.info("Artifacts written to disk: %s", export_path, step=12)
+    except Exception as _export_exc:
+        log.warning("Disk export failed (non-fatal): %s", _export_exc, step=12)
+
     yield await emit(12, JobStatus.COMPLETE,
                      "✅ Pipeline complete — code approved and ready for deployment.")
