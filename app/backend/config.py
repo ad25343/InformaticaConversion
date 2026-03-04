@@ -70,10 +70,21 @@ class Settings(BaseSettings):
     # Docker or CI deployments.  Set to "disabled" to suppress disk writes entirely.
     output_dir: str = ""
 
+    # ── Webhook notifications ────────────────────────────────────────────────
+    # Set WEBHOOK_URL to receive a JSON POST at gate pauses, job completion,
+    # and hard failures.  Works with Slack/Teams incoming webhooks, PagerDuty,
+    # or any HTTP endpoint that accepts JSON.  Leave empty to disable.
+    webhook_url: str = ""
+    # Optional HMAC-SHA256 signing key.  When set, every request carries an
+    # X-Webhook-Signature: sha256=<hex> header for receiver-side verification.
+    webhook_secret: str = ""
+    # Per-request timeout for outbound webhook POSTs (seconds).
+    webhook_timeout_secs: int = 10
+
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.8.0"
+    app_version: str = "2.9.0"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

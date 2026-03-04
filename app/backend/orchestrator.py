@@ -24,6 +24,7 @@ from .agents.reconciliation_agent import generate_reconciliation_report
 from .smoke_execute import smoke_execute_files, format_smoke_results
 from .logger import JobLogger
 from .security import scan_xml_for_secrets
+from .webhook import fire_webhook
 
 
 def _err(e: Exception) -> dict:
@@ -185,6 +186,8 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
         log.step_failed(1, "Parse XML", f"parse_status=FAILED — {user_msg}")
         log.finalize("blocked", steps_completed=1)
         log.close()
+        await fire_webhook("job_failed", job_id, filename, 1, "blocked",
+                           f"Parse FAILED — {user_msg}")
         yield await emit(1, JobStatus.BLOCKED, "Parse FAILED — see parse report",
                          {"parse_report": parse_report.model_dump(),
                           "error": user_msg})
@@ -454,6 +457,12 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     # Note flags count for registry
     v_flags = len(verification.flags) if verification else 0
     log.finalize("awaiting_review", steps_completed=5, flags_count=v_flags)
+    await fire_webhook(
+        "gate_waiting", job_id, filename, 5, "awaiting_review",
+        f"Gate 1 is waiting for sign-off on '{filename}' — "
+        f"{v_flags} verification flag(s). Please review and approve or reject.",
+        gate="Gate 1 — Human Sign-off",
+    )
     yield await emit(5, JobStatus.AWAITING_REVIEW,
                      "Awaiting human review and sign-off. Pipeline paused.")
     log.close()
@@ -636,6 +645,8 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         log.step_failed(7, "Conversion", str(e), exc_info=True)
         log.finalize("failed", steps_completed=7)
         log.close()
+        await fire_webhook("job_failed", job_id, filename, 7, "failed",
+                           f"Conversion failed for '{filename}': {e}")
         yield await emit(7, JobStatus.FAILED, f"Conversion error: {e}", _err(e))
         return
 
@@ -755,6 +766,14 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         )
         log.finalize("awaiting_security_review", steps_completed=9)
         log.close()
+        finding_count = len(security_scan.findings) if security_scan and security_scan.findings else 0
+        await fire_webhook(
+            "gate_waiting", job_id, filename, 9, "awaiting_security_review",
+            f"Gate 2 is waiting for security review on '{filename}' — "
+            f"{finding_count} finding(s), recommendation: {security_scan.recommendation if security_scan else 'unknown'}. "
+            f"Please review and approve, acknowledge, or fail.",
+            gate="Gate 2 — Security Review",
+        )
         yield await emit(9, JobStatus.AWAITING_SEC_REVIEW,
                          "⚠️ Security findings require review. Pipeline paused at Step 9 — "
                          "please review and decide to proceed, acknowledge, or fail the job.",
@@ -936,6 +955,13 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
     log.info("Pipeline paused — awaiting code review sign-off", step=12)
     log.finalize("awaiting_code_review", steps_completed=12)
     log.close()
+    await fire_webhook(
+        "gate_waiting", job_id, filename, 12, "awaiting_code_review",
+        f"Gate 3 is waiting for code sign-off on '{filename}' — "
+        f"coverage {test_report.coverage_pct}%, "
+        f"{test_report.fields_covered} field(s) covered. Please approve or reject.",
+        gate="Gate 3 — Code Sign-off",
+    )
     yield await emit(12, JobStatus.AWAITING_CODE_REVIEW,
                      "Awaiting code review sign-off. Pipeline paused.",
                      {
@@ -1413,6 +1439,13 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
     log.info("Pipeline paused — awaiting code review sign-off", step=12)
     log.finalize("awaiting_code_review", steps_completed=12)
     log.close()
+    await fire_webhook(
+        "gate_waiting", job_id, filename, 12, "awaiting_code_review",
+        f"Gate 3 is waiting for code sign-off on '{filename}' — "
+        f"coverage {test_report.coverage_pct}%, "
+        f"{test_report.fields_covered} field(s) covered. Please approve or reject.",
+        gate="Gate 3 — Code Sign-off",
+    )
     yield await emit(12, JobStatus.AWAITING_CODE_REVIEW,
                      "Awaiting code review sign-off. Pipeline paused.",
                      {
@@ -1461,5 +1494,9 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
     except Exception as _export_exc:
         log.warning("Disk export failed (non-fatal): %s", _export_exc, step=12)
 
+    await fire_webhook(
+        "job_complete", job_id, filename, 12, "complete",
+        f"'{filename}' conversion complete — code approved and ready for export/deployment.",
+    )
     yield await emit(12, JobStatus.COMPLETE,
                      "✅ Pipeline complete — code approved and ready for deployment.")

@@ -453,12 +453,32 @@ New features:
   `Permissions-Policy`, `Content-Security-Policy`, and (when `HTTPS=true`)
   `Strict-Transport-Security` to every response
 
-### v2.9 — Planned
+### v2.9 — Webhook Notifications (shipped)
+
+Outbound HTTP notifications at every gate pause, completion, and hard failure —
+no more polling the UI to find out a job is waiting.
+
+New features:
+- **`app/backend/webhook.py`** — async `fire_webhook()` function; non-blocking,
+  non-fatal; all failures logged as warnings and swallowed
+- **Three event types**: `gate_waiting` (Gates 1/2/3 paused for human decision),
+  `job_complete` (Gate 3 approved, code ready), `job_failed` (terminal FAILED/BLOCKED)
+- **Structured JSON payload** on every POST: `event`, `job_id`, `filename`, `step`,
+  `status`, `message`, `gate`, `timestamp`, `tool`, `version`
+- **Seven fire points** in the orchestrator: parse BLOCKED, Gate 1 pause,
+  conversion FAILED, Gate 2 pause, Gate 3 pause (both pipeline paths), job COMPLETE
+- **HMAC-SHA256 request signing** — set `WEBHOOK_SECRET` in `.env`; every request
+  carries `X-Webhook-Signature: sha256=<hex>` so receivers can verify origin
+- **Config**: `WEBHOOK_URL` (required), `WEBHOOK_SECRET` (optional), `WEBHOOK_TIMEOUT_SECS`
+  (default 10) — all in `.env` / environment variables
+- Works with Slack incoming webhooks, Teams incoming webhooks, PagerDuty Events API,
+  or any HTTP endpoint that accepts a JSON POST
+
+### v2.10 — Planned
 
 - Git integration: open a PR with generated code directly from the UI
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
-- Team mode: multiple reviewers, comment threads on individual flags
-- Webhook notifications (Slack, Teams) on gate decisions
+- Mapplet support: expand `<MAPPLET>` definitions inline when building the graph
 
 ### v3.0 — Vision
 

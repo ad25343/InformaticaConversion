@@ -732,3 +732,75 @@ required before `dbt run`.
   `Permissions-Policy`, `Content-Security-Policy` (self + unsafe-inline), and (when
   `HTTPS=true`) `Strict-Transport-Security: max-age=31536000; includeSubDomains` to
   every HTTP response.
+
+---
+
+## v2.9.0 — 2026-03-04
+
+### feat: Outbound webhook notifications at gate pauses, completion, and failure
+
+No more polling the UI to know when a job is waiting for review or when conversion
+is done. Set `WEBHOOK_URL` in `.env` and receive a JSON POST at every key event.
+
+#### New module
+
+- **`app/backend/webhook.py`** — `fire_webhook(event, job_id, filename, step, status,
+  message, gate=None)`. Non-blocking (uses `httpx.AsyncClient`), non-fatal (all
+  exceptions caught and logged as warnings). Zero impact on pipeline throughput.
+
+#### Events fired
+
+| Event | When |
+|---|---|
+| `gate_waiting` | Gate 1 paused for human sign-off (Step 5) |
+| `gate_waiting` | Gate 2 paused for security review (Step 9) — only when scan is not APPROVED |
+| `gate_waiting` | Gate 3 paused for code sign-off (Step 12) — both pipeline paths |
+| `job_complete` | Gate 3 approved; code ready for export (Step 12) |
+| `job_failed` | Parse BLOCKED — wrong file type or parse error (Step 1) |
+| `job_failed` | Conversion FAILED — code generation exception (Step 7) |
+
+#### Payload (all events)
+
+```json
+{
+  "event":     "gate_waiting",
+  "job_id":    "3f2a1b...",
+  "filename":  "m_LOAN_SCD2.xml",
+  "step":      5,
+  "status":    "awaiting_review",
+  "message":   "Gate 1 is waiting for sign-off on 'm_LOAN_SCD2.xml' — 3 verification flag(s).",
+  "gate":      "Gate 1 — Human Sign-off",
+  "timestamp": "2026-03-04T14:22:07.341Z",
+  "tool":      "Informatica Conversion Tool",
+  "version":   "2.9.0"
+}
+```
+
+#### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `WEBHOOK_URL` | `""` | POST destination; empty = disabled |
+| `WEBHOOK_SECRET` | `""` | HMAC-SHA256 signing key; empty = unsigned |
+| `WEBHOOK_TIMEOUT_SECS` | `10` | Per-request timeout (seconds) |
+
+#### Request signing (optional)
+
+When `WEBHOOK_SECRET` is set, every outbound request carries:
+```
+X-Webhook-Signature: sha256=<hex>
+```
+Receivers compute `HMAC-SHA256(secret, raw_body)` and compare with constant-time
+equality (`hmac.compare_digest`) to verify the payload originated from this tool.
+
+#### Works with
+
+Slack incoming webhooks, Teams incoming webhooks, PagerDuty Events API v2, and any
+HTTP endpoint that accepts a JSON POST. The payload is intentionally generic — no
+platform-specific formatting is applied; the receiver formats as needed.
+
+#### Config additions (`config.py`)
+
+- `webhook_url: str = ""`
+- `webhook_secret: str = ""`
+- `webhook_timeout_secs: int = 10`
