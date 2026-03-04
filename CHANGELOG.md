@@ -804,3 +804,62 @@ platform-specific formatting is applied; the receiver formats as needed.
 - `webhook_url: str = ""`
 - `webhook_secret: str = ""`
 - `webhook_timeout_secs: int = 10`
+
+---
+
+## v2.10.0 — 2026-03-04
+
+### feat: Automatic GitHub PR after Gate 3 approval
+
+Set `GITHUB_TOKEN` + `GITHUB_REPO` in `.env` and every approved conversion
+automatically opens a draft pull request — no ZIP download, no manual commit.
+
+#### New module
+
+- **`app/backend/git_pr.py`** — `create_pull_request(job_id, state, filename)`
+  async function. Uses the GitHub REST API via `httpx`. Non-blocking, non-fatal.
+
+#### What the PR contains
+
+- All generated code files (`conversion_output.files`)
+- All generated test files (`test_report.test_files`)
+- Structured PR description with mapping details, quality summary, file list,
+  and the three gate decisions (reviewer names + decisions)
+
+#### Branch and PR naming
+
+- Branch: `informatica/{mapping-name-slug}/{job-id-short}`
+  e.g. `informatica/m-loan-scd2/3f2a1b4c`
+- PR title: `[Informatica] {mapping_name}`
+- PR opened as **draft** — signals it is machine-generated and needs human review
+  before merging
+
+#### PR description sections
+
+1. Mapping details — source file, target stack, complexity tier
+2. Quality summary table — test coverage %, code review recommendation,
+   logic equivalence (V/NR/M), structural reconciliation (status + match rate)
+3. Generated files — code files and test files listed separately
+4. Review gates — Gate 1/2/3 decisions with reviewer names
+5. Footer — timestamp and job ID
+
+#### GitHub Enterprise support
+
+Set `GITHUB_API_URL` to your GHE instance API root
+(e.g. `https://github.mycompany.com/api/v3`). All API calls route through
+that base URL instead of `https://api.github.com`.
+
+#### State and webhook integration
+
+- `pr_url` stored in job state on success — visible via `GET /api/jobs/{id}`
+- `job_complete` webhook payload includes the PR URL when available
+- COMPLETE SSE message appended with the PR URL
+
+#### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | `""` | PAT with `repo` scope, or GitHub App token (required) |
+| `GITHUB_REPO` | `""` | `owner/repo` — e.g. `myorg/data-migration` (required) |
+| `GITHUB_BASE_BRANCH` | `main` | Branch the PR targets |
+| `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server |

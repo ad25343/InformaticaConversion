@@ -25,6 +25,7 @@ from .smoke_execute import smoke_execute_files, format_smoke_results
 from .logger import JobLogger
 from .security import scan_xml_for_secrets
 from .webhook import fire_webhook
+from .git_pr import create_pull_request
 
 
 def _err(e: Exception) -> dict:
@@ -1494,9 +1495,22 @@ async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "u
     except Exception as _export_exc:
         log.warning("Disk export failed (non-fatal): %s", _export_exc, step=12)
 
+    # ── Open GitHub PR with generated code (non-fatal if it fails) ────────
+    pr_url: str | None = None
+    try:
+        pr_url = await create_pull_request(job_id, state, filename)
+        if pr_url:
+            log.info("GitHub PR opened: %s", pr_url, step=12)
+            await update_job(job_id, JobStatus.COMPLETE.value, 12, {"pr_url": pr_url})
+    except Exception as _pr_exc:
+        log.warning("GitHub PR creation failed (non-fatal): %s", _pr_exc, step=12)
+
     await fire_webhook(
         "job_complete", job_id, filename, 12, "complete",
-        f"'{filename}' conversion complete — code approved and ready for export/deployment.",
+        f"'{filename}' conversion complete — code approved and ready for export/deployment."
+        + (f" PR: {pr_url}" if pr_url else ""),
     )
     yield await emit(12, JobStatus.COMPLETE,
-                     "✅ Pipeline complete — code approved and ready for deployment.")
+                     "✅ Pipeline complete — code approved and ready for deployment."
+                     + (f" PR opened: {pr_url}" if pr_url else ""),
+                     {"pr_url": pr_url} if pr_url else {})

@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     # Docker or CI deployments.  Set to "disabled" to suppress disk writes entirely.
     output_dir: str = ""
 
+    # ── GitHub PR integration (v2.10.0) ─────────────────────────────────────
+    # Set GITHUB_TOKEN + GITHUB_REPO to automatically open a draft PR after
+    # every Gate 3 approval.  Leave either empty to disable.
+    github_token: str = ""          # PAT with repo scope, or a GitHub App token
+    github_repo: str = ""           # "owner/repo" — e.g. "myorg/data-migration"
+    github_base_branch: str = "main"  # Branch the PR targets
+    # Override for GitHub Enterprise Server (include /api/v3 path if required)
+    github_api_url: str = "https://api.github.com"
+
     # ── Webhook notifications ────────────────────────────────────────────────
     # Set WEBHOOK_URL to receive a JSON POST at gate pauses, job completion,
     # and hard failures.  Works with Slack/Teams incoming webhooks, PagerDuty,
@@ -84,7 +93,7 @@ class Settings(BaseSettings):
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.9.0"
+    app_version: str = "2.10.0"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

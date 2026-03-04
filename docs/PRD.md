@@ -474,9 +474,28 @@ New features:
 - Works with Slack incoming webhooks, Teams incoming webhooks, PagerDuty Events API,
   or any HTTP endpoint that accepts a JSON POST
 
-### v2.10 — Planned
+### v2.10 — GitHub PR Integration (shipped)
 
-- Git integration: open a PR with generated code directly from the UI
+After Gate 3 approval the tool automatically opens a draft pull request with all
+generated code and test files — no ZIP download or manual commit required.
+
+New features:
+- **`app/backend/git_pr.py`** — `create_pull_request()` async function; non-blocking,
+  non-fatal; all errors logged as warnings
+- **Branch naming**: `informatica/{mapping-name-slug}/{job-id-short}` — e.g.
+  `informatica/m-loan-scd2/3f2a1b4c`
+- **Draft PR** opened against `GITHUB_BASE_BRANCH` (default `main`) containing all
+  generated code files and test files
+- **Structured PR description**: mapping details, quality summary table (coverage,
+  equivalence, reconciliation, code review), file list, and all three gate decisions
+  with reviewer names
+- **GitHub Enterprise support**: set `GITHUB_API_URL` to your GHE instance API root
+- **`pr_url` stored in state** — visible via `GET /api/jobs/{id}` after completion;
+  included in the `job_complete` webhook payload
+- **Config**: `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BASE_BRANCH`, `GITHUB_API_URL`
+
+### v2.11 — Planned
+
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 - Mapplet support: expand `<MAPPLET>` definitions inline when building the graph
 
