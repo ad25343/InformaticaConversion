@@ -173,11 +173,20 @@ FLAG_META: dict[str, dict] = {
     "MAPPLET_DETECTED": {
         "severity": "HIGH",
         "recommendation": (
-            "Review the generated code for all references to the detected mapplet(s) and "
-            "manually verify that the inner logic (transformations, expressions, lookups) is "
-            "correctly represented. If the mapplet definition was not exported with this file, "
-            "re-export from Informatica Repository Manager with 'Include Dependencies' enabled. "
-            "Full inline expansion of mapplet logic into the generated code is planned for v2.12."
+            "The mapplet definition was not found in this export — inline expansion was skipped. "
+            "Re-export from Informatica Repository Manager with 'Include Dependencies' enabled "
+            "to allow full inline expansion on the next run. Until then, manually verify any "
+            "references to the affected mapplet(s) in the generated code."
+        ),
+    },
+    "MAPPLET_EXPANDED": {
+        "severity": "MEDIUM",
+        "recommendation": (
+            "Mapplet logic has been inlined into the graph. Review the generated code section "
+            "corresponding to each expanded mapplet and confirm that: (1) all inner "
+            "transformations and expressions are correctly represented, (2) input/output port "
+            "wiring matches the original mapplet interface, and (3) data types are preserved "
+            "across the Input/Output interface nodes."
         ),
     },
 }
@@ -524,25 +533,45 @@ async def verify(
         self_checks.append(CheckResult(name="Parse completed successfully", passed=True))
 
     # ─────────────────────────────────────────
-    # MAPPLET_DETECTED — promote parse flags into VerificationFlags
-    # The parser tags each mapplet it finds (definition block or instance
-    # reference).  We surface a single consolidated VerificationFlag so
-    # Gate 1 reviewers see a clear, prominent notice.
+    # MAPPLET flags — promote parse flags into VerificationFlags.
+    # Two distinct flag types:
+    #   MAPPLET_EXPANDED  — definition found and inline-expanded (MEDIUM, non-blocking)
+    #   MAPPLET_DETECTED  — instance found but definition missing (HIGH, non-blocking)
     # ─────────────────────────────────────────
-    if parse_report.mapplets_detected:
-        mlt_names = ", ".join(f"'{n}'" for n in parse_report.mapplets_detected)
-        plural = "s" if len(parse_report.mapplets_detected) > 1 else ""
+    expanded   = parse_report.mapplets_expanded   # successfully expanded
+    detected   = parse_report.mapplets_detected   # all found (superset)
+    not_expanded = [n for n in detected if n not in expanded]
+
+    if expanded:
+        mlt_names = ", ".join(f"'{n}'" for n in expanded)
+        plural = "s" if len(expanded) > 1 else ""
+        flags.append(_make_flag(
+            "MAPPLET_EXPANDED",
+            "Step 1 — XML Parser",
+            (
+                f"{len(expanded)} mapplet{plural} inline-expanded: {mlt_names}. "
+                "Internal transformations and connectors have been added to the "
+                "mapping graph and external connectors rewired through the Input/"
+                "Output interface nodes. Review the expanded sections in the "
+                "generated code to verify completeness."
+            ),
+            blocking=False,
+            severity="MEDIUM",
+        ))
+
+    if not_expanded:
+        mlt_names = ", ".join(f"'{n}'" for n in not_expanded)
+        plural = "s" if len(not_expanded) > 1 else ""
         flags.append(_make_flag(
             "MAPPLET_DETECTED",
             "Step 1 — XML Parser",
             (
-                f"This mapping uses {len(parse_report.mapplets_detected)} mapplet{plural}: "
+                f"{len(not_expanded)} mapplet{plural} referenced but definition missing: "
                 f"{mlt_names}. "
-                "Port-level metadata for each mapplet is captured and included in the graph. "
-                "Full inline logic expansion (replacing the mapplet call with its constituent "
-                "transformations and expressions) is planned for v2.12. "
-                "Action required: review the generated code for any mapplet references and "
-                "manually verify that the logic inside each mapplet is correctly represented."
+                "Re-export the mapping with 'Include Dependencies' enabled in "
+                "Informatica Repository Manager to allow full inline expansion. "
+                "Until then, manually verify any references to these mapplets "
+                "in the generated code."
             ),
             blocking=False,
             severity="HIGH",

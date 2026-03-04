@@ -10,6 +10,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.12.0] — Mapplet Inline Expansion
+
+### Added
+
+#### Full inline expansion of `<MAPPLET>` definitions (Step 1 — Parser)
+
+The parser now replaces each mapplet instance in a mapping with the full set of
+transformations and connectors from its definition, giving the conversion agent a
+completely resolved graph with no black-box references.
+
+**Algorithm**
+
+1. `<MAPPLET>` definitions are scanned **before** `<MAPPING>` elements so the
+   definition dict is available when mappings are processed.
+2. `_extract_mapplet_def()` — new helper that extracts all internal
+   transformations, connectors, and detects the Input/Output interface node names
+   (`TYPE="Input Transformation"` / `TYPE="Output Transformation"`).
+3. `_inline_expand_mapplets()` — new helper called from `_extract_mapping()`:
+   - Adds internal transformations to the mapping, prefixed
+     `{instance_name}__{internal_node_name}` (instance name used as prefix, not
+     definition name, so two instances of the same mapplet in one mapping stay
+     distinct).
+   - Adds internal connectors with the same prefix scheme.
+   - Rewires external connectors:
+     - `TOINSTANCE=mlt_inst → TOINSTANCE=mlt_inst__<InputTransName>`
+     - `FROMINSTANCE=mlt_inst → FROMINSTANCE=mlt_inst__<OutputTransName>`
+4. `mapping["mapplet_expansions"]` — new dict key; list of definition names that
+   were expanded in that mapping.
+5. `ParseReport.mapplets_expanded` — new list field; aggregate of all expanded
+   mapplet names across every mapping in the file (backward-compatible default `[]`).
+
+**Two distinct flag types (replaces single MAPPLET_DETECTED)**
+
+| Situation | ParseFlag | VerificationFlag |
+|---|---|---|
+| Definition present, expanded inline | `MAPPLET_EXPANDED` | MEDIUM, non-blocking |
+| Instance found, definition missing | `MAPPLET_DETECTED` | HIGH, non-blocking — re-export guidance |
+
+`FLAG_META` updated with entries for both `MAPPLET_EXPANDED` and `MAPPLET_DETECTED`.
+`VerificationFlag` promotion in `verification_agent.py` now raises two separate
+flags (one per type) when both situations occur in the same file.
+
+**`_mapplet_source` annotation** — each inlined transformation carries a
+`_mapplet_source` key recording the definition name; aids debugging and future
+tooling.
+
+**Unchanged behaviour for mappings with no mapplets** — zero performance overhead,
+no flags raised.
+
+---
+
 ## [2.11.0] — Mapplet Detection
 
 ### Added

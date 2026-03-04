@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.11.0
+**Version:** 2.12.0
 **Author:** ad25343
 **Last Updated:** 2026-03-04
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -510,11 +510,24 @@ to verify manually.
 - **`FLAG_META["MAPPLET_DETECTED"]`** — severity and recommendation registered
 - Detection is fully deterministic; no LLM call required
 
-### v2.12 — Planned
+### v2.12 — Mapplet Inline Expansion (shipped)
 
-- **Mapplet inline expansion**: replace each `<INSTANCE TYPE="Mapplet">` call in the graph
-  with its constituent transformations and port expressions so the conversion agent can
-  generate fully resolved code without manual review gaps
+The parser now replaces each mapplet instance with its fully resolved set of
+transformations and connectors so the conversion agent sees no black-box references.
+
+- **`_extract_mapplet_def()`** — extracts internal transformations, connectors,
+  and Input/Output interface node names from each `<MAPPLET>` definition block
+- **`_inline_expand_mapplets()`** — inlines definitions into mappings:
+  prefixes each internal node as `{instance_name}__{node_name}`, rewires external
+  connectors through the Input/Output interface, and adds all internal connectors
+- **`ParseReport.mapplets_expanded`** — new list field; names of all expanded mapplets
+- **Two flag types**: `MAPPLET_EXPANDED` (MEDIUM, definition found and expanded) and
+  `MAPPLET_DETECTED` (HIGH, instance found but definition missing — re-export guidance)
+- Supports multiple instances of the same mapplet in one mapping (distinct prefixes)
+- Zero overhead for mappings with no mapplets
+
+### v2.13 — Planned
+
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 
 ### v3.0 — Vision

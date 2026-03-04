@@ -168,6 +168,7 @@ class ParseReport(BaseModel):
     parse_status:          str                  # COMPLETE | PARTIAL | FAILED
     mapping_names:         List[str]
     mapplets_detected:     List[str]   = []     # names of every MAPPLET found (def or instance)
+    mapplets_expanded:     List[str]   = []     # subset that were successfully inline-expanded
 
 
 # ─────────────────────────────────────────────
