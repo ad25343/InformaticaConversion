@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
 _ROUTE_START_TIME = time.monotonic()
-_VERSION = "2.6.1"
+_VERSION = "2.7.0"
 
 # ── Security helpers ────────────────────────────────────────────────────────
 

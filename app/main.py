@@ -143,7 +143,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Informatica Conversion Tool",
     description="Converts Informatica PowerCenter mappings to Python, PySpark, or dbt",
-    version="2.6.1",
+    version="2.7.0",
     lifespan=lifespan,
     # Hide docs behind auth in production — set SHOW_DOCS=false in .env
     docs_url="/docs" if _cfg.show_docs else None,
