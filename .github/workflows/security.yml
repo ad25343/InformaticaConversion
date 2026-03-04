@@ -108,7 +108,7 @@ jobs:
           path: bandit-report.json
           retention-days: 30
 
-  # ── 3. Unit tests — deterministic security utilities ────────────────────────
+  # ── 3a. Unit tests — security utilities ─────────────────────────────────────
   security-unit-tests:
     name: Security Unit Tests
     runs-on: ubuntu-latest
@@ -126,6 +126,52 @@ jobs:
       - name: Run test_security.py
         working-directory: app
         run: python3 test_security.py -v
+
+  # ── 3b. Unit tests — business logic (no API key required) ───────────────────
+  core-unit-tests:
+    name: Core Unit Tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt httpx
+
+      - name: Run test_core.py
+        working-directory: app
+        env:
+          SECRET_KEY:   "ci-test-secret-key-32-chars-xxxx"
+          APP_PASSWORD: "ci-test-password"
+          DATABASE_URL: "sqlite+aiosqlite:///ci_test_core.db"
+        run: python3 test_core.py -v
+
+  # ── 3c. API route tests (no API key, in-process server) ─────────────────────
+  route-tests:
+    name: API Route Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt httpx
+
+      - name: Run test_routes.py
+        working-directory: app
+        env:
+          SECRET_KEY:   "ci-route-secret-key-32-chars-xxx"
+          APP_PASSWORD: "ci-route-password"
+          DATABASE_URL: "sqlite+aiosqlite:///ci_test_routes.db"
+        run: python3 test_routes.py -v
 
   # ── 4. Secrets detection (truffleHog) ───────────────────────────────────────
   secrets-scan:
@@ -153,13 +199,15 @@ jobs:
   notify-on-failure:
     name: Failure Summary
     runs-on: ubuntu-latest
-    needs: [dependency-audit, bandit-scan, security-unit-tests, secrets-scan]
+    needs: [dependency-audit, bandit-scan, security-unit-tests, core-unit-tests, route-tests, secrets-scan]
     if: |
       always() && (
-        needs.dependency-audit.result   == 'failure' ||
-        needs.bandit-scan.result        == 'failure' ||
+        needs.dependency-audit.result    == 'failure' ||
+        needs.bandit-scan.result         == 'failure' ||
         needs.security-unit-tests.result == 'failure' ||
-        needs.secrets-scan.result       == 'failure'
+        needs.core-unit-tests.result     == 'failure' ||
+        needs.route-tests.result         == 'failure' ||
+        needs.secrets-scan.result        == 'failure'
       )
     steps:
       - name: Summarise failures
@@ -171,6 +219,8 @@ jobs:
           echo "| Dependency Audit  | ${{ needs.dependency-audit.result }}    |" >> $GITHUB_STEP_SUMMARY
           echo "| Bandit Scan       | ${{ needs.bandit-scan.result }}         |" >> $GITHUB_STEP_SUMMARY
           echo "| Security Tests    | ${{ needs.security-unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Core Unit Tests   | ${{ needs.core-unit-tests.result }}     |" >> $GITHUB_STEP_SUMMARY
+          echo "| Route Tests       | ${{ needs.route-tests.result }}         |" >> $GITHUB_STEP_SUMMARY
           echo "| Secrets Scan      | ${{ needs.secrets-scan.result }}        |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check the failed job's logs above for details." >> $GITHUB_STEP_SUMMARY

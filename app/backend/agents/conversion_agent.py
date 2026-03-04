@@ -480,7 +480,7 @@ def _validate_conversion_files(
                 )
 
         # 4. PySpark jobs should reference SparkSession (scoped to first 2 KB)
-        if stack.value in ("PYSPARK", "HYBRID") and fname.endswith(".py"):
+        if stack in (TargetStack.PYSPARK, TargetStack.HYBRID) and fname.endswith(".py"):
             if "SparkSession" not in content and "spark" not in content.lower()[:2000]:
                 file_issues.append(
                     f"⚠️ VALIDATION: '{fname}' appears to be a PySpark job but contains no "
@@ -488,7 +488,7 @@ def _validate_conversion_files(
                 )
 
         # 5. dbt models should have a SELECT or {{ ref( (scoped to first 5 KB)
-        if stack.value == "DBT" and fname.endswith(".sql"):
+        if stack == TargetStack.DBT and fname.endswith(".sql"):
             head = content[:5000].lower()
             if "select" not in head and "{{" not in content[:5000]:
                 file_issues.append(
