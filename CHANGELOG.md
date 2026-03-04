@@ -10,6 +10,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.11.0] — Mapplet Detection
+
+### Added
+
+#### `MAPPLET_DETECTED` parse and verification flags
+
+Mapplets (reusable sub-mappings) are common in long-running Informatica estates.
+Previously, mapplet instances were silently absorbed into the graph with no
+indication that they required manual review. v2.11.0 makes them visible and
+actionable at every stage of the pipeline.
+
+**Detection (Step 1 — Parser)**
+
+- Scans `<MAPPLET>` definition blocks (present when the mapping is exported
+  with *Include Dependencies* from Repository Manager)
+- Scans `<INSTANCE TYPE="Mapplet">` references within each `<MAPPING>` (catches
+  the case where the definition block was not exported)
+- Deduplicates across both sources — exactly **one** `ParseFlag` per unique mapplet
+- Flag messages are context-aware:
+  - *Definition present* → "Port-level metadata captured; full expansion planned for v2.12"
+  - *Instance only / definition missing* → "Re-export with Include Dependencies enabled"
+- `ParseReport.mapplets_detected` — new field; list of all detected mapplet names
+- `ParseReport.objects_found["Mapplet"]` — count included in the objects summary
+- `graph["mapplets"]` — new graph key; list of mapplet records passed to all downstream agents
+
+**Verification promotion (Step 4 — Verification)**
+
+- `MAPPLET_DETECTED` entry added to `FLAG_META` with `severity=HIGH` and an
+  actionable recommendation (re-export guidance + v2.12 expansion note)
+- When `parse_report.mapplets_detected` is non-empty, a single consolidated
+  `VerificationFlag` (non-blocking, severity HIGH) is raised at Gate 1
+- Flag lists all detected mapplet names and tells the reviewer exactly what to check
+
+#### Mapplet detection cases
+
+| Scenario | Flag raised | Message |
+|---|---|---|
+| `<MAPPLET>` definition + `<INSTANCE>` present | ✅ `MAPPLET_DETECTED` | Definition present; verify generated code |
+| `<INSTANCE TYPE="Mapplet">` with no definition block | ✅ `MAPPLET_DETECTED` | Re-export with Include Dependencies |
+| No mapplets in mapping | ✅ None | Silent — no false positives |
+| Multiple distinct mapplets | ✅ One flag per mapplet, one consolidated VerificationFlag | Lists all names |
+
+### Not yet implemented (planned v2.12)
+
+Full **inline expansion** — replacing each mapplet call in the graph with its
+constituent transformations and expressions — is scoped for v2.12.  Until then,
+the generated code may contain placeholder references; the `MAPPLET_DETECTED`
+flag at Gate 1 tells reviewers exactly what to validate manually.
+
+---
+
 ## 2026-03-02 — v2.3.6 (Verification — Rank/Sorter Accuracy Improvements)
 
 ### Fixed

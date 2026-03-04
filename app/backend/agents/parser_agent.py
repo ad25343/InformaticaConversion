@@ -30,6 +30,7 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
         "targets":     [],
         "parameters":  [],
         "connections": [],
+        "mapplets":    [],
     }
 
     try:
@@ -95,6 +96,38 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
                 detail="Parameter has no default value in the XML"
             ))
 
+    # ── Mapplet definitions ───────────────────
+    # Informatica exports MAPPLET elements when the mapping is exported
+    # "with dependencies" from Repository Manager.  We record each definition
+    # and raise a MAPPLET_DETECTED flag so downstream agents know to flag the
+    # generated code for manual verification.  Full inline-expansion (replacing
+    # the mapplet call with its constituent transformations) is planned for v2.12.
+    mapplets_detected: list[str] = []
+    for mlt in root.iter("MAPPLET"):
+        mlt_name = mlt.get("NAME", "")
+        if not mlt_name:
+            continue
+        counts["Mapplet"] = counts.get("Mapplet", 0) + 1
+        graph["mapplets"].append({"name": mlt_name, "source": "definition"})
+        # Deduplicate: instance scan (inside _extract_mapping) may have already flagged this
+        already_flagged = any(
+            f.flag_type == "MAPPLET_DETECTED" and f.element == mlt_name for f in flags
+        )
+        if mlt_name not in mapplets_detected:
+            mapplets_detected.append(mlt_name)
+        if not already_flagged:
+            flags.append(ParseFlag(
+                flag_type="MAPPLET_DETECTED",
+                element=mlt_name,
+                detail=(
+                    f"Mapplet '{mlt_name}' definition is present in this export. "
+                    "Port-level metadata is captured and included in the graph. "
+                    "Full inline logic expansion (resolving inner transformations) "
+                    "is planned for v2.12. Until then, verify any references to "
+                    f"'{mlt_name}' in the generated code and validate the logic manually."
+                )
+            ))
+
     # ── Determine parse status ────────────────
     if not graph["mappings"] and graph["workflows"]:
         # Workflow XML uploaded in the primary mapping slot — clear, actionable error.
@@ -125,6 +158,27 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
 
     mapping_names = [m["name"] for m in graph["mappings"]]
 
+    # Collect any mapplet names surfaced via INSTANCE refs inside mappings
+    # (covers the case where the MAPPLET definition block is absent but instances exist)
+    for f in flags:
+        if f.flag_type == "MAPPLET_DETECTED" and f.element not in mapplets_detected:
+            mapplets_detected.append(f.element)
+
+    # Post-fix: if an instance-scan flag says "definition not found" but we did
+    # find the definition block (mlt_name in mapplets_detected via definition scan),
+    # update its detail to the "definition present" message for accuracy.
+    definition_found_set = {m["name"] for m in graph["mapplets"] if m.get("source") == "definition"}
+    for f in flags:
+        if f.flag_type == "MAPPLET_DETECTED" and "was not found in this export" in f.detail:
+            if f.element in definition_found_set:
+                f.detail = (
+                    f"Mapplet '{f.element}' definition is present in this export. "
+                    "Port-level metadata is captured and included in the graph. "
+                    "Full inline logic expansion (resolving inner transformations) "
+                    "is planned for v2.12. Until then, verify any references to "
+                    f"'{f.element}' in the generated code and validate the logic manually."
+                )
+
     return ParseReport(
         objects_found=counts,
         reusable_components=reusable,
@@ -134,6 +188,7 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
         flags=flags,
         parse_status=parse_status,
         mapping_names=mapping_names,
+        mapplets_detected=mapplets_detected,
     ), graph
 
 
@@ -153,6 +208,27 @@ def _extract_mapping(mapping_el: etree._Element, flags, reusable, unresolved_par
         trans_name = inst.get("TRANSFORMATION_NAME", inst_name)
         trans_type = inst.get("TYPE", "")
         instance_map[inst_name] = trans_name
+
+        # Detect Mapplet instances — flag if not already captured from a
+        # top-level <MAPPLET> definition block (deduplication happens in parse_xml)
+        if trans_type == "Mapplet" and trans_name:
+            already = any(
+                f.flag_type == "MAPPLET_DETECTED" and f.element == trans_name
+                for f in flags
+            )
+            if not already:
+                flags.append(ParseFlag(
+                    flag_type="MAPPLET_DETECTED",
+                    element=trans_name,
+                    detail=(
+                        f"Mapplet '{trans_name}' is referenced as an instance in "
+                        f"mapping '{name}' but its definition block was not found in "
+                        "this export. Re-export the mapping with 'Include Dependencies' "
+                        "enabled in Informatica Repository Manager to include the full "
+                        "mapplet definition. Until then, verify any references to "
+                        f"'{trans_name}' in the generated code manually."
+                    )
+                ))
 
     # ── Transformations ───────────────────────
     for trans in mapping_el.iter("TRANSFORMATION"):

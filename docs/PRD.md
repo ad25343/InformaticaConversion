@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.8.0
+**Version:** 2.11.0
 **Author:** ad25343
 **Last Updated:** 2026-03-04
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -494,10 +494,28 @@ New features:
   included in the `job_complete` webhook payload
 - **Config**: `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BASE_BRANCH`, `GITHUB_API_URL`
 
-### v2.11 — Planned
+### v2.11 — Mapplet Detection (shipped)
 
+Mapplets are reusable sub-mappings common in long-running Informatica estates.
+v2.11 makes them visible at every pipeline stage so reviewers know exactly what
+to verify manually.
+
+- **`ParseReport.mapplets_detected`** — new list field; every unique mapplet name found
+- **`graph["mapplets"]`** — new graph key passed to all downstream agents
+- **`ParseFlag` per mapplet** — context-aware message distinguishes "definition present"
+  (exported with *Include Dependencies*) from "instance only, definition missing"
+  (re-export guidance included)
+- **`VerificationFlag` at Gate 1** — consolidated HIGH-severity flag lists all detected
+  mapplet names with an actionable recommendation; non-blocking so conversion continues
+- **`FLAG_META["MAPPLET_DETECTED"]`** — severity and recommendation registered
+- Detection is fully deterministic; no LLM call required
+
+### v2.12 — Planned
+
+- **Mapplet inline expansion**: replace each `<INSTANCE TYPE="Mapplet">` call in the graph
+  with its constituent transformations and port expressions so the conversion agent can
+  generate fully resolved code without manual review gaps
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
-- Mapplet support: expand `<MAPPLET>` definitions inline when building the graph
 
 ### v3.0 — Vision
 

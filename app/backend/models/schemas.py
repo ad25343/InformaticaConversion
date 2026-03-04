@@ -167,6 +167,7 @@ class ParseReport(BaseModel):
     flags:                 List[ParseFlag]
     parse_status:          str                  # COMPLETE | PARTIAL | FAILED
     mapping_names:         List[str]
+    mapplets_detected:     List[str]   = []     # names of every MAPPLET found (def or instance)
 
 
 # ─────────────────────────────────────────────
