@@ -1,5 +1,26 @@
 """
 Pydantic schemas and SQLAlchemy models for the Informatica Conversion Tool.
+
+Schema versioning convention
+-----------------------------
+Every model that is persisted inside ``state_json`` carries a ``schema_version``
+field (default = 1).  Old rows without this field deserialise safely because
+Pydantic fills in the default.
+
+When a **breaking** change is made to a model in a future release (e.g. a new
+*required* field is added, a field is renamed, or a type changes):
+
+1. Bump ``schema_version`` on that model to the next integer.
+2. Add a migration block in the orchestrator (or in ``_decode_state()`` /
+   the relevant agent) that detects the old version and back-fills the missing
+   data before constructing the model.
+
+Example::
+
+    raw = state.get("parse_report", {})
+    if raw.get("schema_version", 1) < 2:
+        raw.setdefault("new_required_field", "default_value")
+    report = ParseReport(**raw)
 """
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -117,6 +138,7 @@ class ParameterEntry(BaseModel):
 
 class SessionParseReport(BaseModel):
     """Output of Step 0 — Session & Parameter Parser."""
+    schema_version:       int                      = 1    # bump on breaking schema changes
     uploaded_files:       List[UploadedFile]
     cross_ref:            CrossRefValidation
     session_config:       Optional[SessionConfig]  = None
@@ -136,6 +158,7 @@ class ParseFlag(BaseModel):
     detail:    str
 
 class ParseReport(BaseModel):
+    schema_version:        int          = 1     # bump on breaking schema changes
     objects_found:         Dict[str, int]       # e.g. {"Mapping": 1, "Transformation": 8}
     reusable_components:   List[str]
     unresolved_parameters: List[str]
@@ -151,6 +174,7 @@ class ParseReport(BaseModel):
 # ─────────────────────────────────────────────
 
 class ComplexityReport(BaseModel):
+    schema_version:  int          = 1     # bump on breaking schema changes
     tier:            ComplexityTier
     criteria_matched: List[str]
     data_volume_est: Optional[str]
@@ -177,6 +201,7 @@ class CheckResult(BaseModel):
     detail: Optional[str] = None
 
 class VerificationReport(BaseModel):
+    schema_version:       int          = 1  # bump on breaking schema changes
     mapping_name:         str
     complexity_tier:      ComplexityTier
     overall_status:       str               # APPROVED_FOR_CONVERSION | REQUIRES_REMEDIATION
@@ -206,6 +231,7 @@ class FlagResolution(BaseModel):
     fix_suggestion: Optional[str] = None  # The auto_fix_suggestion text (carried from flag)
 
 class SignOffRecord(BaseModel):
+    schema_version:    int          = 1     # bump on breaking schema changes
     reviewer_name:     str
     reviewer_role:     str
     review_date:       str
@@ -221,6 +247,7 @@ class SignOffRecord(BaseModel):
 # ─────────────────────────────────────────────
 
 class StackAssignment(BaseModel):
+    schema_version:    int          = 1     # bump on breaking schema changes
     mapping_name:      str
     complexity_tier:   ComplexityTier
     assigned_stack:    TargetStack
@@ -234,6 +261,7 @@ class StackAssignment(BaseModel):
 # ─────────────────────────────────────────────
 
 class ConversionOutput(BaseModel):
+    schema_version: int          = 1      # bump on breaking schema changes
     mapping_name:  str
     target_stack:  TargetStack
     files:         Dict[str, str]   # filename -> code content
@@ -246,6 +274,7 @@ class ConversionOutput(BaseModel):
 # ─────────────────────────────────────────────
 
 class ReconciliationReport(BaseModel):
+    schema_version:    int          = 1     # bump on breaking schema changes
     mapping_name:      str
     input_description: str
     informatica_rows:  Optional[int]
@@ -276,6 +305,7 @@ class SecurityFinding(BaseModel):
 
 
 class SecurityScanReport(BaseModel):
+    schema_version: int          = 1      # bump on breaking schema changes
     mapping_name:   str
     target_stack:   str
     ran_bandit:     bool = False
@@ -322,6 +352,7 @@ class CodeReviewCheck(BaseModel):
     note:     str = ""
 
 class CodeReviewReport(BaseModel):
+    schema_version:     int          = 1  # bump on breaking schema changes
     mapping_name:       str
     target_stack:       str
     checks:             List[CodeReviewCheck]
@@ -352,6 +383,7 @@ class FilterCoverageCheck(BaseModel):
     note:               str = ""
 
 class TestReport(BaseModel):
+    schema_version:     int          = 1  # bump on breaking schema changes
     mapping_name:       str
     target_stack:       str
     test_files:         Dict[str, str]          # filename -> test file content
@@ -371,6 +403,7 @@ class TestReport(BaseModel):
 # ─────────────────────────────────────────────
 
 class CodeSignOffRecord(BaseModel):
+    schema_version: int               = 1   # bump on breaking schema changes
     reviewer_name:  str
     reviewer_role:  str
     review_date:    str
@@ -417,6 +450,7 @@ class SignOffRequest(BaseModel):
 
 class SecuritySignOffRecord(BaseModel):
     """Stored on the job after security review gate (Step 9)."""
+    schema_version:     int                  = 1  # bump on breaking schema changes
     reviewer_name:      str
     reviewer_role:      str
     review_date:        str
@@ -487,6 +521,7 @@ class ManifestItem(BaseModel):
 
 class ManifestReport(BaseModel):
     """Full pre-conversion manifest for one XML file."""
+    schema_version:       int  = 1      # bump on breaking schema changes
     mapping_names:        List[str]
     source_count:         int
     target_count:         int
