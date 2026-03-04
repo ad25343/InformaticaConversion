@@ -528,3 +528,207 @@ Step 1.5 — runs immediately after XML parsing (non-blocking):
 - **GAP #13** — Startup model probe: 404 from Anthropic logs an ERROR with the deprecated model string and instructions to update .env.
 - **GAP #14** — Download endpoint enforces extension allowlist (.py .sql .yaml .yml .txt .md .json .sh). Path traversal stripped before check.
 - **GAP #15** — Graceful shutdown: lifespan cancels all in-flight asyncio pipeline tasks on SIGTERM/SIGINT.
+
+## v2.4.6 — 2026-03-02
+
+### fix: SQLite write locking + audit trail
+
+- **GAP #1** — All write operations now use `BEGIN IMMEDIATE` transactions. Eliminates
+  `SQLITE_BUSY` errors under concurrent batch jobs where multiple pipelines attempt
+  simultaneous writes. (`database.py`)
+- **GAP #17** — `audit_log` table added to the DB schema. Every Gate 1, Gate 2, and
+  Gate 3 decision is stamped with `job_id`, `gate`, `decision`, `reviewer_name`,
+  `reviewer_role`, `notes`, and `timestamp`. Survives job soft-delete. Accessible via
+  `GET /api/audit`. (`database.py`, `routes.py`)
+
+## v2.4.7 — 2026-03-02
+
+### feat: Manifest re-upload endpoint
+
+- **`POST /api/jobs/{id}/manifest-upload`** — accepts an annotated manifest XLSX with
+  reviewer overrides filled in. Parses the Review Required sheet, extracts the Override
+  column, and stores the overrides in `state["manifest_overrides"]`. The conversion agent
+  reads these on Step 7 and injects reviewer answers as hard requirements into the
+  conversion prompt. (`routes.py`, `manifest_agent.py`)
+
+## v2.4.8 — 2026-03-02
+
+### feat: Manifest re-upload UI in Gate 1 sign-off card
+
+- The Gate 1 sign-off card now shows a "Re-upload Manifest" section when the manifest
+  exists and the job is awaiting Gate 1 review. Reviewer can download the manifest, fill
+  in the Override column, and re-upload directly from the UI without leaving the job panel.
+  The upload sends a `POST /api/jobs/{id}/manifest-upload` request and refreshes the job
+  state on success. (`index.html`)
+
+## v2.4.9 — 2026-03-02
+
+### fix: SSE sentinel + FAILED state on batch job crash
+
+- **GAP #8** — `stream_progress()` now guarantees an SSE `[DONE]` sentinel is sent on
+  all exit paths (normal completion, pipeline exception, stream consumer disconnect).
+  Previously a pipeline crash left the SSE connection open indefinitely on the client.
+  The `BackgroundTask` cleanup is now also registered on exception paths. (`routes.py`)
+- Batch job worker catches unhandled exceptions and transitions the job to `FAILED` with
+  an `error` key in state before the task exits, so the UI never shows a permanently
+  spinning job after a crash. (`orchestrator.py`)
+
+---
+
+## v2.5.0 — 2026-03-02
+
+### feat: Job artifact export to disk + ZIP download
+
+- **Gate 3 artifact export** — after a Gate 3 APPROVED decision the pipeline writes a
+  structured output directory: generated code files, test files, S2T Excel workbook,
+  security scan report (JSON), Markdown documentation, and a `manifest.json` summary.
+  Output root configurable via `OUTPUT_DIR` env var; defaults to `<repo>/jobs/`; set to
+  `disabled` to suppress all disk writes. (`job_exporter.py`)
+- **`GET /api/jobs/{id}/export`** — builds the output directory on demand and streams
+  the contents as a ZIP archive. Returns 404 if the job is not yet COMPLETE. Suitable
+  for CI pipelines that pull generated code without accessing the file system directly.
+  (`routes.py`)
+
+---
+
+## v2.6.0 — 2026-03-02
+
+### feat: Performance guidance in prompts + performance review stage + WAL + pagination
+
+#### Prompt enhancements
+
+- **PySpark — `## Performance Rules` block**: partition strategy (`.repartition()` /
+  `.coalesce()`), broadcast joins for SMALL/MEDIUM lookups, UDF ban with required comment
+  when unavoidable, no `.collect()` inside loops, partition pruning before joins, shuffle
+  minimisation via `sortWithinPartitions`, `.cache()` / `.persist()` checkpoints,
+  `spark.sql.shuffle.partitions` header in every generated script.
+- **dbt — `## Performance Rules` block**: materialisation selection (view → staging,
+  incremental → final mart, table → small lookup), incremental strategy per warehouse
+  (BigQuery insert_overwrite, Snowflake/Redshift merge, Spark insert_overwrite), partition
+  / cluster keys, SELECT ∗ ban, filter-early guidance.
+- **Python/Pandas — chunked I/O rules**: `pd.read_csv(..., chunksize=100_000)` mandatory
+  on all file sources, no `iterrows()` on large DataFrames, memory-efficient joins,
+  chunk-pipeline pattern through the full read → transform → write chain.
+
+#### Stage C — Performance Review
+
+- New `run_perf_review()` function in `review_agent.py` runs after Stage B (code quality).
+  Checks generated code for scale anti-patterns: `collect()` on large DataFrames, Python
+  UDFs where native Spark functions exist, missing partition hints on reads, cartesian
+  joins, `iterrows()`, `pd.read_csv()` without `chunksize`, final dbt mart as `view`.
+  Advisory only — no pipeline gate; results stored in `state["perf_review"]`.
+- `PerfReviewCheck` and `PerfReviewReport` Pydantic models added to `schemas.py`.
+
+#### Infrastructure
+
+- **SQLite WAL mode** — `PRAGMA journal_mode=WAL` + `PRAGMA synchronous=NORMAL` set
+  immediately after `init_db()` opens the connection. Concurrent readers no longer block
+  on writer. Combined with BEGIN IMMEDIATE write locking (v2.4.6), this eliminates
+  reader starvation under heavy batch loads.
+- **`complexity_tier` column** — new column on the `jobs` table (DEFAULT NULL). DB
+  auto-migrates on startup. Written after Step 6 with the tier value. `list_jobs()` and
+  `get_batch_jobs()` include it in the SELECT to avoid unnecessary state decompression.
+- **Pagination for `GET /api/jobs`** — query params `?limit=N&offset=M&status=S`; default
+  `limit=50`, `offset=0`. Response envelope: `{"total": N, "jobs": [...]}`. COUNT(*)
+  sub-query returns total without loading all rows.
+
+---
+
+## v2.6.1 — 2026-03-02
+
+### fix: Security hardening + schema_version on all persisted models
+
+- **Path traversal in export endpoint** — `GET /api/jobs/{id}/export` now resolves all
+  paths relative to the configured output directory and rejects any path that escapes
+  the directory root.
+- **Open redirect in auth middleware** — login redirect now validates the `next=` query
+  parameter against an allowlist of internal paths; external URLs are silently discarded.
+- **Timing-safe token comparison** — session token comparison in `auth.py` now uses
+  `hmac.compare_digest()` instead of string equality to prevent timing-based attacks.
+- **`yaml.safe_load` everywhere** — all `yaml.load()` calls in the codebase replaced with
+  `yaml.safe_load()`. Eliminates arbitrary code execution via crafted YAML in uploaded
+  parameter files or security rules.
+- **`schema_version` field** — all persisted Pydantic models (`ParseReport`,
+  `ConversionOutput`, `CodeReviewReport`, `ReconciliationReport`, etc.) include a
+  `schema_version: str` field (default `"1"`). Enables future migration logic without
+  a full DB schema change.
+- **BPG updated** — Best Practices Guide bumped to v2.6.1; Security section (§9)
+  expanded with `yaml.safe_load`, timing-safe comparison, and open-redirect notes.
+
+---
+
+## v2.7.0 — 2026-03-04
+
+### feat: dbt conversions are execution-ready out of the box
+
+Every dbt conversion now produces a complete, runnable dbt project — no manual edits
+required before `dbt run`.
+
+- **`dbt_project.yml`** — generated at the project root with correct `name`, `version`,
+  `model-paths`, `test-paths`, and `profile` reference.
+- **`profiles.yml` template** — written alongside the project with `env_var()` stubs for
+  all connection credentials (host, user, password, database, schema). No hardcoded
+  secrets. Includes a commented example for each supported warehouse adapter.
+- **`packages.yml`** — included when `dbt_utils` macros are used in generated models;
+  pinned to a compatible version range.
+- **Macros** — written to `macros/` with correct Jinja function signatures and
+  `{% macro %}` / `{% endmacro %}` delimiters.
+- **`schema.yml` / `sources.yml`** — include `freshness` blocks, `not_null` and
+  `unique` tests on primary key columns, and correct three-part `database.schema.table`
+  references in `sources.yml`.
+- **`ref()` and `source()` validation** — generated SQL models verified not to contain
+  bare table name references; all cross-model references use `{{ ref('model') }}` or
+  `{{ source('schema', 'table') }}`.
+- **BPG updated** — Best Practices Guide §12 (dbt) expanded with the new file layout,
+  profiles.yml credential management, and `ref()` / `source()` usage rules.
+
+---
+
+## v2.8.0 — 2026-03-04
+
+### test: Comprehensive validation layer — 100 tests across 5 new files
+
+#### New test modules
+
+- **`tests/test_core.py`** — 76 unit tests covering XML parser edge cases, complexity
+  scoring, S2T extraction, documentation sentinel logic, verification flag rules,
+  security scan bandit/YAML/Claude paths, code review checks, test generation stubs,
+  and orchestrator state machine transitions.
+- **`tests/test_steps58.py`** — Steps 5–8 integration tests: Gate 1 sign-off logic,
+  stack assignment, conversion output validation (`_validate_conversion_files()`),
+  security scan happy-path and error paths.
+- **`tests/test_routes.py`** — REST API contract tests: all 20+ endpoints exercised
+  against a fixture SQLite DB. Asserts status codes, content-type headers, and payload
+  shape for jobs, batch, logs, health, audit, and export endpoints.
+
+#### New pipeline modules (wired into orchestrator)
+
+- **`app/backend/smoke_execute.py`** — static file validation without a live database:
+  `py_compile` for Python/PySpark, SELECT + Jinja delimiter balance check for dbt SQL,
+  `yaml.safe_load` for YAML. `SmokeResult` model per file (passed / failed / tool /
+  detail). Added as **Step 7b** in both `resume_after_signoff` and
+  `resume_after_security_review`; failures stored as HIGH `smoke_flags` on
+  `ConversionOutput`; pipeline continues regardless.
+- **`app/backend/agents/reconciliation_agent.py`** — structural reconciliation between
+  mapping specification and generated code: (1) target field coverage — every S2T target
+  field found in generated code, (2) source table coverage — every source qualifier /
+  table referenced in generated code, (3) expression coverage — documented business-rule
+  expressions present in generated code, (4) stub completeness — no file is >60% TODO
+  stubs. Returns `ReconciliationReport` with `match_rate`, `mismatched_fields`,
+  `final_status` (RECONCILED ≥100%, PARTIAL ≥80%, PENDING_EXECUTION <80%). Added as
+  **Step 10b** in both `resume_after_signoff` and `resume_after_security_review`;
+  stored in `state["reconciliation"]`; advisory, non-blocking.
+
+#### Infrastructure
+
+- **GitHub Actions `test.yml`** — new workflow runs `pytest -x` on every push to `main`
+  and on all PRs targeting `main`; job fails on first test failure.
+- **Version string centralised** — `APP_VERSION = "2.8.0"` in `config.py`;
+  `main.py` (FastAPI metadata + `/health` response) and `routes.py` both read
+  `_cfg.app_version` — no more scattered hardcoded version strings.
+- **HTTP security headers middleware** — new `security_headers_middleware` in `main.py`
+  adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Permissions-Policy`, `Content-Security-Policy` (self + unsafe-inline), and (when
+  `HTTPS=true`) `Strict-Transport-Security: max-age=31536000; includeSubDomains` to
+  every HTTP response.

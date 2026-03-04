@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.3.6
+**Version:** 2.8.0
 **Author:** ad25343
-**Last Updated:** 2026-03-02
+**Last Updated:** 2026-03-04
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -337,9 +337,125 @@ Fixed:
   Falls back to parse flag details, then a generic step-number message. Tailored hints
   for known failure patterns: workflow-in-mapping-slot, no mappings found, missing API key.
 
-### v2.3 — Planned
+### v2.4 — Mapping Manifest + Stability Fixes (shipped)
 
-- Git integration: open a pull request with generated code directly from the UI
+Pre-conversion manifest that surfaces naming-convention surprises before code generation
+runs, plus a six-patch series closing all critical production stability gaps.
+
+New features:
+- **Step 1.5 — Mapping Manifest**: scores every source→SQ/Lookup connection (HIGH /
+  MEDIUM / LOW / UNMAPPED), produces a three-sheet XLSX (Summary, Full Lineage, Review
+  Required), and surfaces expressions, lookups, and unresolved parameters before Step 6
+- **Reviewer override loop**: reviewer fills in the Override column for ambiguous rows
+  and re-uploads; conversion agent reads overrides and injects them as hard requirements
+- `POST /api/jobs/{id}/manifest-upload` — accepts annotated manifest XLSX
+- `GET /api/jobs/{id}/manifest.xlsx` — downloads the current manifest
+- **State compression** — zlib ~50× compression; `pipeline_log` capped at 300 entries;
+  manifest XLSX no longer stored inline in state
+- **Atomic batch creation** — `create_batch_atomic()` creates batch + all jobs in one
+  SQLite transaction; rollback on failure prevents orphaned jobs
+- **Deep-copy state** — all resume functions deep-copy state before mutation
+- **Timeout watchdog** — jobs stuck in active pipeline statuses for 45+ minutes are
+  automatically marked FAILED
+- **Output validation** — `_validate_conversion_files()` checks every generated file for
+  emptiness, placeholder-only (>60% TODOs), Python syntax errors, and missing
+  SparkSession/SELECT
+- **BEGIN IMMEDIATE write locking** — eliminates SQLite SQLITE_BUSY errors under concurrent batch runs
+- **Audit trail** — every Gate 1/2/3 decision stamped to a dedicated `audit_log` table
+- **GAP fixes**: SSE queue leak, download path traversal, graceful shutdown, model
+  deprecation probe, startup secret-key guard, DB index idempotency
+
+### v2.5 — Job Artifact Export (shipped)
+
+Completed jobs can be exported to disk and downloaded as a ZIP archive.
+
+New features:
+- Gate 3 APPROVED jobs write a structured output directory: generated code files, test
+  files, S2T Excel, security scan report, Markdown documentation, and a JSON manifest
+- `GET /api/jobs/{id}/export` — builds and returns the output ZIP on demand
+- Output directory configurable via `OUTPUT_DIR` env var; set to `disabled` to suppress disk writes
+
+### v2.6 — Performance at Scale + Security Hardening (shipped)
+
+Performance guidance baked into all code-generation prompts, infrastructure tuning for
+production-scale workloads, and a security audit hardening pass.
+
+New features:
+- **PySpark performance rules**: partition strategy, broadcast joins, UDF ban, avoid
+  `.collect()` inside loops, partition pruning, shuffle minimisation, `.cache()`
+  checkpoints, `spark.sql.shuffle.partitions` default
+- **dbt performance rules**: materialisation selection (view / incremental / table),
+  incremental strategy per warehouse (BigQuery insert_overwrite, Snowflake merge),
+  partition/cluster keys, SELECT ∗ ban, filter-early guidance
+- **Python/Pandas performance rules**: `chunksize` mandatory on `pd.read_csv()`, no
+  `iterrows()` on large frames, memory-efficient joins, chunk-pipeline pattern
+- **Stage C — Performance Review**: third review stage after Stage B; checks generated
+  code for scale anti-patterns (collect, UDFs, missing partition hints, cartesian joins,
+  iterrows, read_csv without chunksize); advisory only — no pipeline gate
+- `PerfReviewReport` added to data model and stored under `state["perf_review"]`
+- **SQLite WAL mode** — concurrent readers no longer blocked by writers; `PRAGMA
+  journal_mode=WAL` + `synchronous=NORMAL` set at `init_db()`
+- **`complexity_tier` column** — jobs table stores the tier string so `GET /api/jobs`
+  can filter/display tier without decompressing state
+- **Pagination for `GET /api/jobs`** — accepts `?limit=N&offset=M&status=S`; returns
+  `{"total": N, "jobs": [...]}` envelope
+- **v2.6.1 security hardening**: path-traversal in export endpoint, SSRF in webhook
+  stub, open redirect in auth, timing-safe token comparison, unsafe YAML load →
+  `yaml.safe_load`, `schema_version` field on all persisted Pydantic models
+
+### v2.7 — dbt Execution-Ready Output (shipped)
+
+Generated dbt models now produce a complete, runnable project out-of-the-box.
+
+New features:
+- Every dbt conversion includes a `dbt_project.yml` at the project root with correct
+  model paths, version, and profile reference
+- `profiles.yml` template generated alongside code with `env_var()` stubs for all
+  connection credentials — no hardcoded secrets
+- `packages.yml` included when dbt-utils macros are used in generated models
+- Macros written to `macros/` directory with correct Jinja function signatures
+- `schema.yml` / `sources.yml` include `freshness` blocks and `not_null` / `unique`
+  tests on primary key columns
+- All file paths in generated `sources.yml` use the correct `database.schema.table`
+  three-part reference format
+- dbt `ref()` and `source()` calls validated: no bare table name references
+
+### v2.8 — Validation Framework (shipped)
+
+Comprehensive automated test suite covering the full pipeline from parsing through
+reconciliation.
+
+New features:
+- **`tests/test_core.py`** — 76 unit tests: XML parser edge cases, complexity scoring,
+  S2T extraction, documentation sentinels, verification flag logic, security scan
+  patterns, code review checks, test generation, orchestrator state machine transitions
+- **`tests/test_steps58.py`** — Steps 5–8 integration tests: Gate 1 sign-off logic,
+  stack assignment, conversion output validation, security scan bandit/YAML/Claude paths
+- **`tests/smoke_execute.py`** → `app/backend/smoke_execute.py` — static file validation
+  without a live database: `py_compile` for Python/PySpark, SELECT/Jinja delimiter
+  balance for dbt SQL, `yaml.safe_load` for YAML; now wired into pipeline as Step 7b
+  (non-blocking, results stored as `smoke_flags` on `ConversionOutput`)
+- **`app/backend/agents/reconciliation_agent.py`** — structural reconciliation: target
+  field coverage, source table coverage, expression/business-rule coverage, stub
+  completeness; `ReconciliationReport` with `match_rate`, `mismatched_fields`, and
+  `final_status` (RECONCILED / PARTIAL / PENDING_EXECUTION); now wired into pipeline as
+  Step 10b in both `resume_after_signoff` and `resume_after_security_review`
+- **`tests/test_routes.py`** — REST API contract tests: all 20+ endpoints exercised
+  against a test SQLite DB with fixture jobs; status code, content-type, and payload
+  shape assertions
+- **CI** — GitHub Actions `test.yml` workflow runs `pytest -x` on every push to `main`
+  and on all PRs targeting `main`; job fails on first error
+- **Version string centralised** — `APP_VERSION = "2.8.0"` in `config.py`; `main.py`
+  (FastAPI + health endpoint) and `routes.py` both reference `_cfg.app_version` — no
+  more scattered hardcoded strings
+- **HTTP security headers** — new middleware in `main.py` adds `X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`,
+  `Permissions-Policy`, `Content-Security-Policy`, and (when `HTTPS=true`)
+  `Strict-Transport-Security` to every response
+
+### v2.9 — Planned
+
+- Git integration: open a PR with generated code directly from the UI
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 - Team mode: multiple reviewers, comment threads on individual flags
 - Webhook notifications (Slack, Teams) on gate decisions
@@ -381,6 +497,8 @@ Step 5   ◼ Gate 1 — Human Review Sign-off
     ▼
 Step 6   Target Stack Assignment       [Claude classifier]
 Step 7   Code Generation               [Claude, multi-file output]
+Step 7b  Smoke Execution Check         [non-blocking; py_compile / SQL balance / yaml.safe_load]
+         → Failures stored as HIGH smoke_flags on ConversionOutput; pipeline continues
     │
     ▼
 Step 8   Security Scan                 [bandit (Python) + YAML regex + Claude review]
@@ -398,6 +516,9 @@ Step 9   ◼ Gate 2 — Human Security Review
     ▼
 Step 10  Logic Equivalence Check       [Stage A: Claude, XML → code rule-by-rule comparison]
          Code Quality Review           [Stage B: Claude cross-check vs. docs, S2T, parse flags]
+         Performance Review            [Stage C: advisory anti-pattern scan at scale]
+Step 10b Structural Reconciliation     [non-blocking; field coverage, source coverage,
+         → ReconciliationReport (RECONCILED / PARTIAL / PENDING_EXECUTION) stored in state]
 Step 11  Test Generation               [Claude, pytest / dbt test stubs]
          → Security re-scan of generated test files (merged into Step 8 report)
     │
@@ -485,6 +606,10 @@ flows through `backend/security.py`.
 | `GET` | `/api/logs/history` | Soft-deleted DB jobs + orphaned registry entries for the Log Archive |
 | `GET` | `/api/logs/history/{job_id}` | Read a historical job log without requiring a live DB record |
 | `GET` | `/api/security/knowledge` | Security KB summary: rules count, patterns count, top 10 patterns |
+| `POST` | `/api/jobs/{id}/manifest-upload` | Upload annotated manifest XLSX with reviewer overrides (v2.4) |
+| `GET` | `/api/jobs/{id}/manifest.xlsx` | Download the pre-conversion mapping manifest (v2.4) |
+| `GET` | `/api/jobs/{id}/export` | Build and return completed job artifact ZIP (v2.5) |
+| `GET` | `/api/audit` | Audit trail of all Gate 1/2/3 decisions with reviewer metadata (v2.4.6) |
 
 ---
 
@@ -520,7 +645,10 @@ Job
     ├── security_scan          Step 8
     ├── security_scan_rounds   Step 8  (v2.2) list of prior scan rounds for fix-round diff
     ├── security_sign_off      Step 9  (Gate 2)
+    ├── manifest               Step 1.5  (v2.4) ManifestReport
     ├── code_review            Step 10
+    ├── perf_review            Step 10   (v2.6) PerfReviewReport — advisory only
+    ├── reconciliation         Step 10b  (v2.8) ReconciliationReport
     ├── test_report            Step 11
     └── code_sign_off          Step 12 (Gate 3)
 ```
@@ -575,21 +703,24 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ## 10. Success Metrics
 
-| Metric | v1.0 Target | v1.1 Target | v1.2 Target | v1.3 Target | v2.0 Target | v2.1 Target | v2.2 Target |
-|---|---|---|---|---|---|---|---|
-| End-to-end pipeline completion rate | > 85% | > 90% | > 90% | > 90% | > 90% per job | > 95% per job | > 95% per job |
-| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
-| Code review pass rate (Gate 3 first attempt) | > 70% | > 75% | > 75% | > 75% | > 75% | > 75% | > 80% |
-| Security scan false-positive rate | — | < 10% | < 10% | < 10% | < 10% | < 10% | < 10% |
-| Security gate review time (median) | — | — | < 5 min | < 5 min | < 5 min | < 5 min | < 5 min |
-| Logic equivalence MISMATCH rate | — | — | — | < 5% | < 5% | < 5% | < 5% |
-| Logic equivalence VERIFIED rate | — | — | — | > 80% | > 80% | > 80% | > 80% |
-| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| $$VAR resolution rate (when param file provided) | — | 100% | 100% | 100% | 100% | 100% | 100% |
-| Batch throughput (mappings / hour) | — | — | — | — | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent |
-| Doc truncation rate (HIGH/VERY_HIGH tier) | — | — | — | — | — | 0% | 0% |
-| Security KB standing rules | — | — | — | — | — | — | 17 |
-| Security KB patterns (after 10 jobs) | — | — | — | — | — | — | ≥ 20 unique |
+| Metric | v2.2 | v2.4 | v2.5 | v2.6 | v2.7 | v2.8 |
+|---|---|---|---|---|---|---|
+| End-to-end pipeline completion rate | > 95% per job | > 95% | > 95% | > 95% | > 95% | > 95% |
+| S2T field coverage | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% | ≥ 95% |
+| Code review pass rate (Gate 3 first attempt) | > 80% | > 80% | > 80% | > 80% | > 85% | > 85% |
+| Security scan false-positive rate | < 10% | < 10% | < 10% | < 10% | < 10% | < 10% |
+| Security gate review time (median) | < 5 min | < 5 min | < 5 min | < 5 min | < 5 min | < 5 min |
+| Logic equivalence MISMATCH rate | < 5% | < 5% | < 5% | < 5% | < 5% | < 5% |
+| Logic equivalence VERIFIED rate | > 80% | > 80% | > 80% | > 80% | > 80% | > 80% |
+| Structural reconciliation match rate | — | — | — | — | — | ≥ 90% RECONCILED |
+| CVE count in dependencies | 0 | 0 | 0 | 0 | 0 | 0 |
+| $$VAR resolution rate (when param file provided) | 100% | 100% | 100% | 100% | 100% | 100% |
+| Batch throughput (mappings / hour) | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent | ≥ 3 concurrent |
+| Doc truncation rate (HIGH/VERY_HIGH tier) | 0% | 0% | 0% | 0% | 0% | 0% |
+| Security KB standing rules | 17 | 21 | 21 | 21 | 21 | 21 |
+| Security KB patterns (after 10 jobs) | ≥ 20 unique | ≥ 20 unique | ≥ 20 unique | ≥ 20 unique | ≥ 20 unique | ≥ 20 unique |
+| Automated test coverage | — | — | — | — | — | 100 tests / 5 modules |
+| dbt project execution-ready (zero manual edits) | — | — | — | — | ≥ 95% | ≥ 95% |
 
 ---
 

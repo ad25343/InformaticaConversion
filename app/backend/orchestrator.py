@@ -20,6 +20,8 @@ from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
     session_parser_agent, security_agent, manifest_agent
 from .agents.documentation_agent import DOC_TRUNCATION_SENTINEL, DOC_COMPLETE_SENTINEL
+from .agents.reconciliation_agent import generate_reconciliation_report
+from .smoke_execute import smoke_execute_files, format_smoke_results
 from .logger import JobLogger
 from .security import scan_xml_for_secrets
 
@@ -658,6 +660,50 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
                          {"conversion": conversion_output.model_dump()})
         return
 
+    # ── STEP 7b — SMOKE EXECUTION CHECK ──────────────────────────────────────
+    # Validates generated files without a live database:
+    #   Python/PySpark → py_compile  |  dbt SQL → Jinja balance + SELECT check
+    #   YAML → yaml.safe_load
+    # Non-blocking: failures surface as HIGH flags appended to the verification
+    # report so Gate 3 reviewers see them without stopping the pipeline.
+    try:
+        smoke_results = smoke_execute_files(
+            conversion_output.files,
+            conversion_output.target_stack,
+        )
+        smoke_failures = [r for r in smoke_results if not r.passed]
+        if smoke_failures:
+            summary = format_smoke_results(smoke_results)
+            log.warning(
+                f"Smoke execution: {len(smoke_failures)}/{len(smoke_results)} file(s) failed "
+                f"compilation/structural checks. Details:\n{summary}",
+                step=7,
+            )
+            # Inject as HIGH verification flags so reviewers see them at Gate 3
+            smoke_flags = [
+                {
+                    "flag_type": "SMOKE_CHECK_FAILED",
+                    "severity": "HIGH",
+                    "description": f"{r.filename}: {r.tool} check failed — {r.detail}",
+                    "recommendation": "Review the generated file for syntax errors before running.",
+                    "auto_fix_suggestion": None,
+                }
+                for r in smoke_failures
+            ]
+            # Merge into existing conversion state for UI display
+            existing_conv = conversion_output.model_dump()
+            existing_conv.setdefault("smoke_flags", [])
+            existing_conv["smoke_flags"].extend(smoke_flags)
+            await update_job(job_id, {"conversion": existing_conv})
+        else:
+            log.info(
+                f"Smoke execution: all {len(smoke_results)} file(s) passed "
+                "compilation/structural checks.",
+                step=7,
+            )
+    except Exception as e:
+        log.warning(f"Smoke execution check failed (non-blocking): {e}", step=7)
+
     # ── STEP 8 — SECURITY SCAN ───────────────────────────────────────────────
     log.step_start(8, "Security Scan (bandit + YAML + Claude)")
     log.state_change("converting", "security_scanning", step=8)
@@ -774,11 +820,48 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         )
         log.step_complete(10, "Code Quality Review", "SKIPPED (error)")
 
+    # ── STEP 10b — STRUCTURAL RECONCILIATION ─────────────────────────────────
+    # Validates that every target field from the S2T mapping appears in the
+    # generated code.  No live database required — pure text analysis.
+    # Non-blocking: the reconciliation_report is stored in job state and shown
+    # at Gate 3 alongside the code review result.
+    reconciliation_report = None
+    try:
+        s2t_field_list = None
+        if s2t_state and isinstance(s2t_state.get("fields"), list):
+            s2t_field_list = [
+                f.get("target_field") or f.get("name") or ""
+                for f in s2t_state["fields"]
+                if isinstance(f, dict)
+            ]
+            s2t_field_list = [f for f in s2t_field_list if f]
+        reconciliation_report = generate_reconciliation_report(
+            parse_report=parse_report,
+            conversion_output=conversion_output,
+            s2t_field_list=s2t_field_list or [],
+        )
+        log.info(
+            f"Reconciliation complete — status={reconciliation_report.final_status}, "
+            f"match_rate={reconciliation_report.match_rate:.1f}%, "
+            f"mismatched_fields={len(reconciliation_report.mismatched_fields)}",
+            step=10,
+            data={
+                "final_status": reconciliation_report.final_status,
+                "match_rate":   reconciliation_report.match_rate,
+                "mismatched":   len(reconciliation_report.mismatched_fields),
+            },
+        )
+    except Exception as e:
+        log.warning(f"Structural reconciliation failed (non-blocking): {e}", step=10)
+
     # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
     log.step_start(11, "Test Generation & Coverage Check")
     log.state_change("reviewing", "testing", step=11)
     yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
-                     {"code_review": code_review.model_dump()})
+                     {
+                         "code_review": code_review.model_dump(),
+                         "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
+                     })
 
     try:
         test_report = test_agent.generate_tests(
@@ -1226,11 +1309,39 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         )
         log.step_complete(10, "Code Quality Review", "SKIPPED (error)")
 
+    # ── STEP 10b — STRUCTURAL RECONCILIATION ─────────────────────────────────
+    reconciliation_report = None
+    try:
+        s2t_field_list = None
+        if s2t_state and isinstance(s2t_state.get("fields"), list):
+            s2t_field_list = [
+                f.get("target_field") or f.get("name") or ""
+                for f in s2t_state["fields"]
+                if isinstance(f, dict)
+            ]
+            s2t_field_list = [f for f in s2t_field_list if f]
+        reconciliation_report = generate_reconciliation_report(
+            parse_report=parse_report,
+            conversion_output=conversion_output,
+            s2t_field_list=s2t_field_list or [],
+        )
+        log.info(
+            f"Reconciliation complete — status={reconciliation_report.final_status}, "
+            f"match_rate={reconciliation_report.match_rate:.1f}%, "
+            f"mismatched_fields={len(reconciliation_report.mismatched_fields)}",
+            step=10,
+        )
+    except Exception as e:
+        log.warning(f"Structural reconciliation failed (non-blocking): {e}", step=10)
+
     # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
     log.step_start(11, "Test Generation & Coverage Check")
     log.state_change("reviewing", "testing", step=11)
     yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
-                     {"code_review": code_review.model_dump()})
+                     {
+                         "code_review": code_review.model_dump(),
+                         "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
+                     })
 
     try:
         test_report = test_agent.generate_tests(

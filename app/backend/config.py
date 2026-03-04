@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # Docker or CI deployments.  Set to "disabled" to suppress disk writes entirely.
     output_dir: str = ""
 
+    # ── Application version ─────────────────────────────────────────────────
+    # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
+    # Bump this string on every release; do NOT hard-code versions elsewhere.
+    app_version: str = "2.8.0"
+
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.
     doc_max_tokens_override: int | None = None

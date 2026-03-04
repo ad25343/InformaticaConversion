@@ -31,12 +31,12 @@ from .agents.s2t_agent import s2t_excel_path
 from .security import validate_upload_size, ZipExtractionError
 from .zip_extractor import extract_informatica_zip, extract_batch_zip
 from .job_exporter import build_output_zip
+from .config import settings as _cfg
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
 _ROUTE_START_TIME = time.monotonic()
-_VERSION = "2.7.0"
 
 # ── Security helpers ────────────────────────────────────────────────────────
 
@@ -116,7 +116,7 @@ async def health_check():
     uptime = round(time.monotonic() - _ROUTE_START_TIME, 1)
     payload = {
         "status": "ok" if db_status == "ok" else "degraded",
-        "version": _VERSION,
+        "version": _cfg.app_version,
         "db": db_status,
         "uptime_seconds": uptime,
     }

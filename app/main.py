@@ -143,7 +143,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Informatica Conversion Tool",
     description="Converts Informatica PowerCenter mappings to Python, PySpark, or dbt",
-    version="2.7.0",
+    version=_cfg.app_version,
     lifespan=lifespan,
     # Hide docs behind auth in production — set SHOW_DOCS=false in .env
     docs_url="/docs" if _cfg.show_docs else None,
@@ -197,7 +197,7 @@ async def health_check():
         pass
     return JSONResponse({
         "status":         "ok" if db_ok else "degraded",
-        "version":        "2.3.0",
+        "version":        _cfg.app_version,
         "uptime_seconds": round(time.monotonic() - _APP_START_TIME, 1),
         "db":             "ok" if db_ok else "error",
     }, status_code=200 if db_ok else 503)
@@ -228,6 +228,42 @@ async def login_submit(
 async def logout():
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(COOKIE_NAME)
+    return response
+
+
+# ── HTTP Security Headers ─────────────────────────────────
+# Applied to every response before auth enforcement so that even error pages
+# and unauthenticated redirects are hardened.
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    # Prevent browsers from MIME-sniffing responses away from the declared content-type
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Block this app from being embedded in an <iframe> on other origins (clickjacking)
+    response.headers["X-Frame-Options"] = "DENY"
+    # Stop legacy IE/Edge XSS auditor from mangling content; modern browsers ignore this
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # Only send the origin (no path) in the Referer header when navigating cross-origin
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Restrict permissions for browser APIs — no geolocation, camera, or microphone
+    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    # Content Security Policy — tightened for a tool that serves no third-party content
+    # 'unsafe-inline' kept for styles/scripts because the SPA uses inline event handlers.
+    # Tighten further (nonce/hash) once the front-end is refactored to avoid inline JS.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    # Force HTTPS for 1 year when the tool is deployed with TLS (HTTPS=true in .env)
+    if _cfg.https:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
     return response
 
 
