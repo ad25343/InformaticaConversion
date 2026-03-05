@@ -90,10 +90,32 @@ class Settings(BaseSettings):
     # Per-request timeout for outbound webhook POSTs (seconds).
     webhook_timeout_secs: int = 10
 
+    # ── File watcher / scheduled ingestion (v2.14.0) ────────────────────────
+    # When WATCHER_ENABLED=true the app polls WATCHER_DIR for manifest files.
+    # Each manifest signals that all XML files for one conversion are ready.
+    #
+    # Manifest format (drop as <name>.manifest.json in WATCHER_DIR):
+    #   {
+    #     "version":       "1.0",
+    #     "mapping":       "m_appraisal_rank.xml",   // required
+    #     "workflow":      "wf_appraisal.xml",        // optional
+    #     "parameters":    "params.xml",              // optional
+    #     "reviewer":      "Jane Smith",              // optional
+    #     "reviewer_role": "Data Engineer"            // optional
+    #   }
+    #
+    # After submission the manifest is moved to WATCHER_DIR/processed/.
+    # Manifests with missing files are retried each poll; after
+    # WATCHER_INCOMPLETE_TTL_SECS they are moved to WATCHER_DIR/failed/.
+    watcher_enabled:            bool = False
+    watcher_dir:                str  = ""    # required when watcher_enabled=True
+    watcher_poll_interval_secs: int  = 30    # how often to scan the directory
+    watcher_incomplete_ttl_secs: int = 300   # seconds before a partial manifest is failed
+
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.13.0"
+    app_version: str = "2.14.0"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

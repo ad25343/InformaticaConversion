@@ -10,6 +10,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.14.0] — Manifest-Based File Watcher
+
+### Added
+
+#### `app/backend/watcher.py` — manifest-driven scheduled ingestion
+
+A background asyncio task that polls a configured directory for
+`*.manifest.json` files and automatically submits conversion jobs without
+requiring a UI upload.
+
+**Manifest file format**
+
+Drop a JSON file (any name ending in `.manifest.json`) into `WATCHER_DIR`:
+
+```json
+{
+    "version":       "1.0",
+    "mapping":       "m_appraisal_rank.xml",
+    "workflow":      "wf_appraisal.xml",
+    "parameters":    "params.xml",
+    "reviewer":      "Jane Smith",
+    "reviewer_role": "Data Engineer"
+}
+```
+
+`mapping` is required; all other fields are optional. All referenced XML files
+must live in the same directory as the manifest.
+
+**Lifecycle**
+
+1. Watcher polls `WATCHER_DIR` every `WATCHER_POLL_INTERVAL_SECS` seconds (default: 30).
+2. On finding a `.manifest.json`, validates the JSON schema and checks all
+   referenced files are present on disk.
+3. If all files present: reads content → calls `db.create_job()` →
+   launches pipeline via `orchestrator.run_pipeline()` (same path as API route) →
+   moves manifest to `WATCHER_DIR/processed/<timestamp>_<name>.manifest.json`.
+4. If files missing: logs a warning, leaves manifest in place, retries next poll.
+   After `WATCHER_INCOMPLETE_TTL_SECS` seconds (default: 300) the manifest is
+   moved to `WATCHER_DIR/failed/` with a `.error` sidecar explaining what was missing.
+5. If invalid JSON or bad schema: moves immediately to `WATCHER_DIR/failed/` with
+   a `.error` sidecar. No retry.
+
+**UI behaviour**
+
+The existing 5-second job list poll (`loadJobs`) picks up watcher-submitted jobs
+automatically — no UI changes required. SSE streaming works identically to
+manually submitted jobs. Gate reviews (Gate 1, 2, 3) still require human action.
+
+**Error isolation**
+
+Poll errors never kill the watcher loop. Each manifest is processed independently.
+Server restart recovers cleanly — the existing stuck-job recovery logic in
+`main.py` handles any in-flight jobs.
+
+#### Config additions (`app/backend/config.py`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `WATCHER_ENABLED` | `false` | Set to `true` to activate the watcher |
+| `WATCHER_DIR` | `""` | Absolute path to the directory to watch |
+| `WATCHER_POLL_INTERVAL_SECS` | `30` | Seconds between directory polls |
+| `WATCHER_INCOMPLETE_TTL_SECS` | `300` | Seconds before an incomplete manifest is failed |
+
+#### `.env.example` updated
+
+Full manifest format documentation and all four watcher config variables added
+with commented-out defaults and inline usage notes.
+
+### Changed
+
+- `app/main.py` — watcher task launched in `lifespan()` alongside existing
+  cleanup and watchdog loops; logs a clear message if watcher is disabled or
+  misconfigured (enabled but no `WATCHER_DIR`).
+
+---
+
 ## [2.13.0] — Data-Level Equivalence Testing
 
 ### Added

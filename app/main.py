@@ -121,6 +121,35 @@ async def lifespan(app: FastAPI):
 
     _bg_tasks = [_bg_cleanup, _bg_watchdog]
 
+    # ── v2.14.0 — Manifest file watcher ───────────────────────────────────
+    if _cfg.watcher_enabled:
+        if not _cfg.watcher_dir:
+            _startup_log.error(
+                "Watcher: WATCHER_ENABLED=true but WATCHER_DIR is not set — "
+                "file watcher will NOT start.  Set WATCHER_DIR in .env."
+            )
+        else:
+            from backend.watcher import run_watcher_loop
+            _bg_watcher = asyncio.create_task(
+                run_watcher_loop(
+                    watch_dir=_cfg.watcher_dir,
+                    poll_interval=_cfg.watcher_poll_interval_secs,
+                    incomplete_ttl=_cfg.watcher_incomplete_ttl_secs,
+                )
+            )
+            _bg_watcher.set_name("manifest_watcher")
+            _bg_tasks.append(_bg_watcher)
+            _startup_log.info(
+                "Watcher: monitoring %s every %ds for manifest files.",
+                _cfg.watcher_dir,
+                _cfg.watcher_poll_interval_secs,
+            )
+    else:
+        _startup_log.info(
+            "Watcher: disabled (set WATCHER_ENABLED=true and WATCHER_DIR "
+            "in .env to enable scheduled ingestion)."
+        )
+
     # ── GAP #15 — Graceful shutdown ───────────────────────────────────────
     yield
 

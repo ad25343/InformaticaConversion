@@ -538,9 +538,23 @@ transformations and connectors so the conversion agent sees no black-box referen
   sequence, helper-stub instructions, and FAQ; explicitly documents that the tool
   generates test artifacts but does not execute them
 
-### v2.14 — Planned
+### v2.14 — Manifest-Based File Watcher (shipped)
 
-- Scheduler: run conversion nightly when source XMLs change in a watched directory
+- **`app/backend/watcher.py`**: background asyncio task polling a configured
+  directory for `*.manifest.json` files; on finding a complete manifest (all
+  referenced XML files present) automatically submits a conversion job through
+  the same pipeline path as the API endpoint
+- **Manifest format**: JSON file specifying mapping XML (required), workflow XML,
+  parameter file, reviewer name/role (all optional); signals that all files for
+  one conversion are ready — eliminates partial-export race conditions
+- **Lifecycle**: processed manifests move to `processed/`; incomplete manifests
+  retry each poll and move to `failed/` after configurable TTL; invalid manifests
+  fail immediately with `.error` sidecar
+- **UI transparent**: existing 5-second job list poll surfaces watcher jobs
+  automatically; SSE streaming and all gate reviews work identically to
+  manually uploaded jobs
+- **Config**: `WATCHER_ENABLED`, `WATCHER_DIR`, `WATCHER_POLL_INTERVAL_SECS`,
+  `WATCHER_INCOMPLETE_TTL_SECS` — all documented in `.env.example`
 
 ### v3.0 — Vision
 
