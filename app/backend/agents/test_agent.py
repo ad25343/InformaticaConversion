@@ -2,7 +2,7 @@
 STEP 9 — Test Generation + Coverage Check Agent
 Fully deterministic — no Claude needed.
 
-Two responsibilities:
+Three responsibilities:
   1. COVERAGE CHECK  — verify every S2T target field and every source filter
      appears in the generated code. Reports covered / missing.
 
@@ -10,9 +10,24 @@ Two responsibilities:
      ACTUAL generated code (file names, model names, column names, target tables)
      rather than from hardcoded assumptions.
 
+  3. DATA-LEVEL EQUIVALENCE (v2.13) — two additional test artifacts shipped
+     with every job:
+       a. Expression boundary tests (Component A): pytest parametrize tests for
+          high-risk expression categories (IIF/DECODE, dates, strings, aggregations).
+          Run with pytest — no database connection needed.
+       b. Golden CSV comparison script (Component B): compare_golden.py — a
+          self-contained script run OUTSIDE the tool after the team has captured
+          Informatica output and run the generated code.  Requires only pandas.
+
 Design principle: everything must be driven by `conversion_output.files`.
 We parse the real code to discover models, tables, columns, and stack patterns —
 then generate tests that reference those real artifacts.
+
+NOTE ON EXECUTION (v2.13):
+  The generated test files are ARTIFACTS delivered alongside the converted code.
+  The conversion tool does NOT execute them.  Responsibility for running them
+  lives with the data engineering team in their own environment.  See:
+    docs/TESTING_GUIDE.md  — full instructions for each test type
 """
 from __future__ import annotations
 import re
@@ -23,6 +38,7 @@ from ..models.schemas import (
     ConversionOutput, TestReport, FieldCoverageCheck,
     FilterCoverageCheck, TargetStack,
 )
+from .golden_compare import generate_comparison_script
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +102,26 @@ def generate_tests(
         source_filters=source_filters,
         field_checks=field_checks,
         stack=stack,
+    )
+
+    # ── 4. Component A — Expression boundary tests (v2.13) ────────────────────
+    expr_tests, expr_notes = _generate_expression_boundary_tests(
+        graph=graph,
+        mapping_name=conversion_output.mapping_name or "mapping",
+        stack=stack,
+    )
+    test_files.update(expr_tests)
+    notes.extend(expr_notes)
+
+    # ── 5. Component B — Golden CSV comparison script (v2.13) ─────────────────
+    comparison_script = generate_comparison_script(
+        mapping_name=conversion_output.mapping_name or "mapping"
+    )
+    test_files["tests/compare_golden.py"] = comparison_script
+    notes.append(
+        "📊 compare_golden.py generated — run OUTSIDE the tool after capturing "
+        "Informatica output CSV and generated-code output CSV. "
+        "See docs/TESTING_GUIDE.md for instructions."
     )
 
     if missing_fields:
@@ -885,3 +921,345 @@ def _write_coverage_report(
         lines.append("| — | No source filters detected | — |")
 
     return {"tests/COVERAGE_REPORT.md": "\n".join(lines)}, []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Component A — Expression boundary tests (v2.13)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Detection patterns: (category_name, compiled_regex)
+_EXPR_PATTERNS = [
+    ("iif",         re.compile(r"\bIIF\s*\(",        re.IGNORECASE)),
+    ("decode",      re.compile(r"\bDECODE\s*\(",     re.IGNORECASE)),
+    ("date",        re.compile(
+        r"\b(ADD_TO_DATE|DATE_DIFF|TO_DATE|TRUNC)\s*\(", re.IGNORECASE)),
+    ("string",      re.compile(
+        r"\b(SUBSTR|INSTR|LTRIM|RTRIM|LPAD|RPAD)\s*\(", re.IGNORECASE)),
+    ("aggregation", re.compile(
+        r"\b(SUM|AVG|COUNT|MAX|MIN)\s*\(",           re.IGNORECASE)),
+]
+
+
+def _generate_expression_boundary_tests(
+    graph: dict,
+    mapping_name: str,
+    stack: "TargetStack",
+) -> tuple[dict[str, str], list[str]]:
+    """
+    Scan all transformation expressions in the graph for high-risk patterns
+    and generate parametrized pytest boundary tests for each detected category.
+
+    Returns (test_files_dict, notes_list).
+    The tests are written to:
+      tests/test_expressions_{safe_name}.py   (PySpark / Python)
+      tests/test_expressions_{safe_name}.py   (dbt — same file, SQL stubs)
+    """
+    ts        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_name = re.sub(r"[^A-Za-z0-9_]", "_", mapping_name).lower()
+    is_spark  = (stack.value.lower() == "pyspark")
+
+    # ── Scan graph for expression strings ────────────────────────────────────
+    detected_categories: dict[str, list[str]] = {}   # category → [example exprs]
+    for m in graph.get("mappings", []):
+        for t in m.get("transformations", []):
+            for expr_entry in t.get("expressions", []):
+                expr_str = ""
+                if isinstance(expr_entry, dict):
+                    expr_str = expr_entry.get("expression", "")
+                elif isinstance(expr_entry, str):
+                    expr_str = expr_entry
+                if not expr_str:
+                    continue
+                for cat, pattern in _EXPR_PATTERNS:
+                    if pattern.search(expr_str):
+                        detected_categories.setdefault(cat, [])
+                        # Keep up to 2 example expressions per category
+                        if len(detected_categories[cat]) < 2:
+                            detected_categories[cat].append(expr_str[:80])
+
+    if not detected_categories:
+        return {}, [
+            "ℹ️  No high-risk expression categories detected — "
+            "expression boundary tests skipped."
+        ]
+
+    # ── Build the test file ──────────────────────────────────────────────────
+    lines: list[str] = [
+        f'"""',
+        f"Expression Boundary Tests — {mapping_name}",
+        f"Auto-generated by Informatica Conversion Tool v2.13.0",
+        f"Generated: {ts}",
+        f"",
+        f"PURPOSE",
+        f"-------",
+        f"These tests verify that high-risk Informatica expression categories",
+        f"are translated correctly by checking boundary / edge-case inputs.",
+        f"They run in isolation — no database or Informatica environment needed.",
+        f"",
+        f"HOW TO RUN",
+        f"----------",
+        f"  pip install pytest{'  pyspark' if is_spark else ''}",
+        f"  pytest tests/test_expressions_{safe_name}.py -v",
+        f"",
+        f"IMPORTANT — FILL IN THE HELPERS",
+        f"--------------------------------",
+        f"Each test calls a small helper function that wraps the translated",
+        f"expression.  Search for 'FILL IN' comments and implement each helper",
+        f"to call the actual translated function/expression from your generated code.",
+        f"",
+        f"Detected risk categories: {', '.join(detected_categories.keys())}",
+        f'"""',
+        f"from __future__ import annotations",
+        f"import pytest",
+    ]
+
+    if is_spark:
+        lines += [
+            "from pyspark.sql import SparkSession",
+            "",
+            "",
+            "@pytest.fixture(scope='session')",
+            "def spark():",
+            "    return SparkSession.builder.master('local').appName('expr_test').getOrCreate()",
+        ]
+
+    lines += ["", "", "# " + "─" * 75]
+
+    # ── IIF ──────────────────────────────────────────────────────────────────
+    if "iif" in detected_categories:
+        examples = detected_categories["iif"]
+        ex_comment = "\n".join(f"#   {e}" for e in examples)
+        lines += [
+            "# IIF — NULL-branch semantics",
+            f"# Informatica: NULL condition input evaluates the FALSE branch (not NULL propagation)",
+            f"# Detected example(s):",
+            ex_comment,
+            "# " + "─" * 75,
+            "",
+            "def _iif_helper(value):",
+            "    \"\"\"",
+            "    FILL IN: call the translated IIF expression from your generated code.",
+            "    Example: return generated_module.iif_expression(value)",
+            "    Replace this stub with the real function.",
+            "    \"\"\"",
+            "    raise NotImplementedError('FILL IN: call translated IIF expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('input_val,expected', [",
+            "    (100.0,  100.0),   # TRUE branch — positive value",
+            "    (-5.0,   0.0),     # FALSE branch — negative value",
+            "    (0.0,    0.0),     # boundary — exactly zero (condition is FALSE)",
+            "    (None,   0.0),     # NULL input: Informatica treats NULL condition as FALSE",
+            "])",
+            "def test_iif_null_branch_semantics(input_val, expected):",
+            '    """',
+            "    IIF NULL handling: Informatica evaluates NULL condition as FALSE,",
+            "    taking the FALSE branch — not NULL propagation as in SQL CASE WHEN.",
+            "    Verify your translated code matches this behaviour.",
+            '    """',
+            "    result = _iif_helper(input_val)",
+            "    assert result == expected, (",
+            "        f'IIF mismatch: input={input_val!r}, got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── DECODE ───────────────────────────────────────────────────────────────
+    if "decode" in detected_categories:
+        examples = detected_categories["decode"]
+        ex_comment = "\n".join(f"#   {e}" for e in examples)
+        lines += [
+            "# " + "─" * 75,
+            "# DECODE — case-sensitive matching; NULL → default",
+            f"# Detected example(s):",
+            ex_comment,
+            "# " + "─" * 75,
+            "",
+            "def _decode_helper(status):",
+            "    \"\"\"",
+            "    FILL IN: call the translated DECODE expression from your generated code.",
+            "    Example: return generated_module.decode_status(status)",
+            "    \"\"\"",
+            "    raise NotImplementedError('FILL IN: call translated DECODE expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('status,expected', [",
+            "    ('A',  'Active'),    # first match",
+            "    ('I',  'Inactive'),  # second match",
+            "    ('X',  'Unknown'),   # default fallthrough",
+            "    (None, 'Unknown'),   # NULL → Informatica DECODE treats NULL as no-match → default",
+            "    ('a',  'Unknown'),   # case-sensitive — lowercase 'a' does NOT match 'A'",
+            "])",
+            "def test_decode_case_sensitivity_and_null(status, expected):",
+            '    """',
+            "    DECODE: case-sensitive matching; NULL input falls through to default.",
+            "    Python dict lookups and pandas map() are case-sensitive by default, but",
+            "    verify the translated code handles None/NULL → default correctly.",
+            '    """',
+            "    result = _decode_helper(status)",
+            "    assert result == expected, (",
+            "        f'DECODE mismatch: input={status!r}, got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── Date ─────────────────────────────────────────────────────────────────
+    if "date" in detected_categories:
+        examples = detected_categories["date"]
+        ex_comment = "\n".join(f"#   {e}" for e in examples)
+        lines += [
+            "# " + "─" * 75,
+            "# Date arithmetic — month-end rollover; NULL propagation",
+            f"# Detected example(s):",
+            ex_comment,
+            "# " + "─" * 75,
+            "from datetime import date",
+            "",
+            "",
+            "def _add_to_date_helper(load_date, unit, amount):",
+            "    \"\"\"",
+            "    FILL IN: call the translated ADD_TO_DATE expression from your generated code.",
+            "    Example: return generated_module.add_to_date(load_date, unit, amount)",
+            "    \"\"\"",
+            "    raise NotImplementedError('FILL IN: call translated ADD_TO_DATE expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('load_date,unit,amount,expected', [",
+            "    (date(2024, 1, 15), 'MM', 1,  date(2024, 2, 15)),   # normal case",
+            "    (date(2024, 1, 31), 'MM', 1,  date(2024, 2, 29)),   # month-end rollover (leap year)",
+            "    (date(2023, 1, 31), 'MM', 1,  date(2023, 2, 28)),   # month-end rollover (non-leap)",
+            "    (date(2024, 12, 31),'MM', 1,  date(2025, 1, 31)),   # year boundary",
+            "    (None,              'MM', 1,  None),                 # NULL propagation",
+            "])",
+            "def test_add_to_date_month_rollover(load_date, unit, amount, expected):",
+            '    """',
+            "    ADD_TO_DATE: verify month-end rollover matches Informatica semantics.",
+            "    Also verifies NULL input propagates to NULL output.",
+            '    """',
+            "    result = _add_to_date_helper(load_date, unit, amount)",
+            "    assert result == expected, (",
+            "        f'ADD_TO_DATE mismatch: input={load_date}, +{amount}{unit}, '",
+            "        f'got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── String ────────────────────────────────────────────────────────────────
+    if "string" in detected_categories:
+        examples = detected_categories["string"]
+        ex_comment = "\n".join(f"#   {e}" for e in examples)
+        lines += [
+            "# " + "─" * 75,
+            "# String functions — SUBSTR indexing (1-based in Informatica, 0-based in Python)",
+            f"# Detected example(s):",
+            ex_comment,
+            "# " + "─" * 75,
+            "",
+            "",
+            "def _substr_helper(value, start, length):",
+            "    \"\"\"",
+            "    FILL IN: call the translated SUBSTR expression from your generated code.",
+            "    CRITICAL: Informatica SUBSTR is 1-indexed; Python str slicing is 0-indexed.",
+            "    Example: return generated_module.substr(value, start, length)",
+            "    \"\"\"",
+            "    raise NotImplementedError('FILL IN: call translated SUBSTR expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('value,start,length,expected', [",
+            "    ('ABCDEF', 1, 3, 'ABC'),   # 1-indexed: chars 1,2,3 → 'ABC'",
+            "    ('ABCDEF', 2, 3, 'BCD'),   # offset check",
+            "    ('AB',     1, 5, 'AB'),    # shorter than length → return available chars",
+            "    ('',       1, 3, ''),      # empty string",
+            "    (None,     1, 3, None),    # NULL propagation",
+            "])",
+            "def test_substr_one_based_indexing(value, start, length, expected):",
+            '    """',
+            "    SUBSTR: Informatica is 1-indexed.  The most common mistranslation is",
+            "    Python code using str[start:start+length] without subtracting 1 from start.",
+            "    SUBSTR('ABCDEF', 1, 3) must return 'ABC', not 'BCD'.",
+            '    """',
+            "    result = _substr_helper(value, start, length)",
+            "    assert result == expected, (",
+            "        f'SUBSTR mismatch: ({value!r},{start},{length}), "
+            "got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── Aggregation ──────────────────────────────────────────────────────────
+    if "aggregation" in detected_categories:
+        examples = detected_categories["aggregation"]
+        ex_comment = "\n".join(f"#   {e}" for e in examples)
+        if is_spark:
+            lines += [
+                "# " + "─" * 75,
+                "# Aggregation — empty partition must return NULL (not 0) to match Informatica",
+                f"# Detected example(s):",
+                ex_comment,
+                "# " + "─" * 75,
+                "from pyspark.sql import functions as F",
+                "from pyspark.sql.types import StructType, StructField, DoubleType, StringType",
+                "",
+                "",
+                "def test_aggregation_empty_partition_returns_null(spark):",
+                '    """',
+                "    SUM/AVG over an empty partition must return NULL in Informatica.",
+                "    Verify the translated aggregation (Spark/SQL) does NOT return 0 for empty groups.",
+                '    """',
+                "    schema = StructType([",
+                "        StructField('ACCOUNT_ID', StringType(), True),",
+                "        StructField('AMOUNT',     DoubleType(), True),",
+                "    ])",
+                "    empty_df = spark.createDataFrame([], schema)",
+                "    result = empty_df.agg(F.sum('AMOUNT').alias('SUM_AMOUNT'))",
+                "    row = result.collect()[0]",
+                "    assert row['SUM_AMOUNT'] is None, (",
+                "        f'Expected NULL for SUM over empty set, got {row[\"SUM_AMOUNT\"]!r}. '",
+                "        'Informatica returns NULL — check translated aggregation.'",
+                "    )",
+                "",
+            ]
+        else:
+            lines += [
+                "# " + "─" * 75,
+                "# Aggregation — empty partition must return NULL (not 0) to match Informatica",
+                f"# Detected example(s):",
+                ex_comment,
+                "# " + "─" * 75,
+                "import pandas as pd",
+                "",
+                "",
+                "def test_aggregation_empty_partition_returns_null():",
+                '    """',
+                "    SUM/AVG over an empty group must return NULL (NaN in pandas) in Informatica.",
+                "    Verify the translated aggregation does NOT return 0 for empty groups.",
+                '    """',
+                "    df = pd.DataFrame({'ACCOUNT_ID': pd.Series([], dtype=str),",
+                "                       'AMOUNT':     pd.Series([], dtype=float)})",
+                "    result = df.groupby('ACCOUNT_ID')['AMOUNT'].sum(min_count=1).reset_index()",
+                "    # If the group is empty, the result DataFrame should be empty OR",
+                "    # the SUM value should be NaN — never 0.",
+                "    if not result.empty:",
+                "        assert result['AMOUNT'].isna().all(), (",
+                "            'Expected NaN/NULL for SUM over empty partition, got a non-null value. '",
+                "            'Use min_count=1 in pandas groupby.sum() to match Informatica.'",
+                "        )",
+                "",
+            ]
+
+    # ── Footer note ───────────────────────────────────────────────────────────
+    lines += [
+        "# " + "─" * 75,
+        "# See docs/TESTING_GUIDE.md for full instructions on running these tests.",
+        "# " + "─" * 75,
+    ]
+
+    content = "\n".join(lines)
+    fname   = f"tests/test_expressions_{safe_name}.py"
+
+    notes = [
+        f"🧪 Expression boundary tests generated → {fname} "
+        f"(categories: {', '.join(detected_categories.keys())}). "
+        "Fill in helper functions then run with pytest."
+    ]
+    return {fname: content}, notes

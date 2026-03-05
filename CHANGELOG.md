@@ -10,6 +10,95 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.13.0] — Data-Level Equivalence Testing
+
+### Added
+
+#### Component A — Expression boundary tests (Step 9 — Test Agent)
+
+`test_agent.py` now scans transformation expressions from the parsed graph for
+five high-risk categories and generates parametrized pytest tests for each detected
+category, delivered as `tests/test_expressions_{mapping}.py` alongside every job.
+
+**Detection patterns**
+
+| Category | Pattern matched | Key risk |
+|---|---|---|
+| IIF | `IIF\s*\(` | NULL condition evaluates FALSE branch — not NULL propagation |
+| DECODE | `DECODE\s*\(` | Case-sensitive; NULL falls through to default |
+| Date functions | `ADD_TO_DATE\|DATE_DIFF\|TO_DATE\|TRUNC` | Month-end rollover; NULL propagation |
+| String functions | `SUBSTR\|INSTR\|LTRIM\|RTRIM\|LPAD\|RPAD` | SUBSTR is 1-indexed in Informatica, 0-indexed in Python |
+| Aggregations | `SUM\|AVG\|COUNT\|MAX\|MIN` | Empty partition must return NULL, not 0 |
+
+**Generated test structure**
+
+Each detected category produces:
+- A `_helper()` stub with a `FILL IN` comment — data engineers replace this with
+  a call to the actual translated function in the generated code.
+- A `@pytest.mark.parametrize` test covering normal values, boundary values, and
+  NULL inputs.
+- A docstring explaining the specific Informatica semantic being tested.
+
+Tests require no database connection or Informatica environment — only `pytest`
+(and `pyspark` for Spark jobs).
+
+#### Component B — Golden CSV comparison script (Step 9 — Test Agent)
+
+A self-contained `tests/compare_golden.py` script is generated with every job.
+Data engineers run it **outside the tool** after capturing Informatica output and
+running the generated code against the same source rows.
+
+**Usage**
+
+```bash
+python tests/compare_golden.py \
+  --expected informatica_output.csv \
+  --actual   generated_code_output.csv \
+  [--threshold 99.5] \
+  [--key-columns ACCOUNT_ID,LOAD_DATE] \
+  [--ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID]
+```
+
+**Script capabilities**
+
+- Row count comparison with direction hint (fan-out vs data loss)
+- Schema comparison (missing / extra columns)
+- Key-column-based row join (or positional alignment if no keys)
+- Field-by-field value comparison with float tolerance (`rtol=1e-5`)
+- Null rate per column
+- Mismatch sample (up to 20 rows per column)
+- Pass / fail against configurable threshold (default: 100%)
+- Likely-cause heuristics for common mismatch patterns:
+  - Float rounding → IIF/arithmetic expression review
+  - Date mismatch → TO_DATE format string check
+  - Whitespace diff → LTRIM/RTRIM behaviour difference
+  - Extra rows → cartesian join risk
+  - Missing rows → filter condition or NULL handling
+
+Script requires only `pandas` and stdlib. Exits with code 0 (pass) or 1 (fail)
+for CI integration.
+
+#### `docs/TESTING_GUIDE.md` — new user-facing documentation
+
+Comprehensive guide covering all four test layers, execution sequence, how to
+fill in helper stubs, how to run the golden comparison, and an FAQ. Explicitly
+documents that the tool generates test artifacts but does **not** execute them —
+execution is the data engineering team's responsibility.
+
+### Changed
+
+- `test_agent.py` — `generate_tests()` extended with two new steps (Component A
+  and Component B); updated module docstring documents the execution boundary.
+- `test_agent.py` — imports `generate_comparison_script` from new
+  `golden_compare.py` module.
+
+### New files
+
+- `app/backend/agents/golden_compare.py` — `generate_comparison_script()` function
+- `docs/TESTING_GUIDE.md` — testing guide for data engineers
+
+---
+
 ## [2.12.0] — Mapplet Inline Expansion
 
 ### Added

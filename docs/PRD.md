@@ -526,7 +526,19 @@ transformations and connectors so the conversion agent sees no black-box referen
 - Supports multiple instances of the same mapplet in one mapping (distinct prefixes)
 - Zero overhead for mappings with no mapplets
 
-### v2.13 — Planned
+### v2.13 — Data-Level Equivalence Testing (shipped)
+
+- **Component A — Expression boundary tests**: `test_agent.py` detects five high-risk
+  expression categories (IIF, DECODE, date functions, string functions, aggregations)
+  and generates parametrized pytest tests with NULL-boundary cases for each
+- **Component B — Golden CSV comparison script**: self-contained `compare_golden.py`
+  generated per job; data engineers run it externally after capturing Informatica
+  output to field-by-field compare against generated-code output
+- **`docs/TESTING_GUIDE.md`**: new guide documenting all test layers, execution
+  sequence, helper-stub instructions, and FAQ; explicitly documents that the tool
+  generates test artifacts but does not execute them
+
+### v2.14 — Planned
 
 - Scheduler: run conversion nightly when source XMLs change in a watched directory
 
