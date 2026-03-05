@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.14.1
+**Version:** 2.15.0
 **Author:** ad25343
 **Last Updated:** 2026-03-04
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -575,6 +575,32 @@ transformations and connectors so the conversion agent sees no black-box referen
   UI-submitted jobs continue to use `OUTPUT_DIR/<job_id>/`
 - Backward compatible: v2.14.0 single-string manifest entries and all prior
   formats continue to work without modification
+
+### v2.15.0 — Time-Based Manifest Scheduler (shipped)
+
+- **`app/backend/scheduler.py`** (new module): background asyncio task that
+  evaluates `*.schedule.json` files in `SCHEDULER_DIR` every
+  `SCHEDULER_POLL_INTERVAL_SECS` seconds and materialises `*.manifest.json`
+  files into `WATCHER_DIR` when cron expressions fire
+- **Schedule file format**: JSON with `cron` (5-field, required), `timezone`
+  (IANA, optional — defaults to UTC), `label` (optional), `enabled` (optional
+  — allows pausing without deletion), `manifest` (required — embedded manifest
+  payload identical to a hand-dropped manifest)
+- **Pure cron evaluator** (`_cron_matches`): supports `*`, `*/n`, `a-b`,
+  `a-b/n`, `a,b,c` and comma-joined combinations; DOW 0 and 7 both map to
+  Sunday; raises `ValueError` on malformed syntax so errors surface at
+  schedule-read time rather than silently misfiring
+- **Duplicate-fire guard**: tracks last `(hour, minute)` per schedule stem so a
+  schedule fires at most once per minute even if `poll_interval < 60`
+- **Timezone-aware evaluation** via `zoneinfo` (stdlib since Python 3.9); falls
+  back to UTC with a warning log on unrecognised timezone names
+- **Config**: `SCHEDULER_ENABLED`, `SCHEDULER_DIR`, `SCHEDULER_POLL_INTERVAL_SECS`
+  — all documented in `config.py` and `.env.example`
+- **Dependency on watcher**: scheduler logs an error and does not start if
+  `WATCHER_ENABLED` is false or `WATCHER_DIR` is unset; both subsystems must be
+  active for the full lights-out pipeline to function
+- Schedule files are re-read on every poll — changes take effect without a
+  server restart
 
 ### v3.0 — Vision
 

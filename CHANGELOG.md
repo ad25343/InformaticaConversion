@@ -10,6 +10,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.15.0] — Time-Based Manifest Scheduler
+
+### Added
+
+#### `app/backend/scheduler.py` (new module)
+
+**Time-based cron scheduler** that materialises `*.manifest.json` files into
+`WATCHER_DIR` when scheduled cron expressions fire.  The existing manifest file
+watcher then processes them as normal — no changes to the watcher or pipeline.
+
+- `run_scheduler_loop(schedule_dir, watcher_dir, poll_interval)` — async background
+  loop; scans `SCHEDULER_DIR` for `*.schedule.json` files every
+  `SCHEDULER_POLL_INTERVAL_SECS` seconds
+- `_cron_matches(cron_expr, dt)` — pure function; expands 5-field cron expressions
+  to sets (handles `*`, `*/n`, `a-b`, `a-b/n`, `a,b,c`) and returns True/False;
+  DOW 0 and 7 both treated as Sunday; Python `isoweekday() % 7` mapping applied
+- `_expand_field(field, min_val, max_val)` — low-level cron field expander;
+  raises `ValueError` on malformed syntax
+- `_now_in_tz(tz_name)` — returns current datetime in the given IANA timezone
+  via `zoneinfo` (Python 3.9+ stdlib); falls back to UTC with a warning log on
+  unknown timezone names
+- `_read_schedule(path)` — validates a schedule file: type-checks all fields,
+  validates cron syntax at read time, skips `enabled=false` schedules silently
+- `_materialise(schedule_name, schedule, watcher_dir)` — writes the manifest
+  payload as `<safe_label>_<YYYYMMDD_HHMMSS_ffffff>.manifest.json` into
+  `watcher_dir`; injects `label` from schedule → manifest → schedule filename
+  stem precedence chain; `_SAFE_LABEL_RE` uses `re.ASCII` flag
+- `_tick(sched_path, watcher_path, last_fired)` — single poll iteration;
+  duplicate-fire guard tracks `(hour, minute)` per schedule stem to prevent
+  double-materialisation when poll interval < 60s or server catches up after pause
+
+**Schedule file format** (`*.schedule.json` in `SCHEDULER_DIR`):
+```json
+{
+    "version":  "1.0",
+    "cron":     "0 2 * * 1-5",
+    "timezone": "America/New_York",
+    "label":    "Customer Pipeline Nightly",
+    "enabled":  true,
+    "manifest": { ... manifest payload ... }
+}
+```
+
+#### `app/backend/config.py`
+
+- `scheduler_enabled: bool = False` — enables the scheduler background task
+- `scheduler_dir: str = ""` — required when `scheduler_enabled=True`
+- `scheduler_poll_interval_secs: int = 60` — evaluation frequency
+- Version bumped to `2.15.0`
+
+#### `app/main.py`
+
+- Scheduler background task started in `lifespan` when `SCHEDULER_ENABLED=true`
+- Guards: logs an error and does not start if `SCHEDULER_DIR` is unset, or if
+  `WATCHER_ENABLED` is false / `WATCHER_DIR` is unset (scheduler requires the
+  watcher to process the materialised manifests)
+- Background task registered in `_bg_tasks` for clean cancellation on shutdown
+
+#### `app/.env.example`
+
+- New `# ── Time-based scheduler (v2.15.0)` section with full format example,
+  cron expression reference, and three commented config variables
+
+#### `docs/USER_GUIDE.md`
+
+- New **Time-based scheduled conversions (v2.15.0)** section with how-it-works
+  walkthrough, full schedule file format, cron expression reference table with
+  examples, output directory structure, enabling instructions, and optional tuning
+- New **Time-based scheduler** row group in the Configuration table
+- Version bumped to 2.15.0
+
+#### `docs/TESTING_GUIDE.md`
+
+- Version bumped to 2.15.0
+- **Preparing Golden Reference Data** section added (2c2140c — see that commit)
+
+---
+
 ## [2.14.1] — Project-Group Manifest, Named Output Directories, Security Hardening
 
 ### Security (post-release review — commits ef1fc8f, 27ba012, 83177d6)

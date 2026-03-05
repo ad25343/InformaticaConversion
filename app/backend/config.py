@@ -113,15 +113,47 @@ class Settings(BaseSettings):
     # Manifests with missing files are retried each poll; after
     # WATCHER_INCOMPLETE_TTL_SECS they are moved to WATCHER_DIR/failed/.
     # Artifacts written to OUTPUT_DIR/<label>_<timestamp>/<mapping_stem>/
-    watcher_enabled:            bool = False
-    watcher_dir:                str  = ""    # required when watcher_enabled=True
-    watcher_poll_interval_secs: int  = 30    # how often to scan the directory
-    watcher_incomplete_ttl_secs: int = 300   # seconds before a partial manifest is failed
+    watcher_enabled:             bool = False
+    watcher_dir:                 str  = ""    # required when watcher_enabled=True
+    watcher_poll_interval_secs:  int  = 30    # how often to scan the directory
+    watcher_incomplete_ttl_secs: int  = 300   # seconds before a partial manifest is failed
+
+    # ── Time-based scheduler (v2.15.0) ──────────────────────────────────────
+    # When SCHEDULER_ENABLED=true the app polls SCHEDULER_DIR for
+    # *.schedule.json files and materialises *.manifest.json files into
+    # WATCHER_DIR when their cron expressions fire.  The manifest file watcher
+    # then picks up and processes them as normal.
+    #
+    # WATCHER_ENABLED and WATCHER_DIR must also be configured.
+    #
+    # Schedule file format (drop as <name>.schedule.json in SCHEDULER_DIR):
+    #   {
+    #     "version":  "1.0",
+    #     "cron":     "0 2 * * 1-5",              // required — 5-field cron expression
+    #     "timezone": "America/New_York",          // optional — IANA timezone (default UTC)
+    #     "label":    "Customer Pipeline Nightly", // optional — output folder name
+    #     "enabled":  true,                        // optional — set false to pause
+    #     "manifest": {                            // required — manifest payload
+    #       "version":  "1.0",
+    #       "mappings": ["m_customer.xml"],
+    #       "workflow": "wf_customer.xml"
+    #     }
+    #   }
+    #
+    # Cron fields: minute  hour  day-of-month  month  day-of-week (0=Sun … 6=Sat)
+    # Examples:  "0 2 * * 1-5"   weekdays at 02:00
+    #            "30 6 * * *"    every day at 06:30
+    #            "0 */4 * * *"   every 4 hours on the hour
+    #
+    # Schedule files are re-read on every poll — edits take effect immediately.
+    scheduler_enabled:            bool = False
+    scheduler_dir:                str  = ""   # required when scheduler_enabled=True
+    scheduler_poll_interval_secs: int  = 60   # how often to evaluate cron expressions
 
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.14.1"
+    app_version: str = "2.15.0"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

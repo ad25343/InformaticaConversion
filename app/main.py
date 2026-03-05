@@ -150,6 +150,42 @@ async def lifespan(app: FastAPI):
             "in .env to enable scheduled ingestion)."
         )
 
+    # ── v2.15.0 — Time-based manifest scheduler ────────────────────────────
+    if _cfg.scheduler_enabled:
+        if not _cfg.scheduler_dir:
+            _startup_log.error(
+                "Scheduler: SCHEDULER_ENABLED=true but SCHEDULER_DIR is not set — "
+                "scheduler will NOT start.  Set SCHEDULER_DIR in .env."
+            )
+        elif not _cfg.watcher_enabled or not _cfg.watcher_dir:
+            _startup_log.error(
+                "Scheduler: SCHEDULER_ENABLED=true but WATCHER_ENABLED is false or "
+                "WATCHER_DIR is not set.  The scheduler materialises manifests into "
+                "WATCHER_DIR, which must also be configured.  Scheduler will NOT start."
+            )
+        else:
+            from backend.scheduler import run_scheduler_loop
+            _bg_scheduler = asyncio.create_task(
+                run_scheduler_loop(
+                    schedule_dir=_cfg.scheduler_dir,
+                    watcher_dir=_cfg.watcher_dir,
+                    poll_interval=_cfg.scheduler_poll_interval_secs,
+                )
+            )
+            _bg_scheduler.set_name("manifest_scheduler")
+            _bg_tasks.append(_bg_scheduler)
+            _startup_log.info(
+                "Scheduler: monitoring %s every %ds for schedule files.",
+                _cfg.scheduler_dir,
+                _cfg.scheduler_poll_interval_secs,
+            )
+    else:
+        _startup_log.info(
+            "Scheduler: disabled (set SCHEDULER_ENABLED=true, SCHEDULER_DIR, "
+            "WATCHER_ENABLED=true, and WATCHER_DIR in .env to enable "
+            "time-based scheduled ingestion)."
+        )
+
     # ── GAP #15 — Graceful shutdown ───────────────────────────────────────
     yield
 

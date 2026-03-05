@@ -230,6 +230,121 @@ WATCHER_INCOMPLETE_TTL_SECS=300  # seconds before a partial manifest is failed
 
 ---
 
+## Time-based scheduled conversions (v2.15.0)
+
+The time-based scheduler lets you automate conversion runs on a recurring cron schedule — useful for nightly batch jobs, weekly pipeline refreshes, or any scenario where conversions should fire at a specific time without manual intervention.
+
+### How it works
+
+1. Enable the scheduler and the file watcher in `.env` (see Configuration below).
+2. Create a `*.schedule.json` file in `SCHEDULER_DIR` that contains a cron expression and an embedded manifest.
+3. At the scheduled time, the scheduler materialises a `.manifest.json` file into `WATCHER_DIR`.
+4. The manifest file watcher picks it up and submits the conversion batch automatically — exactly as if you had dropped the manifest by hand.
+5. Gate reviews still require a human. Configure `WEBHOOK_URL` to alert your team when a gate is reached.
+
+The scheduler and file watcher are independent subsystems. The scheduler produces manifests; the watcher consumes them. Both must be enabled.
+
+### Schedule file format
+
+Create a file with any name ending in `.schedule.json` in `SCHEDULER_DIR`:
+
+```json
+{
+    "version":  "1.0",
+    "cron":     "0 2 * * 1-5",
+    "timezone": "America/New_York",
+    "label":    "Customer Pipeline Nightly",
+    "enabled":  true,
+    "manifest": {
+        "version":  "1.0",
+        "mappings": [
+            "m_customer_load.xml",
+            "m_product_load.xml",
+            {
+                "mapping":    "m_appraisal_rank.xml",
+                "workflow":   "wf_appraisal.xml",
+                "parameters": "params_appraisal.xml"
+            }
+        ],
+        "workflow":      "wf_default.xml",
+        "parameters":    "params_prod.xml",
+        "reviewer":      "Jane Smith",
+        "reviewer_role": "Data Engineer"
+    }
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `cron` | **Yes** | 5-field cron expression — see table below |
+| `timezone` | No | IANA timezone name (e.g. `"America/New_York"`). Defaults to UTC. |
+| `label` | No | Human-readable run label — written to the output folder name. Defaults to schedule filename stem. |
+| `enabled` | No | Set `false` to pause a schedule without deleting the file. Defaults to `true`. |
+| `manifest` | **Yes** | Full manifest payload — same format as a hand-dropped manifest (see above). The `label` field is injected automatically if not present. |
+
+### Cron expression format
+
+The standard 5-field cron format: `minute  hour  day-of-month  month  day-of-week`
+
+| Field | Range | Notes |
+|---|---|---|
+| minute | 0–59 | |
+| hour | 0–23 | |
+| day-of-month | 1–31 | |
+| month | 1–12 | |
+| day-of-week | 0–7 | 0 and 7 = Sunday; 1 = Monday; ... 6 = Saturday |
+
+Supported syntax: `*` (any), `*/n` (every n), `a-b` (range), `a-b/n` (range with step), `a,b,c` (list), and any comma-joined combination.
+
+| Expression | Fires at |
+|---|---|
+| `"0 2 * * 1-5"` | Weekdays at 02:00 |
+| `"30 6 * * *"` | Every day at 06:30 |
+| `"0 */4 * * *"` | Every 4 hours on the hour |
+| `"15 8 1 * *"` | 1st of every month at 08:15 |
+| `"0 18 * * 5"` | Fridays at 18:00 |
+
+### Output directory structure
+
+Each scheduled run produces the same output structure as a hand-dropped manifest:
+
+```
+OUTPUT_DIR/
+  <label>_<YYYYMMDD_HHMMSS_ffffff>/
+    m_customer_load/
+      input/    output/    docs/    logs/
+    m_appraisal_rank/
+      input/    output/    docs/    logs/
+```
+
+The microsecond timestamp is always appended so multiple runs of the same schedule never overwrite each other.
+
+### Enabling the scheduler
+
+Both the scheduler and the file watcher must be enabled in `.env`:
+
+```
+# File watcher — required for the scheduler to work
+WATCHER_ENABLED=true
+WATCHER_DIR=/path/to/watch/folder
+
+# Time-based scheduler
+SCHEDULER_ENABLED=true
+SCHEDULER_DIR=/path/to/schedules/folder
+```
+
+`SCHEDULER_DIR` is where your `*.schedule.json` files live. `WATCHER_DIR` is where the scheduler writes materialised manifests. They can be different directories (recommended) or the same.
+
+Optional tuning:
+
+```
+SCHEDULER_POLL_INTERVAL_SECS=60   # how often to evaluate cron expressions (default 60)
+```
+
+Schedule files are re-read on every poll — you can add, edit, or disable schedules without restarting the server.
+
+---
+
 ## Webhook notifications
 
 Configure a webhook to receive notifications when a job reaches a gate, completes, or fails — useful for alerting the review team without them having to poll the UI.
@@ -348,6 +463,16 @@ All settings are controlled via `.env`. Copy `.env.example` to `.env` as your st
 | `WATCHER_DIR` | unset | Absolute path to the directory to watch |
 | `WATCHER_POLL_INTERVAL_SECS` | `30` | Seconds between directory polls |
 | `WATCHER_INCOMPLETE_TTL_SECS` | `300` | Seconds before an incomplete manifest is moved to `failed/` |
+
+### Time-based scheduler
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCHEDULER_ENABLED` | `false` | Set to `true` to activate the cron-based scheduler |
+| `SCHEDULER_DIR` | unset | Absolute path to the directory containing `*.schedule.json` files |
+| `SCHEDULER_POLL_INTERVAL_SECS` | `60` | Seconds between cron evaluation polls |
+
+The scheduler requires `WATCHER_ENABLED=true` and `WATCHER_DIR` to also be configured.
 
 ---
 
