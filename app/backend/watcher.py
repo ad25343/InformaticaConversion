@@ -177,8 +177,8 @@ async def _poll_once(
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("Watcher: invalid manifest %s — %s. Moving to failed/.",
                          manifest_path.name, exc)
-            _move_to(manifest_path, failed_dir, prefix="invalid_")
-            _write_error_sidecar(failed_dir / f"invalid_{manifest_path.name}", str(exc))
+            dest = _move_to(manifest_path, failed_dir, prefix="invalid_")
+            _write_error_sidecar(dest, str(exc))
             seen_incomplete.pop(key, None)
             continue
 
@@ -214,9 +214,9 @@ async def _poll_once(
                         "moving to failed/. Missing: %s",
                         manifest_path.name, int(age), ", ".join(missing),
                     )
-                    _move_to(manifest_path, failed_dir, prefix="timeout_")
+                    dest = _move_to(manifest_path, failed_dir, prefix="timeout_")
                     _write_error_sidecar(
-                        failed_dir / f"timeout_{manifest_path.name}",
+                        dest,
                         f"Files still missing after {incomplete_ttl}s: {', '.join(missing)}",
                     )
                     seen_incomplete.pop(key, None)
@@ -243,11 +243,8 @@ async def _poll_once(
         if bad_xmls:
             logger.error("Watcher: invalid XML in %s: %s — moving to failed/.",
                          manifest_path.name, ", ".join(bad_xmls))
-            _move_to(manifest_path, failed_dir, prefix="badxml_")
-            _write_error_sidecar(
-                failed_dir / f"badxml_{manifest_path.name}",
-                f"Not valid XML: {', '.join(bad_xmls)}",
-            )
+            dest = _move_to(manifest_path, failed_dir, prefix="badxml_")
+            _write_error_sidecar(dest, f"Not valid XML: {', '.join(bad_xmls)}")
             continue
 
         # ── Build batch payload — each mapping with its resolved files ────
@@ -281,10 +278,8 @@ async def _poll_once(
         except Exception as exc:
             logger.error("Watcher: failed to submit batch for %s — %s. Moving to failed/.",
                          manifest_path.name, exc)
-            _move_to(manifest_path, failed_dir, prefix="submitfail_")
-            _write_error_sidecar(
-                failed_dir / f"submitfail_{manifest_path.name}", str(exc)
-            )
+            dest = _move_to(manifest_path, failed_dir, prefix="submitfail_")
+            _write_error_sidecar(dest, str(exc))
             continue
 
         _move_to(manifest_path, processed_dir)
@@ -540,13 +535,15 @@ def _assert_plain_filename(fname: str, label: str) -> None:
 # File system helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _move_to(src: Path, dest_dir: Path, prefix: str = "") -> None:
+def _move_to(src: Path, dest_dir: Path, prefix: str = "") -> Path:
+    """Move src into dest_dir with a UTC timestamp prefix. Returns the destination path."""
     ts   = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dest = dest_dir / f"{ts}_{prefix}{src.name}"
     try:
         shutil.move(str(src), str(dest))
     except Exception as exc:
         logger.warning("Watcher: could not move %s → %s — %s", src, dest, exc)
+    return dest
 
 
 def _write_error_sidecar(manifest_dest: Path, message: str) -> None:

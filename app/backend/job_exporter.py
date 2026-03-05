@@ -298,10 +298,18 @@ def _update_batch_index(out_dir: Path, job_id: str, state: dict) -> None:
             "m_commission_calc": "cde345-fgh678-..."
         }
     """
-    batch_dir  = state.get("watcher_output_dir")
+    batch_dir    = state.get("watcher_output_dir")
     mapping_stem = state.get("watcher_mapping_stem")
     if not batch_dir or not mapping_stem:
         return   # not a watcher job — nothing to do
+
+    # Defense-in-depth: same path-separator check as job_output_dir().
+    # batch_dir is always produced by _make_output_dir_name's sanitizer so
+    # separators are impossible in practice, but we validate anyway.
+    if Path(str(batch_dir)).name != str(batch_dir):
+        log.warning("_update_batch_index: batch_dir contains path separators — skipping "
+                    "(job_id=%s batch_dir=%r)", mapping_stem, batch_dir)
+        return
 
     root = _resolve_output_root()
     if root is None:
