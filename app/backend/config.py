@@ -90,16 +90,21 @@ class Settings(BaseSettings):
     # Per-request timeout for outbound webhook POSTs (seconds).
     webhook_timeout_secs: int = 10
 
-    # ── File watcher / scheduled ingestion (v2.14.0) ────────────────────────
+    # ── File watcher / scheduled ingestion (v2.14.1) ────────────────────────
     # When WATCHER_ENABLED=true the app polls WATCHER_DIR for manifest files.
     # Each manifest signals that all XML files for one conversion are ready.
     #
     # Manifest format (drop as <name>.manifest.json in WATCHER_DIR):
     #   {
-    #     "version":       "1.0",
-    #     "mapping":       "m_appraisal_rank.xml",   // required
-    #     "workflow":      "wf_appraisal.xml",        // optional
-    #     "parameters":    "params.xml",              // optional
+    #     "version":  "1.0",
+    #     "label":    "Customer Pipeline Q1 2026",   // optional — output folder name
+    #     "mappings": [                               // required — one or more XMLs
+    #       "m_customer.xml",                         // string: inherits top-level defaults
+    #       { "mapping": "m_rank.xml",                // object: per-mapping overrides
+    #         "workflow": "wf_rank.xml" }
+    #     ],
+    #     "workflow":      "wf_default.xml",          // optional default for all mappings
+    #     "parameters":    "params.xml",              // optional default for all mappings
     #     "reviewer":      "Jane Smith",              // optional
     #     "reviewer_role": "Data Engineer"            // optional
     #   }
@@ -107,6 +112,7 @@ class Settings(BaseSettings):
     # After submission the manifest is moved to WATCHER_DIR/processed/.
     # Manifests with missing files are retried each poll; after
     # WATCHER_INCOMPLETE_TTL_SECS they are moved to WATCHER_DIR/failed/.
+    # Artifacts written to OUTPUT_DIR/<label>_<timestamp>/<mapping_stem>/
     watcher_enabled:            bool = False
     watcher_dir:                str  = ""    # required when watcher_enabled=True
     watcher_poll_interval_secs: int  = 30    # how often to scan the directory
@@ -115,7 +121,7 @@ class Settings(BaseSettings):
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.14.0"
+    app_version: str = "2.14.1"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

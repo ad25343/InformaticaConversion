@@ -134,28 +134,75 @@ The file watcher lets you automate conversions without using the UI — useful f
 
 ### Manifest file format
 
-Create a file with any name ending in `.manifest.json` and place it in the watched directory alongside the XML files:
+A manifest represents a **project group** — all the related Informatica files for one project that should be converted together as a batch. Create a file with any name ending in `.manifest.json` and place it in the watched directory alongside the XML files.
+
+**Simple form** — all mappings share the same workflow and parameter file:
 
 ```json
 {
     "version":       "1.0",
-    "mapping":       "m_appraisal_rank.xml",
-    "workflow":      "wf_appraisal.xml",
-    "parameters":    "params.xml",
+    "label":         "Customer Data Pipeline — Q1 2026",
+    "mappings": [
+        "m_customer_load.xml",
+        "m_appraisal_rank.xml",
+        "m_commission_calc.xml"
+    ],
+    "workflow":      "wf_pipeline.xml",
+    "parameters":    "params_prod.xml",
     "reviewer":      "Jane Smith",
+    "reviewer_role": "Data Engineer"
+}
+```
+
+**Per-mapping overrides** — individual mappings can specify their own workflow or parameter file, falling back to the top-level defaults for any field not specified:
+
+```json
+{
+    "version":    "1.0",
+    "label":      "Customer Data Pipeline — Q1 2026",
+    "mappings": [
+        "m_customer_load.xml",
+        "m_product_load.xml",
+        {
+            "mapping":    "m_appraisal_rank.xml",
+            "workflow":   "wf_appraisal.xml",
+            "parameters": "params_appraisal.xml"
+        }
+    ],
+    "workflow":   "wf_default.xml",
+    "parameters": "params_prod.xml",
+    "reviewer":   "Jane Smith",
     "reviewer_role": "Data Engineer"
 }
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `mapping` | **Yes** | Filename of the Informatica mapping XML |
-| `workflow` | No | Filename of the workflow XML |
-| `parameters` | No | Filename of the parameter file (.xml / .txt / .par) |
+| `label` | No | Human-readable name for the batch — used as the output folder name. Recommended. |
+| `mappings` | **Yes** | Array of mapping XMLs. Each entry is a filename string (inherits top-level defaults) or an object with `mapping`, `workflow`, `parameters` fields that override the top-level values for that mapping only. |
+| `workflow` | No | Default workflow XML for all mappings (overridable per entry) |
+| `parameters` | No | Default parameter file (.xml / .txt / .par) for all mappings (overridable per entry) |
 | `reviewer` | No | Reviewer name — surfaced in gate notifications |
 | `reviewer_role` | No | Reviewer role |
 
-All referenced files must be in the same directory as the manifest.
+All referenced files must be in the same directory as the manifest. **Drop the manifest last** — it is the signal that all files are ready.
+
+### Output directory structure
+
+When a watcher batch completes, artifacts for each mapping are written to:
+
+```
+OUTPUT_DIR/
+  <label>_<YYYYMMDD_HHMMSS_ffffff>/
+    m_customer_load/
+      input/    output/    docs/    logs/
+    m_appraisal_rank/
+      input/    output/    docs/    logs/
+    m_commission_calc/
+      input/    output/    docs/    logs/
+```
+
+The microsecond timestamp is always appended to the label so re-runs with the same label never overwrite each other and folders sort chronologically. If no `label` is provided, the manifest filename stem is used in its place.
 
 ### What happens to the manifest after processing
 

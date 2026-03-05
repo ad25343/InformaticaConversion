@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.12.0
+**Version:** 2.14.1
 **Author:** ad25343
 **Last Updated:** 2026-03-04
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -555,6 +555,26 @@ transformations and connectors so the conversion agent sees no black-box referen
   manually uploaded jobs
 - **Config**: `WATCHER_ENABLED`, `WATCHER_DIR`, `WATCHER_POLL_INTERVAL_SECS`,
   `WATCHER_INCOMPLETE_TTL_SECS` — all documented in `.env.example`
+
+### v2.14.1 — Project-Group Manifest + Named Output Directories (shipped)
+
+- **Option A manifest schema**: each entry in `"mappings"` is now either a plain
+  filename string (inherits top-level `"workflow"` / `"parameters"` defaults) or
+  an object with its own `"workflow"` / `"parameters"` fields that override the
+  top-level values for that mapping only — accommodates projects where different
+  mappings use different workflow XMLs without requiring separate manifests
+- **`"label"` field**: optional human-readable batch name; drives the output
+  folder name and the batch label shown in the UI; if omitted, falls back to
+  the manifest filename stem
+- **Named output directories**: watcher artifacts now written to
+  `OUTPUT_DIR/<label>_<YYYYMMDD_HHMMSS_ffffff>/<mapping_stem>/` — output is
+  navigable by project name and mapping name without querying the database;
+  microsecond timestamp appended always so re-runs never overwrite prior output
+- **`job_exporter.py`**: reads `watcher_output_dir` and `watcher_mapping_stem`
+  hints from job state (set by watcher at creation time) to resolve named paths;
+  UI-submitted jobs continue to use `OUTPUT_DIR/<job_id>/`
+- Backward compatible: v2.14.0 single-string manifest entries and all prior
+  formats continue to work without modification
 
 ### v3.0 — Vision
 

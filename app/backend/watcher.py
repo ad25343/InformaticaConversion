@@ -1,56 +1,93 @@
 """
-watcher.py — Manifest-based file watcher for scheduled conversions (v2.14.0)
+watcher.py — Manifest-based file watcher for scheduled conversions (v2.14.1)
 =============================================================================
 
 Watches a configured directory for manifest files.  When a manifest appears
-and all its referenced XML files are present, the watcher automatically
-submits a conversion job through the same pipeline as the API endpoint.
+and ALL its referenced files are present on disk, the watcher automatically
+submits a conversion batch through the same pipeline as the API endpoint.
 
-MANIFEST FILE FORMAT
---------------------
-Drop a file named  <anything>.manifest.json  into the watched directory:
+MANIFEST FILE FORMAT (v2.14.1 — Option A)
+------------------------------------------
+Drop a file named <anything>.manifest.json into the watched directory.
+
+Top-level "workflow" and "parameters" are shared defaults for every mapping
+in the batch.  Individual entries in "mappings" can be a plain filename string
+(uses the defaults) or an object with their own workflow/parameters overrides.
 
     {
-        "version":       "1.0",
-        "mapping":       "m_appraisal_rank.xml",     // required
-        "workflow":      "wf_appraisal.xml",          // optional
-        "parameters":    "params.xml",                // optional
-        "reviewer":      "Jane Smith",                // optional — shown in gate notifications
-        "reviewer_role": "Data Engineer"              // optional
+        "version":   "1.0",
+        "label":     "Customer Data Pipeline — Q1 2026",
+        "mappings": [
+            "m_customer_load.xml",
+            "m_product_load.xml",
+            {
+                "mapping":    "m_appraisal_rank.xml",
+                "workflow":   "wf_appraisal.xml",
+                "parameters": "params_appraisal.xml"
+            }
+        ],
+        "workflow":      "wf_default.xml",
+        "parameters":    "params_prod.xml",
+        "reviewer":      "Jane Smith",
+        "reviewer_role": "Data Engineer"
     }
 
-All referenced XML files must live in the SAME directory as the manifest.
+Fields:
+  label        Optional.  Human-readable name used for the output folder and
+               the batch label in the UI.  If omitted, the manifest filename
+               stem is used.  A microsecond timestamp is always appended so
+               re-runs never overwrite each other.
+  mappings     Required.  Array of mapping XMLs.  Each entry is either a
+               filename string (inherits top-level workflow/parameters) or an
+               object with its own "mapping", "workflow", "parameters" fields
+               that override the top-level defaults for that mapping only.
+  workflow     Optional top-level default.  Shared across all mappings unless
+               a mapping entry provides its own override.
+  parameters   Optional top-level default.  Same override logic as workflow.
+  reviewer     Optional.  Recorded in logs and webhook notifications.
+  reviewer_role Optional.
+
+All referenced files must live in the SAME directory as the manifest.
+The manifest is the signal that all files are ready — drop it last.
+
+BACKWARD COMPATIBILITY
+----------------------
+v2.14.0 singular form ("mapping": "file.xml") is automatically normalised to
+the array form so older manifests continue to work without modification.
+
+OUTPUT DIRECTORY NAMING
+-----------------------
+For each watcher-submitted batch, artifacts are written to:
+
+    OUTPUT_DIR/<label>_<YYYYMMDD_HHMMSS_ffffff>/<mapping_stem>/
+
+where <label> is sanitized from the manifest "label" field (or the manifest
+filename stem if no label is provided), and the timestamp always uses
+microseconds for uniqueness even across rapid re-runs.
 
 LIFECYCLE
 ---------
 1. Watcher polls the directory every WATCHER_POLL_INTERVAL_SECS seconds.
-2. On finding a *.manifest.json file, it validates the manifest and checks
-   that all referenced files are present.
-3. If complete:  reads file content → creates job → launches pipeline task
+2. On finding a *.manifest.json, validates the JSON and checks all files
+   are present on disk.
+3. If complete:  reads files → creates batch → launches pipeline tasks
                  moves manifest to processed/<timestamp>_<name>.manifest.json
-4. If incomplete (files missing):  logs a warning, leaves manifest in place,
-   retries on the next poll.  After WATCHER_INCOMPLETE_TTL_SECS seconds the
-   manifest is moved to failed/ so it does not block the watched directory.
-5. If invalid JSON:  moves immediately to failed/ with a .error sidecar.
+4. If incomplete (files missing):  logs warning, retries each poll.
+   After WATCHER_INCOMPLETE_TTL_SECS seconds moves to failed/ with .error sidecar.
+5. If invalid JSON:  moves immediately to failed/ with .error sidecar.
 
 ENABLING
 --------
 Set in .env:
     WATCHER_ENABLED=true
     WATCHER_DIR=/path/to/watch/folder
-
-Optional tuning (all have sensible defaults):
-    WATCHER_POLL_INTERVAL_SECS=30
-    WATCHER_INCOMPLETE_TTL_SECS=300
-
-The watcher starts as a background asyncio task during app startup and shuts
-down cleanly on SIGTERM/SIGINT.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,13 +108,6 @@ async def run_watcher_loop(
     """
     Long-running coroutine that polls `watch_dir` for manifest files.
     Designed to be run as an asyncio background task via asyncio.create_task().
-
-    Parameters
-    ----------
-    watch_dir       : Absolute or relative path to the directory to watch.
-    poll_interval   : Seconds between polls (default: 30).
-    incomplete_ttl  : Seconds before a manifest with missing files is moved
-                      to failed/ (default: 300 = 5 minutes).
     """
     root = Path(watch_dir)
     if not root.exists():
@@ -96,8 +126,7 @@ async def run_watcher_loop(
     processed_dir.mkdir(exist_ok=True)
     failed_dir.mkdir(exist_ok=True)
 
-    # seen_incomplete: {manifest_path_str: first_seen_utc_timestamp}
-    seen_incomplete: dict[str, float] = {}
+    seen_incomplete: dict[str, float] = {}  # path → first_seen_timestamp
 
     logger.info(
         "Watcher started — watching %s every %ds (incomplete TTL: %ds)",
@@ -117,7 +146,6 @@ async def run_watcher_loop(
             logger.info("Watcher: received cancellation — stopping.")
             raise
         except Exception as exc:
-            # Never let a poll error kill the watcher loop
             logger.exception("Watcher: unexpected error during poll — %s", exc)
 
         await asyncio.sleep(poll_interval)
@@ -134,9 +162,7 @@ async def _poll_once(
     seen_incomplete: dict[str, float],
     incomplete_ttl: int,
 ) -> None:
-    """Scan the root directory once and process any ready manifests."""
     manifest_files = sorted(root.glob("*.manifest.json"))
-
     if not manifest_files:
         return
 
@@ -145,37 +171,41 @@ async def _poll_once(
     for manifest_path in manifest_files:
         key = str(manifest_path)
 
-        # ── Parse manifest ────────────────────────────────────────────────
+        # ── Parse and validate ────────────────────────────────────────────
         try:
             manifest = _read_manifest(manifest_path)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error(
-                "Watcher: invalid manifest %s — %s. Moving to failed/.",
-                manifest_path.name, exc,
-            )
+            logger.error("Watcher: invalid manifest %s — %s. Moving to failed/.",
+                         manifest_path.name, exc)
             _move_to(manifest_path, failed_dir, prefix="invalid_")
             _write_error_sidecar(failed_dir / f"invalid_{manifest_path.name}", str(exc))
             seen_incomplete.pop(key, None)
             continue
 
-        mapping_file = root / manifest["mapping"]
-        workflow_file: Optional[Path] = (
-            root / manifest["workflow"] if manifest.get("workflow") else None
-        )
-        parameter_file: Optional[Path] = (
-            root / manifest["parameters"] if manifest.get("parameters") else None
-        )
+        # ── Resolve per-mapping entries (apply top-level defaults) ────────
+        resolved_entries = manifest["_resolved_entries"]   # set by _read_manifest
 
-        # ── Check all files are present ───────────────────────────────────
-        missing = _find_missing_files(mapping_file, workflow_file, parameter_file)
+        # ── Enumerate all file paths needed (top-level + per-entry) ──────
+        all_paths: list[Path] = []
+        seen_names: set[str] = set()
 
+        def _add(fname: Optional[str]) -> None:
+            if fname and fname not in seen_names:
+                seen_names.add(fname)
+                all_paths.append(root / fname)
+
+        for entry in resolved_entries:
+            _add(entry["mapping"])
+            _add(entry["workflow"])
+            _add(entry["parameters"])
+
+        # ── Check all files present ───────────────────────────────────────
+        missing = [p.name for p in all_paths if not p.exists()]
         if missing:
             if key not in seen_incomplete:
                 seen_incomplete[key] = now
-                logger.warning(
-                    "Watcher: manifest %s waiting for files: %s",
-                    manifest_path.name, ", ".join(missing),
-                )
+                logger.warning("Watcher: manifest %s waiting for: %s",
+                               manifest_path.name, ", ".join(missing))
             else:
                 age = now - seen_incomplete[key]
                 if age >= incomplete_ttl:
@@ -187,129 +217,143 @@ async def _poll_once(
                     _move_to(manifest_path, failed_dir, prefix="timeout_")
                     _write_error_sidecar(
                         failed_dir / f"timeout_{manifest_path.name}",
-                        f"Files still missing after {incomplete_ttl}s: {', '.join(missing)}"
+                        f"Files still missing after {incomplete_ttl}s: {', '.join(missing)}",
                     )
                     seen_incomplete.pop(key, None)
             continue
 
-        # All files present — clear incomplete tracking
         seen_incomplete.pop(key, None)
 
         # ── Read file contents ────────────────────────────────────────────
+        file_cache: dict[str, str] = {}
         try:
-            xml_str      = mapping_file.read_text(encoding="utf-8", errors="replace")
-            workflow_str = (
-                workflow_file.read_text(encoding="utf-8", errors="replace")
-                if workflow_file else None
-            )
-            param_str = (
-                parameter_file.read_text(encoding="utf-8", errors="replace")
-                if parameter_file else None
-            )
+            for p in all_paths:
+                file_cache[p.name] = p.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            logger.error(
-                "Watcher: could not read files for %s — %s. Leaving for retry.",
-                manifest_path.name, exc,
-            )
+            logger.error("Watcher: could not read files for %s — %s. Leaving for retry.",
+                         manifest_path.name, exc)
             continue
 
-        # Validate mapping content is non-empty XML
-        if not xml_str.strip() or not xml_str.lstrip().startswith("<"):
-            logger.error(
-                "Watcher: mapping file %s is empty or not valid XML — moving to failed/.",
-                mapping_file.name,
-            )
+        # ── Validate all mapping XMLs ─────────────────────────────────────
+        bad_xmls = [
+            entry["mapping"]
+            for entry in resolved_entries
+            if not file_cache.get(entry["mapping"], "").lstrip().startswith("<")
+        ]
+        if bad_xmls:
+            logger.error("Watcher: invalid XML in %s: %s — moving to failed/.",
+                         manifest_path.name, ", ".join(bad_xmls))
             _move_to(manifest_path, failed_dir, prefix="badxml_")
             _write_error_sidecar(
                 failed_dir / f"badxml_{manifest_path.name}",
-                f"{mapping_file.name} is empty or does not start with an XML element."
+                f"Not valid XML: {', '.join(bad_xmls)}",
             )
             continue
 
-        # ── Submit job ────────────────────────────────────────────────────
+        # ── Build batch payload — each mapping with its resolved files ────
+        mappings_payload = [
+            {
+                "filename":       entry["mapping"],
+                "xml":            file_cache[entry["mapping"]],
+                "workflow_xml":   file_cache.get(entry["workflow"])  if entry["workflow"]   else None,
+                "parameter_file": file_cache.get(entry["parameters"]) if entry["parameters"] else None,
+            }
+            for entry in resolved_entries
+        ]
+
+        # ── Generate output directory name ────────────────────────────────
+        label         = manifest.get("label") or None
+        batch_dir_name = _make_output_dir_name(label, manifest_path.stem)
+
+        # ── Submit batch ──────────────────────────────────────────────────
+        source_label = label or manifest_path.stem
         try:
-            job_id = await _submit_job(
-                filename=mapping_file.name,
-                xml_str=xml_str,
-                workflow_str=workflow_str,
-                param_str=param_str,
-                manifest=manifest,
+            batch_id, job_count = await _submit_batch(
+                source_label, mappings_payload, batch_dir_name
             )
         except Exception as exc:
-            logger.error(
-                "Watcher: failed to submit job for %s — %s. Moving manifest to failed/.",
-                manifest_path.name, exc,
-            )
+            logger.error("Watcher: failed to submit batch for %s — %s. Moving to failed/.",
+                         manifest_path.name, exc)
             _move_to(manifest_path, failed_dir, prefix="submitfail_")
             _write_error_sidecar(
-                failed_dir / f"submitfail_{manifest_path.name}",
-                str(exc)
+                failed_dir / f"submitfail_{manifest_path.name}", str(exc)
             )
             continue
 
-        # ── Move manifest to processed/ ───────────────────────────────────
         _move_to(manifest_path, processed_dir)
         logger.info(
-            "Watcher: job %s created for %s (reviewer: %s). "
-            "Manifest moved to processed/.",
-            job_id,
-            mapping_file.name,
+            "Watcher: batch %s created — %d job(s) from manifest %s "
+            "(output dir: %s, reviewer: %s).",
+            batch_id, job_count, manifest_path.name,
+            batch_dir_name,
             manifest.get("reviewer", "unassigned"),
         )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Job submission — mirrors the API route pattern exactly
+# Batch submission — mirrors the /jobs/batch route pattern exactly
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _submit_job(
-    filename: str,
-    xml_str: str,
-    workflow_str: Optional[str],
-    param_str: Optional[str],
-    manifest: dict,
-) -> str:
+async def _submit_batch(
+    source_label: str,
+    mappings_payload: list[dict],
+    batch_dir_name: str,
+) -> tuple[str, int]:
     """
-    Create a job in the database and launch the pipeline task.
-    Returns the new job_id.
+    Create a batch and launch all pipeline tasks.
+    Stores watcher_output_dir and watcher_mapping_stem in each job's state so
+    job_exporter writes to OUTPUT_DIR/<batch_dir_name>/<mapping_stem>/ instead
+    of OUTPUT_DIR/<job_id>/.
 
-    This mirrors the create_job() route handler but is called internally
-    without going through HTTP, so it bypasses rate limiting and file-size
-    validation (the watcher operator is trusted).
+    Returns (batch_id, job_count).
     """
-    # Import here to avoid circular imports at module load time
     from backend.db import database as db
     from backend import orchestrator
-    from backend.routes import _progress_queues, _active_tasks
+    from backend.routes import _progress_queues, _active_tasks, _batch_semaphore
 
-    # Attach any manifest metadata as initial job notes
-    reviewer      = manifest.get("reviewer", "")
-    reviewer_role = manifest.get("reviewer_role", "")
+    batch_id, job_ids = await db.create_batch_atomic(source_label, mappings_payload)
 
-    job_id = await db.create_job(
-        filename,
-        xml_str,
-        workflow_xml_content=workflow_str,
-        parameter_file_content=param_str,
-        # Pass reviewer info if the DB schema supports it, otherwise it's
-        # gracefully ignored by the keyword-arg handler in create_job()
-        reviewer=reviewer or None,
-        reviewer_role=reviewer_role or None,
-    )
+    # Tag each job with the watcher output directory hint before the pipeline starts
+    for job_id, entry in zip(job_ids, mappings_payload):
+        mapping_stem = Path(entry["filename"]).stem
+        await db.update_job(job_id, "pending", 0, {
+            "watcher_output_dir":     batch_dir_name,
+            "watcher_mapping_stem":   mapping_stem,
+        })
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _progress_queues[job_id] = queue
+    job_entries = []
+    for job_id, entry in zip(job_ids, mappings_payload):
+        queue: asyncio.Queue = asyncio.Queue()
+        _progress_queues[job_id] = queue
+        job_entries.append({"job_id": job_id, "filename": entry["filename"]})
 
-    async def _run() -> None:
-        async for progress in orchestrator.run_pipeline(job_id, filename):
-            await queue.put(progress)
-        await queue.put(None)  # sentinel — closes any open SSE stream
+    async def _run_with_semaphore(j_id: str, fname: str) -> None:
+        try:
+            async with _batch_semaphore:
+                async for progress in orchestrator.run_pipeline(j_id, fname):
+                    await _progress_queues[j_id].put(progress)
+        except Exception as exc:
+            logger.error("Watcher batch pipeline crashed: job_id=%s error=%s",
+                         j_id, exc, exc_info=True)
+            try:
+                await db.update_job(j_id, "failed", -1,
+                                    {"error": f"Watcher batch runner crashed: {exc}"})
+            except Exception:
+                pass
+            await _progress_queues[j_id].put(
+                {"step": -1, "status": "failed", "message": f"Pipeline crashed: {exc}"}
+            )
+        finally:
+            await _progress_queues[j_id].put(None)
 
-    task = asyncio.create_task(_run())
-    task.set_name(f"watcher_pipeline_{job_id}")
-    _active_tasks[job_id] = task
+    for entry in job_entries:
+        task = asyncio.create_task(
+            _run_with_semaphore(entry["job_id"], entry["filename"])
+        )
+        task.set_name(f"watcher_{batch_id}_{entry['job_id']}")
+        _active_tasks[entry["job_id"]] = task
 
-    return job_id
+    return batch_id, len(job_entries)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -320,46 +364,128 @@ def _read_manifest(path: Path) -> dict:
     """
     Parse and validate a manifest JSON file.
     Raises ValueError for schema violations, json.JSONDecodeError for bad JSON.
+
+    Normalisation applied:
+    - v2.14.0 singular "mapping" field → "mappings" array (backward compat)
+    - Each entry in "mappings" is resolved to a full dict via _resolve_entry(),
+      merging per-mapping overrides with top-level defaults.  The resolved list
+      is stored under "_resolved_entries" so _poll_once() never has to re-apply
+      defaults.
     """
-    raw = path.read_text(encoding="utf-8")
-    data = json.loads(raw)
+    data = json.loads(path.read_text(encoding="utf-8"))
 
     if not isinstance(data, dict):
         raise ValueError("Manifest must be a JSON object.")
 
-    if "mapping" not in data or not data["mapping"]:
-        raise ValueError("Manifest missing required field: 'mapping'")
+    # Normalise v2.14.0 singular field → array
+    if "mapping" in data and "mappings" not in data:
+        data["mappings"] = [data.pop("mapping")]
 
-    if not str(data["mapping"]).lower().endswith(".xml"):
+    if "mappings" not in data or not data["mappings"]:
+        raise ValueError("Manifest missing required field: 'mappings' (list of mapping XMLs)")
+
+    if not isinstance(data["mappings"], list):
+        raise ValueError("'mappings' must be a JSON array.")
+
+    # Validate optional label
+    if "label" in data and not isinstance(data["label"], str):
+        raise ValueError("'label' must be a string.")
+
+    # Validate top-level optional files
+    if data.get("workflow") and not str(data["workflow"]).lower().endswith(".xml"):
+        raise ValueError(f"'workflow' must be a .xml file, got: {data['workflow']!r}")
+
+    if data.get("parameters") and not str(data["parameters"]).lower().endswith(
+        (".xml", ".txt", ".par")
+    ):
         raise ValueError(
-            f"'mapping' must reference a .xml file, got: {data['mapping']!r}"
+            f"'parameters' must be .xml/.txt/.par, got: {data['parameters']!r}"
         )
 
-    for opt_key in ("workflow", "parameters"):
-        if opt_key in data and data[opt_key]:
-            if not str(data[opt_key]).lower().endswith((".xml", ".txt", ".par")):
-                raise ValueError(
-                    f"'{opt_key}' must reference a .xml/.txt/.par file, "
-                    f"got: {data[opt_key]!r}"
-                )
+    # Resolve each mapping entry, applying top-level defaults as fallback
+    top_workflow   = data.get("workflow") or None
+    top_parameters = data.get("parameters") or None
 
+    resolved: list[dict] = []
+    for idx, entry in enumerate(data["mappings"]):
+        resolved.append(_resolve_entry(entry, top_workflow, top_parameters, idx))
+
+    data["_resolved_entries"] = resolved
     return data
 
 
-def _find_missing_files(
-    mapping_file: Path,
-    workflow_file: Optional[Path],
-    parameter_file: Optional[Path],
-) -> list[str]:
-    """Return a list of filenames that are referenced but not yet present on disk."""
-    missing: list[str] = []
-    if not mapping_file.exists():
-        missing.append(mapping_file.name)
-    if workflow_file and not workflow_file.exists():
-        missing.append(workflow_file.name)
-    if parameter_file and not parameter_file.exists():
-        missing.append(parameter_file.name)
-    return missing
+def _resolve_entry(
+    entry: object,
+    top_workflow: Optional[str],
+    top_parameters: Optional[str],
+    idx: int,
+) -> dict:
+    """
+    Normalise a single entry in the "mappings" array to a uniform dict:
+        {"mapping": str, "workflow": str|None, "parameters": str|None}
+
+    Entry may be:
+    - A plain string filename         → uses top-level defaults
+    - A dict with "mapping" key       → per-mapping overrides; falls back to defaults
+    """
+    if isinstance(entry, str):
+        mapping_file = entry
+        wf           = top_workflow
+        params       = top_parameters
+    elif isinstance(entry, dict):
+        mapping_file = entry.get("mapping", "")
+        if not mapping_file:
+            raise ValueError(
+                f"Entry #{idx} in 'mappings' is an object but missing required 'mapping' field."
+            )
+        wf     = entry.get("workflow")   or top_workflow
+        params = entry.get("parameters") or top_parameters
+        # Validate override types
+        if entry.get("workflow") and not str(entry["workflow"]).lower().endswith(".xml"):
+            raise ValueError(
+                f"Entry #{idx} 'workflow' must be a .xml file, got: {entry['workflow']!r}"
+            )
+        if entry.get("parameters") and not str(entry["parameters"]).lower().endswith(
+            (".xml", ".txt", ".par")
+        ):
+            raise ValueError(
+                f"Entry #{idx} 'parameters' must be .xml/.txt/.par, "
+                f"got: {entry['parameters']!r}"
+            )
+    else:
+        raise ValueError(
+            f"Entry #{idx} in 'mappings' must be a filename string or an object, "
+            f"got: {type(entry).__name__}"
+        )
+
+    if not str(mapping_file).lower().endswith(".xml"):
+        raise ValueError(
+            f"Entry #{idx} mapping filename must be a .xml file, got: {mapping_file!r}"
+        )
+
+    return {"mapping": str(mapping_file), "workflow": wf, "parameters": params}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Output directory naming
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_output_dir_name(label: Optional[str], manifest_stem: str) -> str:
+    """
+    Build the batch output directory name:
+        <sanitized_label>_<YYYYMMDD_HHMMSS_ffffff>
+
+    Always appends a microsecond timestamp so repeated runs with the same label
+    never collide and output folders sort chronologically.
+
+    If label is None or empty, the manifest filename stem is used as the base.
+    """
+    base = (label or manifest_stem).strip()
+    safe = re.sub(r"[^\w\s-]", "", base)          # strip special chars
+    safe = re.sub(r"[\s\-]+", "_", safe).strip("_")  # spaces/hyphens → underscore
+    safe = safe[:80].rstrip("_") or "batch"        # max 80 chars, never empty
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")   # microseconds (%f = 6 digits)
+    return f"{safe}_{ts}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,23 +493,19 @@ def _find_missing_files(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _move_to(src: Path, dest_dir: Path, prefix: str = "") -> None:
-    """Move src to dest_dir, prepending a UTC timestamp + optional prefix."""
     ts   = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    name = f"{ts}_{prefix}{src.name}"
-    dest = dest_dir / name
+    dest = dest_dir / f"{ts}_{prefix}{src.name}"
     try:
         shutil.move(str(src), str(dest))
     except Exception as exc:
-        logger.warning("Watcher: could not move %s to %s — %s", src, dest, exc)
+        logger.warning("Watcher: could not move %s → %s — %s", src, dest, exc)
 
 
 def _write_error_sidecar(manifest_dest: Path, message: str) -> None:
-    """Write a .error file alongside a moved manifest explaining why it failed."""
-    error_path = manifest_dest.with_suffix(".error")
     try:
-        error_path.write_text(
+        manifest_dest.with_suffix(".error").write_text(
             f"Watcher error: {datetime.now(timezone.utc).isoformat()}\n{message}\n",
             encoding="utf-8",
         )
     except Exception:
-        pass  # best-effort; do not propagate
+        pass

@@ -53,11 +53,31 @@ def _resolve_output_root() -> Optional[Path]:
     return here.parent.parent / "jobs"              # repo_root/jobs/
 
 
-def job_output_dir(job_id: str) -> Optional[Path]:
-    """Return the output directory for a specific job, or None if disabled."""
+def job_output_dir(job_id: str, state: Optional[dict] = None) -> Optional[Path]:
+    """
+    Return the output directory for a specific job, or None if disabled.
+
+    For watcher-submitted jobs the state dict carries two hints set by watcher.py:
+      - watcher_output_dir   : "<label>_<YYYYMMDD_HHMMSS_ffffff>"
+      - watcher_mapping_stem : "<mapping filename stem>"
+
+    When both hints are present the path is:
+        OUTPUT_DIR/<watcher_output_dir>/<watcher_mapping_stem>/
+
+    This groups all mappings from the same watcher batch under one human-readable
+    folder, making lights-out output navigable without querying the database.
+
+    For UI-submitted jobs (no hints) the path is the existing:
+        OUTPUT_DIR/<job_id>/
+    """
     root = _resolve_output_root()
     if root is None:
         return None
+    if state:
+        batch_dir  = state.get("watcher_output_dir")
+        mapping_dir = state.get("watcher_mapping_stem")
+        if batch_dir and mapping_dir:
+            return root / batch_dir / mapping_dir
     return root / job_id
 
 
@@ -125,7 +145,7 @@ async def export_job(job_id: str, job: dict, state: dict) -> Optional[Path]:
     Returns the job output directory on success, None if export is disabled or
     fails.  All exceptions are caught so a failed export never blocks COMPLETE.
     """
-    out_dir = job_output_dir(job_id)
+    out_dir = job_output_dir(job_id, state)
     if out_dir is None:
         log.info("Job export disabled (OUTPUT_DIR=disabled): job_id=%s", job_id)
         return None

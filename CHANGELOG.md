@@ -10,6 +10,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.14.1] — Project-Group Manifest with Named Output Directories
+
+### Changed
+
+#### `app/backend/watcher.py` — Option A manifest schema + label field
+
+**Manifest schema updated to support per-mapping file overrides.**
+
+Each entry in the `"mappings"` array can now be either a plain filename string
+(inherits top-level defaults) or an object with its own `"workflow"` and
+`"parameters"` fields that override the top-level values for that mapping only:
+
+```json
+{
+    "version":    "1.0",
+    "label":      "Customer Data Pipeline — Q1 2026",
+    "mappings": [
+        "m_customer_load.xml",
+        { "mapping": "m_appraisal_rank.xml", "workflow": "wf_appraisal.xml" }
+    ],
+    "workflow":   "wf_default.xml",
+    "parameters": "params_prod.xml"
+}
+```
+
+**New `"label"` field** — optional human-readable name for the batch.  Drives
+the output folder name and the batch label shown in the UI.  If omitted, the
+manifest filename stem is used.
+
+**Output directory naming** — watcher batches are now written to:
+```
+OUTPUT_DIR/<label>_<YYYYMMDD_HHMMSS_ffffff>/<mapping_stem>/
+```
+Microsecond timestamp is always appended so re-runs never overwrite prior
+output and folders sort chronologically.  UI-submitted jobs still use the
+existing `OUTPUT_DIR/<job_id>/` path — no change to non-watcher behaviour.
+
+**`_read_manifest()`** — validates and normalises each entry via new
+`_resolve_entry()` helper; per-entry overrides are merged with top-level
+defaults at parse time so the rest of the pipeline never has to re-apply them.
+
+**`_make_output_dir_name(label, manifest_stem)`** — new helper that sanitizes
+the label for filesystem use and appends `strftime("%Y%m%d_%H%M%S_%f")`
+(microseconds) to the base name.
+
+Backward compatibility retained: v2.14.0 singular `"mapping"` field and
+v2.14.1 `"mappings"` array of plain strings both continue to work.
+
+#### `app/backend/job_exporter.py` — named output paths for watcher batches
+
+`job_output_dir()` now accepts an optional `state` dict.  When the state
+carries `watcher_output_dir` and `watcher_mapping_stem` (set by the watcher at
+job creation time via `db.update_job()`), the export path becomes:
+```
+OUTPUT_DIR/<watcher_output_dir>/<watcher_mapping_stem>/
+```
+Watcher batches submitted overnight are immediately navigable by project name
+and mapping name without querying the database.
+
+#### `.env.example` — updated manifest documentation
+
+Manifest example updated to show `"label"` field, per-mapping override syntax,
+and output directory structure with example path.
+
+#### `docs/USER_GUIDE.md` — updated scheduled ingestion section
+
+Manifest section rewritten to show both the simple form (shared workflow/params)
+and the per-mapping override form, with a field reference table and an output
+directory tree diagram.
+
+---
+
 ## [2.14.0] — Manifest-Based File Watcher
 
 ### Added
