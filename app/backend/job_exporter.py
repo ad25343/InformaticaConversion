@@ -1,7 +1,7 @@
 """
 job_exporter.py — Write completed job artifacts to disk after Gate 3 approval.
 
-Folder structure written under OUTPUT_DIR/<job_id>/:
+UI-submitted jobs are written under OUTPUT_DIR/<job_id>/:
 
     input/
         mapping.xml                 ← source Informatica XML
@@ -22,6 +22,17 @@ Folder structure written under OUTPUT_DIR/<job_id>/:
     logs/
         <job_id>.log                ← full pipeline log
 
+Watcher-submitted jobs are written under:
+    OUTPUT_DIR/<label>_<YYYYMMDD_HHMMSS_ffffff>/<mapping_stem>/
+        input/  output/  docs/  logs/   (same structure as above)
+
+The batch folder also contains a batch_index.json that maps each mapping stem
+to its job_id for DB cross-reference without querying SQLite:
+    OUTPUT_DIR/<label>_<timestamp>/
+        batch_index.json            ← {"m_customer_load": "abc123-...", ...}
+        m_customer_load/
+        m_appraisal_rank/
+
 If OUTPUT_DIR is set to "disabled" or is unavailable, the export is skipped
 with a warning. All failures are non-fatal — a failed export never blocks
 the pipeline from reaching COMPLETE.
@@ -29,6 +40,7 @@ the pipeline from reaching COMPLETE.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import shutil
@@ -163,6 +175,9 @@ async def export_job(job_id: str, job: dict, state: dict) -> Optional[Path]:
     try:
         _write_all(out_dir, job_id, job, state)
         log.info("Job exported to disk: job_id=%s path=%s", job_id, out_dir)
+        # For watcher batches, update the batch-level index file so every mapping
+        # in the batch can be traced back to its job_id without querying the DB.
+        _update_batch_index(out_dir, job_id, state)
         return out_dir
     except Exception as exc:
         log.error("Job export failed (non-fatal): job_id=%s error=%s", job_id, exc, exc_info=True)
@@ -260,6 +275,60 @@ def _write_all(out_dir: Path, job_id: str, job: dict, state: dict) -> None:
     log_src = job_log_path(job_id)
     if log_src and log_src.exists():
         shutil.copy2(log_src, out_dir / "logs" / f"{job_id}.log")
+
+
+# ── Batch index (watcher jobs only) ──────────────────────────────────────────
+
+def _update_batch_index(out_dir: Path, job_id: str, state: dict) -> None:
+    """
+    Write / update OUTPUT_DIR/<batch_dir>/batch_index.json for watcher batches.
+
+    The index maps mapping_stem → job_id so teams can trace output folders back
+    to the database without querying SQLite.  Each mapping in a batch completes
+    at a different time (Gate 3 may be approved per-job), so we read-modify-write
+    the file on each call — later entries accumulate rather than overwrite.
+
+    Only written when the job carries watcher_output_dir and watcher_mapping_stem
+    hints in its state.  UI-submitted jobs produce no batch_index.json.
+
+    Example output:
+        {
+            "m_customer_load":  "abc123-def456-...",
+            "m_appraisal_rank": "bcd234-efg567-...",
+            "m_commission_calc": "cde345-fgh678-..."
+        }
+    """
+    batch_dir  = state.get("watcher_output_dir")
+    mapping_stem = state.get("watcher_mapping_stem")
+    if not batch_dir or not mapping_stem:
+        return   # not a watcher job — nothing to do
+
+    root = _resolve_output_root()
+    if root is None:
+        return
+
+    index_path = root / batch_dir / "batch_index.json"
+    try:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        # Read existing index (another mapping in the same batch may have written it)
+        existing: dict = {}
+        if index_path.exists():
+            try:
+                existing = json.loads(index_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except (json.JSONDecodeError, OSError):
+                existing = {}
+        existing[str(mapping_stem)] = job_id
+        index_path.write_text(
+            json.dumps(existing, indent=4, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        log.debug("batch_index.json updated: path=%s mapping=%s job_id=%s",
+                  index_path, mapping_stem, job_id)
+    except Exception as exc:
+        log.warning("Could not update batch_index.json (non-fatal): path=%s error=%s",
+                    index_path, exc)
 
 
 # ── ZIP builder (used by the download endpoint; does NOT require disk write) ──

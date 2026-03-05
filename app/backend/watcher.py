@@ -263,10 +263,17 @@ async def _poll_once(
 
         # ── Generate output directory name ────────────────────────────────
         label         = manifest.get("label") or None
-        batch_dir_name = _make_output_dir_name(label, manifest_path.stem)
+        # Strip ".manifest.json" cleanly: "q1_pipeline.manifest.json" → "q1_pipeline"
+        # manifest_path.stem alone gives "q1_pipeline.manifest" (Python strips last suffix only)
+        manifest_base = manifest_path.name
+        if manifest_base.lower().endswith(".manifest.json"):
+            manifest_base = manifest_base[: -len(".manifest.json")]
+        else:
+            manifest_base = manifest_path.stem   # fallback for non-standard names
+        batch_dir_name = _make_output_dir_name(label, manifest_base)
 
         # ── Submit batch ──────────────────────────────────────────────────
-        source_label = label or manifest_path.stem
+        source_label = label or manifest_base
         try:
             batch_id, job_count = await _submit_batch(
                 source_label, mappings_payload, batch_dir_name
@@ -416,6 +423,18 @@ def _read_manifest(path: Path) -> dict:
     resolved: list[dict] = []
     for idx, entry in enumerate(data["mappings"]):
         resolved.append(_resolve_entry(entry, top_workflow, top_parameters, idx))
+
+    # Reject duplicate mapping filenames — two entries with the same filename would
+    # collide in the file cache and overwrite each other in the output directory.
+    seen_mappings: set[str] = set()
+    for r in resolved:
+        fname = r["mapping"]
+        if fname in seen_mappings:
+            raise ValueError(
+                f"Duplicate mapping filename in 'mappings': {fname!r}. "
+                "Each mapping must appear only once per manifest."
+            )
+        seen_mappings.add(fname)
 
     data["_resolved_entries"] = resolved
     return data
