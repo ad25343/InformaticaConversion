@@ -1,6 +1,6 @@
 # Testing Guide — Informatica Conversion Tool
 
-> **Version:** 2.13.0
+> **Version:** 2.14.1
 > **Audience:** Data engineers and QA teams working with converted Informatica mappings
 
 ---
@@ -154,6 +154,114 @@ tests/test_expressions_m_appraisal_rank.py::test_iif_null_branch_semantics[None-
 ```
 
 If a test fails, the error message will tell you exactly which input/expected/actual values differ, pointing you directly to the mistranslated expression.
+
+---
+
+## Preparing Golden Reference Data
+
+Before you can run the Layer 4 comparison, you need a golden CSV — the reference output captured directly from Informatica running against a known input dataset.  This section covers how to create it, what data to use, and where to store it.
+
+### What is a golden dataset?
+
+A golden dataset is a small, stable, representative sample of source rows run through the **original Informatica mapping** and captured as a CSV.  It is the ground truth that the generated code's output is compared against.
+
+The key constraint: **the same source rows must be rerunnable through both Informatica and the generated code**.  This means you need a fixed input dataset, not a live table that changes daily.
+
+### Step 1 — Choose your input data
+
+Use a fixed sample of source rows, not a live production table.  Aim for:
+
+| Criteria | Guidance |
+|---|---|
+| **Row count** | 500–5,000 rows is sufficient for most mappings. More is not always better — a well-chosen 500 rows beats 50,000 random rows. |
+| **NULL coverage** | Ensure the sample includes NULLs in every nullable source column — the most common translation failure is NULL handling in IIF and DECODE expressions. |
+| **Boundary values** | Include at least one row for each expression boundary: zero, negative numbers, empty strings, minimum/maximum dates, and month-end dates. |
+| **All code paths** | Cover every branch in filter conditions and IIF logic — if a filter has 3 conditions, make sure rows exist that hit each path. |
+| **PII** | Do not use production data containing PII.  Mask or synthesize sensitive columns before using as test data. |
+
+Save this fixed input as `sample_input.csv` and keep it alongside the golden output.  Both files together form the test fixture — you need both to reproduce results.
+
+### Step 2 — Capture Informatica output
+
+Run the original Informatica mapping against your fixed input dataset and export the result to a CSV.
+
+**Via Flat File target (recommended):**
+1. In Informatica Designer, temporarily add a Flat File target to the mapping.
+2. Configure it as CSV with headers.
+3. Run a test session against your fixed input.
+4. Collect the output file from the session target directory.
+
+**Via PowerCenter Monitor session log:**
+Some mappings write directly to a database target.  Run the session, then export the target table rows (filtered to your test run) as a CSV from your database client.
+
+**Via XML session config override:**
+Add a `$PMTargetFileDir` parameter pointing to a local directory when running the test session.
+
+Once captured, rename the file clearly:
+```
+<mapping_name>_golden.csv
+```
+Example: `m_appraisal_rank_golden.csv`
+
+### Step 3 — Store golden data alongside the conversion output
+
+The standard location is the `golden/` subdirectory inside the mapping's test folder:
+
+```
+OUTPUT_DIR/
+  <batch_label>_<timestamp>/
+    m_appraisal_rank/
+      input/            ← source XMLs (written by tool)
+      output/           ← generated code (written by tool)
+        tests/
+          compare_golden.py         ← comparison script (written by tool)
+          golden/                   ← YOU CREATE THIS
+            m_appraisal_rank_golden.csv   ← Informatica reference output
+            sample_input.csv              ← fixed input rows used to generate it
+      docs/             ← S2T, documentation, security scan (written by tool)
+      logs/             ← pipeline logs (written by tool)
+```
+
+Creating the `golden/` folder and placing the reference files there is a **manual step** — the tool does not create it.  Add a note in your team's runbook to do this before UAT.
+
+### Step 4 — Version control golden data
+
+Commit golden CSVs to git alongside the converted code.  This ensures:
+- Anyone re-running the test gets the same reference point
+- Changes to the generated code can be regression-tested against the same baseline
+- The migration audit trail is complete
+
+If the golden CSV is too large to commit (> a few MB), store it in a team-accessible object store (S3, Azure Blob, etc.) and add a `golden/README.md` with the retrieval path.
+
+**Before committing:** confirm no PII is present.  Run a quick scan:
+```bash
+# Check for common PII patterns before committing
+grep -E '\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b|\b[0-9]{16}\b' golden/*.csv
+```
+
+### Running the comparison from the standard location
+
+Once the golden file is in place, the comparison command becomes:
+
+```bash
+cd OUTPUT_DIR/<batch_label>_<timestamp>/m_appraisal_rank/output/
+
+python tests/compare_golden.py \
+  --expected tests/golden/m_appraisal_rank_golden.csv \
+  --actual   generated_output.csv \
+  --key-columns ACCOUNT_ID,LOAD_DATE \
+  --ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID
+```
+
+### Lights-out scheduler workflow
+
+When using the file watcher for overnight batch conversion, the golden data preparation schedule is:
+
+1. **Before the watcher run** — confirm `golden/` folders exist for mappings being re-converted; golden CSVs do not need to be re-captured unless the source mapping changed.
+2. **After Gate 3 approval** — artifacts are written to the output folder.  Golden CSVs are already in place from the prior run.
+3. **Morning review** — run `compare_golden.py` for each mapping as part of the daily UAT check.
+
+If this is a **first-time conversion** (no prior golden CSV exists), the data engineer must capture the Informatica output before the comparison can be run.  This is expected — golden data is a one-time setup per mapping, reused for all subsequent re-conversions.
 
 ---
 
