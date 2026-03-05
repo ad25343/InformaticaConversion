@@ -10,7 +10,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.14.1] — Project-Group Manifest with Named Output Directories
+## [2.14.1] — Project-Group Manifest, Named Output Directories, Security Hardening
+
+### Security (post-release review — commits ef1fc8f, 27ba012, 83177d6)
+
+- **Path traversal prevention** — `_assert_plain_filename()` added to `watcher.py`;
+  called on every user-supplied filename in the manifest (per-mapping entries,
+  top-level `workflow`, top-level `parameters`, per-entry overrides).  Rejects
+  filenames containing path separators or absolute paths (e.g. `"../../etc/shadow.xml"`
+  passes extension check but is now caught before `root / fname` is constructed)
+- **Defense-in-depth in `job_exporter.py`** — `job_output_dir()` and
+  `_update_batch_index()` both validate `watcher_output_dir` / `watcher_mapping_stem`
+  from DB state for path separators before constructing output paths; fall back
+  to `job_id` path with a warning log if check fails
+- **`config.py`** — `host = "0.0.0.0"` annotated `# nosec B104` with rationale
+- **Bare `except: pass` replaced** — DB update failure in `_run_with_semaphore`
+  now logged at DEBUG; S2T fallback failure in `job_exporter` now logged at DEBUG
+- **`re.ASCII` flag** added to `_make_output_dir_name` regex so Unicode labels
+  cannot produce non-ASCII characters in directory names
+- **Type validation** — top-level `workflow` and `parameters` fields in
+  `_read_manifest` now explicitly checked as `str` before extension validation
+- **Bandit result: 0 issues** across all modified files
+
+### Fixed (post-release design review — commit 27ba012)
+
+- **Duplicate mapping filename guard** — `_read_manifest` raises `ValueError`
+  immediately if any two entries in `"mappings"` resolve to the same filename;
+  prevents silent `file_cache` collision and output directory overwrite
+- **Manifest stem stripping** — fallback output dir name now strips `.manifest.json`
+  as a whole suffix (`q1_pipeline` not `q1_pipeline.manifest`); applies to both
+  `batch_dir_name` and the UI batch label
+- **`batch_index.json`** — `job_exporter._update_batch_index()` writes
+  `OUTPUT_DIR/<batch_dir>/batch_index.json` mapping `mapping_stem → job_id`;
+  read-modify-write so entries accumulate as each mapping clears Gate 3;
+  non-fatal on failure; UI-submitted jobs unaffected
+- **`_move_to()` returns destination path** — all four call sites in `_poll_once`
+  now derive the `.error` sidecar filename from the actual moved path (including
+  UTC timestamp prefix) so manifest and sidecar are paired by name in `failed/`
+
+---
+
+## [2.14.1-base] — Project-Group Manifest with Named Output Directories
 
 ### Changed
 
