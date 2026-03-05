@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     bcrypt_rounds: int = 12   # work factor for bcrypt password hashing (12 ≈ 250ms)
 
     # ── Server ──────────────────────────────────────────────────────────────
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # nosec B104 — intentional; runs in container/VM, not exposed directly
     port: int = 8000
     show_docs: bool = True
     cors_origins: str = ""       # comma-separated list; empty = same-origin only

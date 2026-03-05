@@ -74,10 +74,20 @@ def job_output_dir(job_id: str, state: Optional[dict] = None) -> Optional[Path]:
     if root is None:
         return None
     if state:
-        batch_dir  = state.get("watcher_output_dir")
+        batch_dir   = state.get("watcher_output_dir")
         mapping_dir = state.get("watcher_mapping_stem")
         if batch_dir and mapping_dir:
-            return root / batch_dir / mapping_dir
+            # Defense-in-depth: validate that neither value contains path separators.
+            # These are set by watcher.py at job creation (never by the user directly),
+            # but we validate here in case of unexpected DB state.
+            if (Path(str(batch_dir)).name == str(batch_dir) and
+                    Path(str(mapping_dir)).name == str(mapping_dir)):
+                return root / batch_dir / mapping_dir
+            log.warning(
+                "job_output_dir: watcher path hints contain separators — "
+                "falling back to job_id path (job_id=%s batch_dir=%r mapping_dir=%r)",
+                job_id, batch_dir, mapping_dir,
+            )
     return root / job_id
 
 
@@ -218,8 +228,9 @@ def _write_all(out_dir: Path, job_id: str, job: dict, state: dict) -> None:
                 p = s2t_excel_path(job_id)
                 if p and p.exists():
                     shutil.copy2(p, out_dir / "docs" / "s2t_mapping.xlsx")
-            except Exception:
-                pass
+            except Exception as s2t_exc:
+                log.debug("S2T fallback path lookup failed (non-fatal): job_id=%s error=%s",
+                          job_id, s2t_exc)
 
     # ── DOCS: Manifest Excel (regenerate from state) ───────────────────────
     manifest_raw = state.get("manifest_report")

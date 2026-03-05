@@ -338,8 +338,9 @@ async def _submit_batch(
             try:
                 await db.update_job(j_id, "failed", -1,
                                     {"error": f"Watcher batch runner crashed: {exc}"})
-            except Exception:
-                pass
+            except Exception as db_exc:
+                logger.debug("Watcher: DB update failed during crash handler: job_id=%s error=%s",
+                             j_id, db_exc)
             await _progress_queues[j_id].put(
                 {"step": -1, "status": "failed", "message": f"Pipeline crashed: {exc}"}
             )
@@ -391,16 +392,22 @@ def _read_manifest(path: Path) -> dict:
     if "label" in data and not isinstance(data["label"], str):
         raise ValueError("'label' must be a string.")
 
-    # Validate top-level optional files
-    if data.get("workflow") and not str(data["workflow"]).lower().endswith(".xml"):
-        raise ValueError(f"'workflow' must be a .xml file, got: {data['workflow']!r}")
+    # Validate top-level optional files — type check first, then extension, then path safety
+    if data.get("workflow"):
+        if not isinstance(data["workflow"], str):
+            raise ValueError(f"'workflow' must be a string filename, got: {type(data['workflow']).__name__}")
+        _assert_plain_filename(data["workflow"], "'workflow'")
+        if not data["workflow"].lower().endswith(".xml"):
+            raise ValueError(f"'workflow' must be a .xml file, got: {data['workflow']!r}")
 
-    if data.get("parameters") and not str(data["parameters"]).lower().endswith(
-        (".xml", ".txt", ".par")
-    ):
-        raise ValueError(
-            f"'parameters' must be .xml/.txt/.par, got: {data['parameters']!r}"
-        )
+    if data.get("parameters"):
+        if not isinstance(data["parameters"], str):
+            raise ValueError(f"'parameters' must be a string filename, got: {type(data['parameters']).__name__}")
+        _assert_plain_filename(data["parameters"], "'parameters'")
+        if not data["parameters"].lower().endswith((".xml", ".txt", ".par")):
+            raise ValueError(
+                f"'parameters' must be .xml/.txt/.par, got: {data['parameters']!r}"
+            )
 
     # Resolve each mapping entry, applying top-level defaults as fallback
     top_workflow   = data.get("workflow") or None
@@ -440,30 +447,34 @@ def _resolve_entry(
             )
         wf     = entry.get("workflow")   or top_workflow
         params = entry.get("parameters") or top_parameters
-        # Validate override types
-        if entry.get("workflow") and not str(entry["workflow"]).lower().endswith(".xml"):
-            raise ValueError(
-                f"Entry #{idx} 'workflow' must be a .xml file, got: {entry['workflow']!r}"
-            )
-        if entry.get("parameters") and not str(entry["parameters"]).lower().endswith(
-            (".xml", ".txt", ".par")
-        ):
-            raise ValueError(
-                f"Entry #{idx} 'parameters' must be .xml/.txt/.par, "
-                f"got: {entry['parameters']!r}"
-            )
+        # Validate override types and filenames
+        if entry.get("workflow"):
+            _assert_plain_filename(str(entry["workflow"]), f"Entry #{idx} 'workflow'")
+            if not str(entry["workflow"]).lower().endswith(".xml"):
+                raise ValueError(
+                    f"Entry #{idx} 'workflow' must be a .xml file, got: {entry['workflow']!r}"
+                )
+        if entry.get("parameters"):
+            _assert_plain_filename(str(entry["parameters"]), f"Entry #{idx} 'parameters'")
+            if not str(entry["parameters"]).lower().endswith((".xml", ".txt", ".par")):
+                raise ValueError(
+                    f"Entry #{idx} 'parameters' must be .xml/.txt/.par, "
+                    f"got: {entry['parameters']!r}"
+                )
     else:
         raise ValueError(
             f"Entry #{idx} in 'mappings' must be a filename string or an object, "
             f"got: {type(entry).__name__}"
         )
 
-    if not str(mapping_file).lower().endswith(".xml"):
+    mapping_file = str(mapping_file)
+    _assert_plain_filename(mapping_file, f"Entry #{idx} mapping")
+    if not mapping_file.lower().endswith(".xml"):
         raise ValueError(
             f"Entry #{idx} mapping filename must be a .xml file, got: {mapping_file!r}"
         )
 
-    return {"mapping": str(mapping_file), "workflow": wf, "parameters": params}
+    return {"mapping": mapping_file, "workflow": wf, "parameters": params}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -479,13 +490,31 @@ def _make_output_dir_name(label: Optional[str], manifest_stem: str) -> str:
     never collide and output folders sort chronologically.
 
     If label is None or empty, the manifest filename stem is used as the base.
+    re.ASCII restricts \\w to [a-zA-Z0-9_] only, preventing Unicode characters
+    from producing non-ASCII filesystem names.
     """
     base = (label or manifest_stem).strip()
-    safe = re.sub(r"[^\w\s-]", "", base)          # strip special chars
-    safe = re.sub(r"[\s\-]+", "_", safe).strip("_")  # spaces/hyphens → underscore
-    safe = safe[:80].rstrip("_") or "batch"        # max 80 chars, never empty
-    ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")   # microseconds (%f = 6 digits)
+    safe = re.sub(r"[^\w\s-]", "", base, flags=re.ASCII)    # strip non-ASCII / special chars
+    safe = re.sub(r"[\s\-]+", "_", safe).strip("_")         # spaces/hyphens → underscore
+    safe = safe[:80].rstrip("_") or "batch"                 # max 80 chars, never empty
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")      # microseconds (%f = 6 digits)
     return f"{safe}_{ts}"
+
+
+def _assert_plain_filename(fname: str, label: str) -> None:
+    """
+    Reject filenames that contain path separators or are absolute paths.
+
+    Prevents path traversal attacks where a manifest entry like
+    "../../etc/passwd.xml" would escape WATCHER_DIR via `root / fname`.
+
+    Path(fname).name strips all directory components — if the result differs
+    from the original string, the filename contained separators.
+    """
+    if Path(fname).name != fname:
+        raise ValueError(
+            f"{label} must be a plain filename with no path components, got: {fname!r}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -507,5 +536,5 @@ def _write_error_sidecar(manifest_dest: Path, message: str) -> None:
             f"Watcher error: {datetime.now(timezone.utc).isoformat()}\n{message}\n",
             encoding="utf-8",
         )
-    except Exception:
-        pass
+    except Exception:  # nosec B110 — intentional: sidecar is best-effort; cannot log here
+        pass            # as the logger itself may be what's failing
