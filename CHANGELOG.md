@@ -8,13 +8,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### In progress — v2.16.0 — Config-Driven Pattern Library (Phases 4–5)
+### In progress — v2.16.0 — Config-Driven Pattern Library (Phase 5)
 
-Phases 1–3 complete (see below). Remaining phases:
+Phases 1–4 complete (see below). Remaining:
 
-- **Phase 4** — `aggregation_load`, `filter_and_route`, `union_consolidate`
 - **Phase 5** — Classifier extension + Conversion Agent integration;
   `etl_patterns` bundled in generated project output
+
+---
+
+## [2.16.0-phase4] — 2026-03-10 — Pattern Library Phase 4
+
+Three aggregation/routing/union patterns fully implemented with 39 new tests
+(199 total, 100% passing).
+
+### Added
+
+**`etl_patterns/patterns/aggregation_load.py`** — `AggregationLoadPattern`
+Equivalent to Informatica Aggregator transformation — GROUP BY + aggregate
+metrics in a single pass over the source data.
+- `group_by`: one or more grouping columns (string or list).
+- `aggregations`: list of `{target_col, func, source_col}` entries; supported
+  functions: `sum`, `count`, `avg` (→ `mean`), `min`, `max`, `first`, `last`,
+  `nunique`, `std`, `var`, `median`.
+- `having`: optional post-aggregation row filter (uses the expression DSL);
+  equivalent to SQL HAVING clause.
+- `sort_by`: optional output sort on one or more aggregated columns.
+- Empty input returns an empty DataFrame with correct output schema.
+- `_AGG_FUNC_MAP` maps Informatica-familiar names to pandas named-agg functions.
+
+**`etl_patterns/patterns/filter_and_route.py`** — `FilterAndRoutePattern`
+Equivalent to Informatica Router transformation — sends each source row to one
+or more target outputs based on per-target `filter_expr` conditions.
+- `target` must be a list; each entry requires a `filter_expr`.
+- Uses the expression DSL for filter evaluation (supports `{COL}` references,
+  arithmetic, comparison, logical operators, and named functions).
+- Rows matching no target are silently dropped (Informatica default behaviour).
+- A single row can match multiple targets (non-exclusive routing).
+- Optional per-target `column_map` applies expression-based column remapping
+  to the filtered subset before writing.
+- Overrides `BasePattern._write()` to implement per-target routing logic.
+- Catch-all target: `filter_expr: "true"` matches every row.
+
+**`etl_patterns/patterns/union_consolidate.py`** — `UnionConsolidatePattern`
+Equivalent to Informatica Union transformation — combines N source streams into
+a single output.
+- `sources`: list of source configs (flat-file or database); each may include
+  an optional ETL-style `column_map` for schema normalisation before union.
+- `dedup_keys`: optional list of key columns to deduplicate after concatenation
+  (first occurrence kept); bare string is coerced to single-element list.
+- `sort_by`: optional sort applied after dedup.
+- Overrides `execute()` entirely (reads N sources instead of one) and strips
+  `column_map` keys from source configs before passing to IO readers so that
+  the FlatFileReader's legacy rename-style `column_map` is not confused with
+  the ETL expression-based column map.
+
+### Tests
+
+**`etl_patterns/tests/test_phase4_patterns.py`** — 39 new tests
+- `TestAggregationLoadPattern` (13): pre_load validation, basic aggregations,
+  avg/nunique/multi-group-by, having filter, sort_by, empty input, missing
+  column error, end-to-end flat-file round-trip.
+- `TestFilterAndRoutePattern` (16): pre_load validation, `_filter_rows` with
+  numeric/string/literal/boolean/bad expressions, full routing to multiple
+  flat files, per-target column_map, catch-all target, no-match skip.
+- `TestUnionConsolidatePattern` (10): constructor validation, dedup (list/str
+  key), sort_by, `_combine` helpers, end-to-end two-CSV union, schema
+  normalisation via column_map, dedup+sort combined, mixed DB+CSV source.
 
 ---
 
