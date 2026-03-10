@@ -602,6 +602,39 @@ transformations and connectors so the conversion agent sees no black-box referen
 - Schedule files are re-read on every poll — changes take effect without a
   server restart
 
+### v2.16.0 — Config-Driven Pattern Library (planned)
+
+A fundamental shift in conversion output quality and code footprint. Instead of
+generating bespoke code for every mapping, the conversion agent identifies which
+of ten recognised patterns a mapping fits, extracts the config parameters from
+the XML, and emits a YAML config that drives a pre-built, tested library
+component at runtime.
+
+**Core design:** see `docs/DESIGN_PATTERN_LIBRARY.md` for the full specification.
+
+- **Ten reusable patterns**: Truncate and Load, Incremental Append, Upsert/SCD1,
+  SCD Type 2, Lookup Enrichment, Aggregation Load, Filter and Route, Union
+  Consolidation, Expression Transform, Pass-Through
+- **IO abstraction layer**: source and target blocks support database connections,
+  delimited flat files, fixed-width flat files, XML, JSON, and Excel — any
+  combination (file→DB, DB→file, file→file all valid)
+- **Shared utility library**: `etl_metadata`, `null_safe`, `type_cast`,
+  `string_clean`, `watermark_manager`, `file_lifecycle` — eliminates the most
+  repeated expression patterns found in every Informatica estate
+- **Confidence classification**: HIGH (auto-config), MEDIUM (config + flagged
+  elements), LOW (pattern suggested, human confirms), NONE (falls back to current
+  bespoke code generation) — surfaces at existing Gate 1, no new gate required
+- **Deterministic decision tree**: pattern assignment driven by transformation
+  topology (Aggregator present → Aggregation Load; self-referential Lookup →
+  SCD2; etc.) — not naming conventions, not AI heuristics
+- **Config envelope**: stack-agnostic YAML schema with stack-specific hints for
+  dbt, PySpark, and Python; bespoke overrides embedded in the same file for NONE
+  confidence columns
+- **Conversion agent changes**: emits `config/<mapping>.yaml` + static `run.py`;
+  bespoke code generation retained as fallback for unrecognised patterns
+- **Future roadmap (out of scope for v2.16.0)**: message queues (Kafka, SQS),
+  REST API sources, FTP/SFTP, cloud storage (S3/ADLS/GCS), streaming targets
+
 ### v3.0 — Vision
 
 - Continuous migration mode: monitor Informatica Designer exports and auto-convert on

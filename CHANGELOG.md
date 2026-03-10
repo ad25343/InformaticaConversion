@@ -8,6 +8,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Planned — v2.16.0 — Config-Driven Pattern Library
+
+Design formalised in `docs/DESIGN_PATTERN_LIBRARY.md`. No code changes yet.
+
+**Motivation:** The current 1:1 conversion model generates bespoke code for every
+mapping regardless of how common the underlying pattern is. The pattern library
+approach pre-builds the execution logic for ten recognised patterns; the
+conversion agent emits a YAML config instead of code, dramatically reducing the
+generated code footprint and improving consistency across the estate.
+
+**Ten patterns identified:**
+- `truncate_and_load` — full refresh; no delta logic; most common pattern
+- `incremental_append` — watermark-based append; no updates to existing records
+- `upsert` — SCD Type 1 merge on business key; current state only
+- `scd2` — SCD Type 2 history-preserving; self-referential Lookup is the
+  definitive structural signature
+- `lookup_enrich` — main stream + N external dimension/reference lookups;
+  the fact table load pattern
+- `aggregation_load` — Aggregator transformation present; GROUP BY + agg
+- `filter_and_route` — Router present; one input splits to N targets by condition
+- `union_consolidate` — Union present; N compatible sources merged to one target
+- `expression_transform` — single source, column-level derivations, one target
+- `pass_through` — trivial extract; no meaningful transformation
+
+**IO abstraction layer:** source/target blocks are type-agnostic; supports
+database, delimited flat file, fixed-width flat file, XML, JSON, Excel — any
+source/target combination (file→DB, DB→file, file→file all valid).
+
+**Shared utilities:** `etl_metadata`, `null_safe`, `type_cast`, `string_clean`,
+`watermark_manager`, `file_lifecycle`.
+
+**Confidence levels:** HIGH / MEDIUM / LOW / NONE — surfaces at existing Gate 1;
+no new gate required.
+
+**Decision tree:** pattern determined from XML transformation topology — not
+naming conventions, not AI heuristics. Deterministic and auditable.
+
+**Future roadmap (out of v2.16.0 scope):** message queues, REST API sources,
+FTP/SFTP, cloud storage, streaming targets.
+
 ---
 
 ## [2.15.0] — Time-Based Manifest Scheduler
