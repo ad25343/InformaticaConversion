@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.16.0 (Phase 1)
+**Version:** 2.16.0 (Phase 1) / App 2.15.1
 **Author:** ad25343
 **Last Updated:** 2026-03-10
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -601,6 +601,29 @@ transformations and connectors so the conversion agent sees no black-box referen
   active for the full lights-out pipeline to function
 - Schedule files are re-read on every poll — changes take effect without a
   server restart
+
+### v2.15.1 — Security Hardening Patch (shipped)
+
+Six targeted fixes across the app backend. No pipeline behaviour changes.
+
+- **ReDoS fix** — `_YAML_PLACEHOLDER_RE` in `security.py` changed `<.+>` to `<.+?>`
+  (non-greedy); eliminates catastrophic backtracking on adversarial YAML input
+- **Rate-limit bypass closed** — new `_real_client_ip()` in `limiter.py`; default
+  `TRUSTED_PROXY_COUNT=0` ignores `X-Forwarded-For` (prevents header-spoofing to
+  bypass per-IP rate limits); `TRUSTED_PROXY_COUNT=N` enables correct proxy-chain IP
+  extraction for nginx / CloudFlare deployments
+- **Health endpoint exception leakage fixed** — `/api/health` and `/health` log
+  failures at WARNING and return only `"error"`, not the raw exception string
+- **`__import__` anti-pattern removed** — three `__import__("datetime").datetime`
+  usages in `routes.py` and `orchestrator.py` replaced with a top-of-file import
+- **Authorization model documented** — comment block in `routes.py` explains
+  the single-credential design, consequence (no per-job ownership), and migration
+  path for future multi-user isolation
+- **`.env.example` completed** — all previously undocumented config variables
+  now have inline explanations: `SESSION_HOURS`, `BCRYPT_ROUNDS`, `LOG_LEVEL`,
+  `DB_PATH`, `JOB_RETENTION_DAYS`, `CLEANUP_INTERVAL_HOURS`, `OUTPUT_DIR`,
+  `TRUSTED_PROXY_COUNT`, `RATE_LIMIT_JOBS`, `RATE_LIMIT_LOGIN`,
+  `VERIFY_TIMEOUT_SECS`, `AGENT_TIMEOUT_SECS`, `EXTENDED_OUTPUT_BETA`
 
 ### v2.16.0 — Config-Driven Pattern Library (in progress — Phase 1 complete)
 

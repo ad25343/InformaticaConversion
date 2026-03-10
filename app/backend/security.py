@@ -417,7 +417,7 @@ _YAML_SECRET_KEY_RE = re.compile(
 
 # YAML values that look like a real secret (not a placeholder or $VAR)
 _YAML_PLACEHOLDER_RE = re.compile(
-    r"^\s*(\"\"|''|null|~|None|changeme|<.+>|\$\$?\w+|your[_-])",
+    r"^\s*(\"\"|''|null|~|None|changeme|<.+?>|\$\$?\w+|your[_-])",
     re.IGNORECASE,
 )
 

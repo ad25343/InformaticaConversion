@@ -3,6 +3,7 @@ FastAPI routes — REST API for the Informatica Conversion Tool.
 """
 from __future__ import annotations
 import asyncio
+from datetime import datetime as _datetime
 import json
 import logging
 import os
@@ -37,6 +38,20 @@ router = APIRouter(prefix="/api")
 logger = logging.getLogger("conversion.routes")
 
 _ROUTE_START_TIME = time.monotonic()
+
+# ── Authorization model ──────────────────────────────────────────────────────
+# This tool uses a SINGLE shared password (APP_PASSWORD) — there are no
+# individual user accounts.  All authenticated callers are treated as the
+# same principal (the team), so there is no per-job ownership check.
+#
+# Consequence: any authenticated user can read, modify, or delete any job.
+# This is acceptable for a small internal team sharing one credential, and
+# job IDs are random UUIDs (not guessable by outsiders).
+#
+# If multi-user isolation is required in future, add a `user_id` column to
+# the jobs table (see database.py), persist it on job creation via a session
+# claim, and enforce it in every handler below.
+# ────────────────────────────────────────────────────────────────────────────
 
 # ── Security helpers ────────────────────────────────────────────────────────
 
@@ -111,7 +126,8 @@ async def health_check():
         async with aiosqlite.connect(db.DB_PATH) as conn:
             await conn.execute("SELECT 1")
     except Exception as exc:
-        db_status = f"error: {exc}"
+        logger.warning("Health check: DB connectivity failure (%s: %s)", type(exc).__name__, exc)
+        db_status = "error"
 
     uptime = round(time.monotonic() - _ROUTE_START_TIME, 1)
     payload = {
@@ -448,7 +464,7 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
     sign_off = SignOffRecord(
         reviewer_name=payload.reviewer_name,
         reviewer_role=payload.reviewer_role,
-        review_date=__import__("datetime").datetime.utcnow().isoformat(),
+        review_date=_datetime.utcnow().isoformat(),
         blocking_resolved=[],
         flags_accepted=[r for r in payload.flag_resolutions if r.action == "accepted"],
         flags_resolved=[r for r in payload.flag_resolutions if r.action == "resolved"],
@@ -526,7 +542,7 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
     sec_signoff = SecuritySignOffRecord(
         reviewer_name=payload.reviewer_name,
         reviewer_role=payload.reviewer_role,
-        review_date=__import__("datetime").datetime.utcnow().isoformat() + "Z",
+        review_date=_datetime.utcnow().isoformat() + "Z",
         decision=payload.decision,
         notes=payload.notes,
         remediation_round=prev_round,
@@ -640,7 +656,7 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     code_signoff = CodeSignOffRecord(
         reviewer_name=payload.reviewer_name,
         reviewer_role=payload.reviewer_role,
-        review_date=__import__("datetime").datetime.utcnow().isoformat(),
+        review_date=_datetime.utcnow().isoformat(),
         decision=payload.decision,
         notes=payload.notes,
     )

@@ -29,6 +29,7 @@ from backend.limiter import login_limiter
 from backend.cleanup import run_cleanup_loop, run_watchdog_loop
 
 _startup_log = logging.getLogger("conversion.startup")
+_log = logging.getLogger(__name__)
 
 TEMPLATES = Path(__file__).parent / "frontend" / "templates"
 
@@ -258,8 +259,8 @@ async def health_check():
         async with aiosqlite.connect(DB_PATH) as conn:
             await conn.execute("SELECT 1")
         db_ok = True
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("Health check: DB connectivity failure (%s: %s)", type(exc).__name__, exc)
     return JSONResponse({
         "status":         "ok" if db_ok else "degraded",
         "version":        _cfg.app_version,

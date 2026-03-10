@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # ── Rate limiting ───────────────────────────────────────────────────────
     rate_limit_jobs: str = "20/minute"
     rate_limit_login: str = "5/minute"
+    # Number of trusted reverse proxies in front of this app (nginx, CloudFlare, etc.).
+    # When > 0 the rate limiter reads the real client IP from X-Forwarded-For,
+    # skipping the last N entries (which are the trusted proxy hops).
+    # Leave at 0 when the app is exposed directly (no proxy).
+    trusted_proxy_count: int = 0
 
     # ── Batch conversion ────────────────────────────────────────────────────
     batch_concurrency: int = 3

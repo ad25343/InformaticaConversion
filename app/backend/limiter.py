@@ -34,8 +34,36 @@ from fastapi import HTTPException, Request
 # ── Limit strings ─────────────────────────────────────────────────────────────
 
 from .config import settings as _cfg
-RATE_LIMIT_JOBS  = _cfg.rate_limit_jobs
-RATE_LIMIT_LOGIN = _cfg.rate_limit_login
+RATE_LIMIT_JOBS        = _cfg.rate_limit_jobs
+RATE_LIMIT_LOGIN       = _cfg.rate_limit_login
+_TRUSTED_PROXY_COUNT   = _cfg.trusted_proxy_count
+
+def _real_client_ip(request: Request) -> str:
+    """
+    Return the real client IP, accounting for trusted reverse proxies.
+
+    When TRUSTED_PROXY_COUNT > 0 the app is behind N proxy hops (nginx,
+    CloudFlare, load-balancer).  The X-Forwarded-For header looks like:
+        X-Forwarded-For: <client>, <proxy1>, <proxy2>
+    We skip the last N entries (the trusted hops) and return the one before
+    them — the leftmost untrusted IP.
+
+    When TRUSTED_PROXY_COUNT = 0 (default, direct exposure) we use the
+    connection's source IP directly and ignore X-Forwarded-For entirely,
+    because an attacker could spoof that header.
+    """
+    if _TRUSTED_PROXY_COUNT > 0:
+        forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+        if forwarded_for:
+            ips = [ip.strip() for ip in forwarded_for.split(",")]
+            # The trusted proxies append from the right; pick the entry
+            # immediately before the trusted chain.
+            idx = max(0, len(ips) - _TRUSTED_PROXY_COUNT)
+            candidate = ips[idx]
+            if candidate:
+                return candidate
+    return request.client.host if request.client else "unknown"
+
 
 _PERIOD_SECONDS: dict[str, int] = {
     "second": 1,
@@ -72,7 +100,7 @@ class RateLimiter:
         self._lock = asyncio.Lock()
 
     async def __call__(self, request: Request) -> None:
-        ip = request.client.host if request.client else "unknown"
+        ip = _real_client_ip(request)
         now = time.monotonic()
 
         async with self._lock:

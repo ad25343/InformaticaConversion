@@ -6,6 +6,7 @@ to logs/jobs/<job_id>.log (one JSON line per event).
 """
 from __future__ import annotations
 import asyncio
+from datetime import datetime as _datetime
 import logging as _logging
 import traceback
 from typing import AsyncGenerator
@@ -1192,7 +1193,7 @@ async def resume_after_security_fix_request(
         auto_signoff = SecuritySignOffRecord(
             reviewer_name="system",
             reviewer_role="auto",
-            review_date=__import__("datetime").datetime.utcnow().isoformat() + "Z",
+            review_date=_datetime.utcnow().isoformat() + "Z",
             decision=SecurityReviewDecision.APPROVED,
             notes=f"Auto-approved after clean re-scan (fix round {remediation_round})",
             remediation_round=remediation_round,

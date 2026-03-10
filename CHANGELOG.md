@@ -21,6 +21,63 @@ Phase 1 complete (see below). Remaining phases:
 
 ---
 
+## [2.15.1] — 2026-03-10 — Security Hardening Patch
+
+Six targeted security fixes across the app backend. No pipeline behaviour changes.
+
+### Security
+
+- **ReDoS fix in `security.py`** — `_YAML_PLACEHOLDER_RE` contained the pattern
+  `<.+>` which exhibits catastrophic backtracking on crafted input (e.g. a long
+  string of `<` characters without a closing `>`). Changed to the non-greedy
+  `<.+?>` which backtracks linearly and is safe against adversarial input in
+  uploaded YAML parameter files.
+
+- **Rate-limit bypass via `X-Forwarded-For` spoofing fixed** (`limiter.py`,
+  `config.py`) — when the app is deployed directly (no reverse proxy), the old
+  code read the client IP from `request.client.host`. A new `_real_client_ip()`
+  helper is now used everywhere:
+  - `TRUSTED_PROXY_COUNT=0` (default): uses the raw connection IP and ignores
+    `X-Forwarded-For` entirely — an attacker cannot spoof a different IP to get
+    a fresh rate-limit bucket.
+  - `TRUSTED_PROXY_COUNT=N` (behind N proxies): reads `X-Forwarded-For` and
+    skips the last N entries (the trusted proxy hops), returning the leftmost
+    untrusted IP.
+  - New `trusted_proxy_count: int = 0` setting added to `config.py` and
+    documented in `.env.example`.
+
+- **Exception detail no longer leaks in health endpoint** (`routes.py`,
+  `main.py`) — `GET /api/health` and the root `/health` endpoint previously
+  caught exceptions with a bare `except` and either silently swallowed them
+  or serialised the raw exception string into the JSON response body. Both
+  handlers now log the exception class and message at `WARNING` level and
+  return only `"error"` (no detail) in the response.
+
+- **`__import__("datetime")` anti-pattern removed** (`routes.py`,
+  `orchestrator.py`) — three call sites used `__import__("datetime").datetime`
+  to create review timestamps. Replaced with a clean top-of-file
+  `from datetime import datetime as _datetime` import. Functionally identical
+  but readable, lintable, and not a security surface.
+
+### Documentation / config
+
+- **Authorization model documented** (`routes.py`) — added a comment block
+  explaining the single-shared-password design, its consequence (any
+  authenticated caller can access any job), why this is acceptable for the
+  current use case (internal team, UUIDs are not guessable), and the migration
+  path if per-user isolation is required in future.
+
+- **`.env.example` fully documented** — added all previously undocumented
+  config variables with inline explanations:
+  - `SESSION_HOURS`, `BCRYPT_ROUNDS` — auth tuning
+  - `LOG_LEVEL` — logging verbosity
+  - `DB_PATH`, `JOB_RETENTION_DAYS`, `CLEANUP_INTERVAL_HOURS` — database
+  - `OUTPUT_DIR` — artifact export root
+  - `TRUSTED_PROXY_COUNT`, `RATE_LIMIT_JOBS`, `RATE_LIMIT_LOGIN` — rate limiting
+  - `VERIFY_TIMEOUT_SECS`, `AGENT_TIMEOUT_SECS`, `EXTENDED_OUTPUT_BETA` — agent tuning
+
+---
+
 ## [2.16.0-phase1] — 2026-03-10 — Pattern Library: Foundation (commit b8f8d77)
 
 ### Added
