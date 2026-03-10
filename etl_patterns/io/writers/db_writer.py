@@ -137,30 +137,36 @@ class DatabaseWriter(BaseWriter):
 
         fqn = self._fqn()
         try:
-            # Process in chunks to bound memory usage
+            # Process in chunks to bound memory usage.
+            # DELETE and INSERT are split into two separate transactions so that
+            # pandas to_sql() (which manages its own connection scope) does not
+            # interfere with the DELETE transaction on SQLAlchemy 2.x connections.
             rows_written = 0
             for i in range(0, len(df), chunksize):
                 batch = df.iloc[i : i + chunksize]
+
+                # Phase 1 — DELETE matching keys (committed immediately)
+                key_vals = batch[unique_key].drop_duplicates()
                 with engine.begin() as conn:
-                    # Build DELETE for this batch's keys
-                    key_vals = batch[unique_key].drop_duplicates()
                     for _, key_row in key_vals.iterrows():
                         where = " AND ".join(
                             f"{col} = :{col}" for col in unique_key
                         )
+                        params = {k: _coerce_param(v) for k, v in dict(key_row).items()}
                         conn.execute(
                             text(f"DELETE FROM {fqn} WHERE {where}"),  # noqa: S608
-                            dict(key_row),
+                            params,
                         )
-                    # INSERT
-                    batch.to_sql(
-                        name      = table,
-                        con       = conn,
-                        schema    = schema,
-                        if_exists = "append",
-                        index     = False,
-                        method    = "multi",
-                    )
+
+                # Phase 2 — INSERT new rows
+                batch.to_sql(
+                    name      = table,
+                    con       = engine,
+                    schema    = schema,
+                    if_exists = "append",
+                    index     = False,
+                    method    = "multi",
+                )
                 rows_written += len(batch)
             log.info("DatabaseWriter: upserted %d rows into %s", rows_written, fqn)
             return rows_written
@@ -183,3 +189,20 @@ class DatabaseWriter(BaseWriter):
         table  = self._cfg.get("table", "")
         schema = self._cfg.get("schema")
         return f"{schema}.{table}" if schema else table
+
+
+# ── Module helpers ────────────────────────────────────────────────────────────
+
+def _coerce_param(value):
+    """
+    Coerce numpy scalar types to native Python types for SQLAlchemy binding.
+    numpy.int64 and numpy.float64 may not bind correctly on some dialects.
+    """
+    import numpy as np  # lazy import — numpy is already a pandas dependency
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    return value

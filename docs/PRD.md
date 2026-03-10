@@ -682,21 +682,22 @@ component at runtime.
   no `eval` on arbitrary code — uses `ast.Constant` + `ast.literal_eval`
 - **Pattern base class** (`patterns/base.py`): IO wiring, ETL metadata injection,
   timing, structured result dict `{rows_read, rows_written, elapsed_s, status}`
-- **Four fully implemented patterns** (Phases 1–2):
+- **Seven fully implemented patterns** (Phases 1–3):
   - `pass_through` — 1:1 extract with optional column selection/rename
   - `truncate_and_load` — full-refresh with optional `column_map` YAML expression block
   - `incremental_append` — watermark-driven append (DB + flat-file); auto-advances
     watermark to `MAX(col)` after each successful run
   - `expression_transform` — full `column_map` with row filter, dedup, and sort
-- **Six pattern stubs** (Phases 3–4): `upsert`, `scd2`, `lookup_enrich`,
-  `aggregation_load`, `filter_and_route`, `union_consolidate`
-- **127 unit + integration tests** covering all shared utilities, expression
-  evaluator, config loader, and Phase 1–2 patterns; `pytest` wired into
-  `pyproject.toml`
+  - `upsert` — SCD Type 1 merge on business key; existing rows overwritten, new inserted
+  - `scd2` — SCD Type 2 full-history merge with effective dates and `is_current` flag
+  - `lookup_enrich` — joins N reference datasets (DB or flat-file) into main stream
+- **Three pattern stubs** (Phase 4): `aggregation_load`, `filter_and_route`,
+  `union_consolidate`
+- **160 unit + integration tests** (100% passing)
 - **Expression DSL enhancement** — comparison and boolean operators (`==`, `!=`,
   `>=`, `<=`, `>`, `<`, `and`, `or`, `not`) now supported alongside arithmetic
-- **Watermark manager fix** — DELETE + INSERT split into two sequential executes
-  for SQLAlchemy 2.x compatibility
+- **DB writer fix** — `_write_upsert` splits DELETE and INSERT into separate
+  transactions; numpy scalar coercion added for reliable SQLAlchemy binding
 
 #### Phase 2 — Core Patterns (complete — 2026-03-10)
 
@@ -704,10 +705,11 @@ Implemented `incremental_append` and `expression_transform` patterns fully, plus
 48 integration tests. Also fixed expression DSL for comparison operators and
 corrected watermark manager for SQLAlchemy 2.x multi-statement limitation.
 
-#### Phase 3 — Complex Patterns (planned)
+#### Phase 3 — Complex Patterns (complete — 2026-03-10)
 
-Implement `scd2`, `upsert`, `lookup_enrich`; SCD2 merge uses `effective_from` /
-`effective_to` / `is_current` logic with the SQLAlchemy engine.
+Implemented `upsert` (SCD1), `scd2` (SCD2 full-history merge), and
+`lookup_enrich` (N-way reference join); 33 integration tests. Fixed
+`DatabaseWriter._write_upsert` for SQLAlchemy 2.x transaction isolation.
 
 #### Phase 4 — Multi-stream Patterns (planned)
 

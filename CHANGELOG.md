@@ -8,14 +8,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### In progress — v2.16.0 — Config-Driven Pattern Library (Phases 3–5)
+### In progress — v2.16.0 — Config-Driven Pattern Library (Phases 4–5)
 
-Phases 1–2 complete (see below). Remaining phases:
+Phases 1–3 complete (see below). Remaining phases:
 
-- **Phase 3** — `scd2`, `upsert`, `lookup_enrich` patterns
 - **Phase 4** — `aggregation_load`, `filter_and_route`, `union_consolidate`
 - **Phase 5** — Classifier extension + Conversion Agent integration;
   `etl_patterns` bundled in generated project output
+
+---
+
+## [2.16.0-phase3] — 2026-03-10 — Pattern Library Phase 3
+
+Three complex patterns fully implemented, one bug fix in the DB writer, and 33
+new tests (160 total, 100% passing).
+
+### Added
+
+**`etl_patterns/patterns/upsert.py`** — `UpsertPattern` (SCD Type 1)
+Merge-on-key upsert: existing target rows matching the business key are
+overwritten with the latest source values; new keys are inserted.  No history
+is preserved.  Uses `DatabaseWriter._write_upsert()` for database targets.
+- `pre_load()` validates that `unique_key` is set and coerces a bare string key
+  to a list; sets `write_mode = "upsert"` on the target config.
+- `transform()` applies an optional `column_map`; validates that all `unique_key`
+  columns survive the column map before writing.
+
+**`etl_patterns/patterns/scd2.py`** — `Scd2Pattern` (SCD Type 2)
+Full history merge with effective dates and current-row flag:
+- **New keys**: INSERT with `effective_from=now`, `effective_to=end_of_time`,
+  `is_current=1`.
+- **Changed rows**: UPDATE existing row to `effective_to=now, is_current=0`;
+  INSERT new version.
+- **Unchanged rows**: skipped entirely.
+- `_read_current_target()` reads only `is_current=1` rows; returns empty list if
+  the target table does not yet exist (first-ever load).
+- `_expire_rows()` issues per-key `UPDATE … SET effective_to=now, is_current=0`
+  statements within a single transaction.
+- Overrides `_write()` directly (bypasses `DatabaseWriter`) to implement the
+  custom multi-step merge logic.
+- Tracked column comparison uses string-normalised equality (`_vals_equal`) so
+  whitespace differences do not trigger spurious expiries.
+
+**`etl_patterns/patterns/lookup_enrich.py`** — `LookupEnrichPattern`
+Joins N reference datasets into the main source stream:
+- Lookups may be `database` (SQLAlchemy) or `flat_file` (CSV / fixed-width).
+- `join_keys` dict maps source column name → lookup column name (renames on the
+  fly if they differ).
+- Optional `prefix` adds a string prefix to all non-key lookup columns to avoid
+  name collisions when joining multiple lookups.
+- `join_type` controls `left` (default) or `inner` join semantics.
+- `cache: true` stores the loaded lookup DataFrame in a module-level dict
+  (`_LOOKUP_CACHE`) so the same reference table is not read multiple times in a
+  single process run.  `clear_lookup_cache()` resets the cache between runs.
+- Multiple lookups applied left-to-right; final `column_map` applied after all
+  joins.
+
+### Fixed
+
+**`io/writers/db_writer.py`** — `_write_upsert()` now issues the DELETE and
+INSERT as two separate database operations (separate `engine.begin()` +
+`to_sql(engine, …)`) instead of mixing `conn.execute(DELETE)` with
+`to_sql(con=conn)` inside a single `engine.begin()` context.  Mixing the two in
+SQLAlchemy 2.x caused the DELETE to be silently ignored on SQLite (pandas
+`to_sql` opens its own transaction scope when given a `Connection`).
+Added `_coerce_param()` helper to convert `numpy.int64` / `numpy.float64`
+values to native Python types before binding in DELETE WHERE clauses.
+
+### Tests
+
+**`tests/test_phase3_patterns.py`** — 33 new tests:
+- `TestUpsertPattern` (6): config validation, passthrough, column_map, missing
+  key after column_map, flat-file e2e, DB upsert overwrites existing rows.
+- `TestScd2Helpers` (8): `_vals_equal`, `_vals_differ`, `_lookup_row` (single
+  key, composite key, not found).
+- `TestScd2Pattern` (8): config validation, first run inserts all, unchanged rows
+  not duplicated, changed row expires+inserts, new key appended, column_map
+  applied before SCD2 logic, empty source writes nothing.
+- `TestLookupEnrichPattern` (11): missing lookups/join_keys, left join, inner
+  join, key rename, prefix, column_map after join, multiple lookups, cache,
+  DB lookup.
+
+All 160 tests pass.
 
 ---
 
