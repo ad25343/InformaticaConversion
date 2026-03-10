@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.15.0
+**Version:** 2.16.0 (Phase 1)
 **Author:** ad25343
-**Last Updated:** 2026-03-04
+**Last Updated:** 2026-03-10
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -602,7 +602,7 @@ transformations and connectors so the conversion agent sees no black-box referen
 - Schedule files are re-read on every poll — changes take effect without a
   server restart
 
-### v2.16.0 — Config-Driven Pattern Library (planned)
+### v2.16.0 — Config-Driven Pattern Library (in progress — Phase 1 complete)
 
 A fundamental shift in conversion output quality and code footprint. Instead of
 generating bespoke code for every mapping, the conversion agent identifies which
@@ -612,26 +612,96 @@ component at runtime.
 
 **Core design:** see `docs/DESIGN_PATTERN_LIBRARY.md` for the full specification.
 
-- **Ten reusable patterns**: Truncate and Load, Incremental Append, Upsert/SCD1,
-  SCD Type 2, Lookup Enrichment, Aggregation Load, Filter and Route, Union
-  Consolidation, Expression Transform, Pass-Through
-- **IO abstraction layer**: source and target blocks support database connections,
+**Status:** Phase 1 complete (commit `b8f8d77`) — 38 files, 3,606 lines,
+84/84 unit tests green. Package: `etl_patterns/` at repo root (pip-installable).
+
+#### Phase 1 — Foundation (✅ complete, commit b8f8d77)
+
+- **`etl_patterns/` pip-installable package** at repo root (`pyproject.toml`,
+  `setuptools.build_meta`)
+- **Exception hierarchy** (`exceptions.py`): `ETLPatternError` → `ConfigError`,
+  `PatternNotFoundError`, `ReaderError`, `WriterError`, `ExpressionError`,
+  `WatermarkError`, `ValidationError`
+- **Shared utility library** (`utils/`):
+  - `etl_metadata` — ETL audit column injection (`ETL_LOAD_DATE`, `ETL_BATCH_ID`,
+    `ETL_SOURCE_SYSTEM`, `ETL_SOURCE_FILE`, `ETL_RUN_ID`)
+  - `null_safe` — `null_safe`, `coalesce`, `nvl`, `nvl2`, `is_null`; mirrors
+    Informatica `ISNULL` / `IIF(ISNULL(...), ...)` idiom
+  - `type_cast` — `type_cast(value, target_type)` for all Informatica data types:
+    string, integer, decimal (precision/scale), float, date, datetime, boolean;
+    handles `$1,234` financial formatting, ISO and common date formats
+  - `string_clean` — `to_upper/lower`, `trim/ltrim/rtrim`, `lpad/rpad`,
+    `substr`, `instr`, `replace_chr/str`, `clean_whitespace`, `normalize_string`
+  - `watermark_manager` — `WatermarkManager` reads/writes `ETL_WATERMARKS`
+    control table; auto-creates on first use; serialises all types to `VARCHAR(500)`
+  - `file_lifecycle` — `FileValidator` (pre-read checks), `RejectWriter` (CSV
+    reject file context manager), `archive_file/glob` (dated archive dirs),
+    `lifecycle_from_config` (YAML block → ready objects)
+- **IO abstraction layer** (`io/`):
+  - `BaseReader` / `BaseWriter` abstract classes with `read()` / `read_chunks()` /
+    `write()` interface
+  - `DatabaseReader` — SQLAlchemy full-table / custom SQL; `build_incremental_query()`
+    for watermark-based incremental reads
+  - `FlatFileReader` — glob multi-file, chunked 100k rows, column rename/dtype,
+    null-value override
+  - `FixedWidthReader` — mainframe FWF by column `start` + `length` (1-based,
+    Informatica-aligned), per-column dtype, configurable encoding
+  - `DatabaseWriter` — `append`, `replace` (drop + recreate), and dialect-agnostic
+    `upsert` (DELETE matching PKs + INSERT) modes
+  - `FlatFileWriter` — delimited output with `{date}` path substitution,
+    quoting, compression, column selection/ordering, append mode
+  - `get_reader()` / `get_writer()` factory functions — type-dispatch from YAML config
+- **Config loader** (`config_loader.py`): `run("path.yaml")` one-call entry point;
+  YAML load, schema validation, lazy pattern dispatch; `registered_patterns()` list
+- **Expression evaluator** (`expression.py`): safe column DSL — `{COL}` references,
+  `null_safe`, `coalesce`, `iif`, `type_cast`, all string functions, arithmetic
+  operators; `apply_column_map(column_map, row)` for full mapping column lists;
+  no `eval` on arbitrary code — uses `ast.Constant` + `ast.literal_eval`
+- **Pattern base class** (`patterns/base.py`): IO wiring, ETL metadata injection,
+  timing, structured result dict `{rows_read, rows_written, elapsed_s, status}`
+- **Two fully implemented patterns** (Phase 1):
+  - `pass_through` — 1:1 extract with optional column selection/rename
+  - `truncate_and_load` — full-refresh with optional `column_map` YAML expression block
+- **Eight pattern stubs** (Phases 2–4): `incremental_append`, `upsert`, `scd2`,
+  `lookup_enrich`, `aggregation_load`, `filter_and_route`, `union_consolidate`,
+  `expression_transform`
+- **84 unit tests** covering all shared utilities, expression evaluator, and
+  config loader; `pytest` wired into `pyproject.toml`
+
+#### Phase 2 — Core Patterns (planned)
+
+Implement `pass_through`, `truncate_and_load`, `incremental_append`,
+`expression_transform` patterns fully; end-to-end integration test per pattern
+using FirstBank Digital sample data.
+
+#### Phase 3 — Complex Patterns (planned)
+
+Implement `scd2`, `upsert`, `lookup_enrich`; SCD2 merge uses `effective_from` /
+`effective_to` / `is_current` logic with the SQLAlchemy engine.
+
+#### Phase 4 — Multi-stream Patterns (planned)
+
+Implement `aggregation_load`, `filter_and_route`, `union_consolidate`.
+
+#### Phase 5 — Classifier + Conversion Agent Integration (planned)
+
+- Extend `classifier_agent.py` with the 10-pattern decision tree
+- Gate 1 surfaces confidence classification (HIGH / MEDIUM / LOW / NONE)
+- Conversion agent emits `config/<mapping>.yaml` + static `run.py` when
+  confidence ≥ LOW; falls back to bespoke code generation for NONE
+- `etl_patterns` bundled in generated project output
+
+#### Design notes
+
+- **IO abstraction**: source/target blocks support database connections,
   delimited flat files, fixed-width flat files, XML, JSON, and Excel — any
   combination (file→DB, DB→file, file→file all valid)
-- **Shared utility library**: `etl_metadata`, `null_safe`, `type_cast`,
-  `string_clean`, `watermark_manager`, `file_lifecycle` — eliminates the most
-  repeated expression patterns found in every Informatica estate
 - **Confidence classification**: HIGH (auto-config), MEDIUM (config + flagged
   elements), LOW (pattern suggested, human confirms), NONE (falls back to current
   bespoke code generation) — surfaces at existing Gate 1, no new gate required
 - **Deterministic decision tree**: pattern assignment driven by transformation
   topology (Aggregator present → Aggregation Load; self-referential Lookup →
   SCD2; etc.) — not naming conventions, not AI heuristics
-- **Config envelope**: stack-agnostic YAML schema with stack-specific hints for
-  dbt, PySpark, and Python; bespoke overrides embedded in the same file for NONE
-  confidence columns
-- **Conversion agent changes**: emits `config/<mapping>.yaml` + static `run.py`;
-  bespoke code generation retained as fallback for unrecognised patterns
 - **Future roadmap (out of scope for v2.16.0)**: message queues (Kafka, SQS),
   REST API sources, FTP/SFTP, cloud storage (S3/ADLS/GCS), streaming targets
 

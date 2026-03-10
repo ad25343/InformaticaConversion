@@ -8,45 +8,110 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Planned — v2.16.0 — Config-Driven Pattern Library
+### In progress — v2.16.0 — Config-Driven Pattern Library (Phases 2–5)
 
-Design formalised in `docs/DESIGN_PATTERN_LIBRARY.md`. No code changes yet.
+Phase 1 complete (see below). Remaining phases:
 
-**Motivation:** The current 1:1 conversion model generates bespoke code for every
-mapping regardless of how common the underlying pattern is. The pattern library
-approach pre-builds the execution logic for ten recognised patterns; the
-conversion agent emits a YAML config instead of code, dramatically reducing the
-generated code footprint and improving consistency across the estate.
+- **Phase 2** — `incremental_append`, `expression_transform` patterns fully
+  implemented; end-to-end integration tests on FirstBank Digital sample data
+- **Phase 3** — `scd2`, `upsert`, `lookup_enrich` patterns
+- **Phase 4** — `aggregation_load`, `filter_and_route`, `union_consolidate`
+- **Phase 5** — Classifier extension + Conversion Agent integration;
+  `etl_patterns` bundled in generated project output
 
-**Ten patterns identified:**
-- `truncate_and_load` — full refresh; no delta logic; most common pattern
-- `incremental_append` — watermark-based append; no updates to existing records
-- `upsert` — SCD Type 1 merge on business key; current state only
-- `scd2` — SCD Type 2 history-preserving; self-referential Lookup is the
-  definitive structural signature
-- `lookup_enrich` — main stream + N external dimension/reference lookups;
-  the fact table load pattern
-- `aggregation_load` — Aggregator transformation present; GROUP BY + agg
-- `filter_and_route` — Router present; one input splits to N targets by condition
-- `union_consolidate` — Union present; N compatible sources merged to one target
-- `expression_transform` — single source, column-level derivations, one target
-- `pass_through` — trivial extract; no meaningful transformation
+---
 
-**IO abstraction layer:** source/target blocks are type-agnostic; supports
-database, delimited flat file, fixed-width flat file, XML, JSON, Excel — any
-source/target combination (file→DB, DB→file, file→file all valid).
+## [2.16.0-phase1] — 2026-03-10 — Pattern Library: Foundation (commit b8f8d77)
 
-**Shared utilities:** `etl_metadata`, `null_safe`, `type_cast`, `string_clean`,
-`watermark_manager`, `file_lifecycle`.
+### Added
 
-**Confidence levels:** HIGH / MEDIUM / LOW / NONE — surfaces at existing Gate 1;
-no new gate required.
+#### `etl_patterns/` — new pip-installable package at repo root
 
-**Decision tree:** pattern determined from XML transformation topology — not
-naming conventions, not AI heuristics. Deterministic and auditable.
+**38 files · 3,606 lines · 84/84 unit tests green.**
 
-**Future roadmap (out of v2.16.0 scope):** message queues, REST API sources,
-FTP/SFTP, cloud storage, streaming targets.
+Design spec: `docs/DESIGN_PATTERN_LIBRARY.md`.
+Install: `pip install -e etl_patterns/` (editable) or `pip install ./etl_patterns/`.
+
+##### Core
+
+- **`exceptions.py`** — `ETLPatternError` hierarchy: `ConfigError`,
+  `PatternNotFoundError`, `ReaderError`, `WriterError`, `ExpressionError`,
+  `WatermarkError`, `ValidationError`
+- **`config_loader.py`** — `run(path)` / `run_dict(cfg)` one-call entry points;
+  YAML load, required-field validation, lazy pattern dispatch via import path registry;
+  `registered_patterns()` returns all ten names
+- **`expression.py`** — safe column-expression DSL: `{COL}` references,
+  `null_safe`, `coalesce`, `iif`, `type_cast`, string helpers (upper/lower/trim/
+  lpad/rpad/substr/instr/replace_chr/concat), arithmetic operators;
+  `apply_column_map(column_map, row)` for YAML column lists; no `eval` on
+  arbitrary code — uses `ast.Constant` + `_safe_eval_node`
+
+##### Shared utilities (`utils/`)
+
+- **`etl_metadata`** — ETL audit column injection: `ETL_LOAD_DATE`, `ETL_BATCH_ID`,
+  `ETL_SOURCE_SYSTEM`, `ETL_SOURCE_FILE`, `ETL_RUN_ID`; config `true` (all on) or
+  per-column dict; original DataFrame not mutated
+- **`null_safe`** — `null_safe`, `coalesce`, `nvl`, `nvl2`, `is_null`; treats
+  Python `None`, `float('nan')`, and `pd.NA`/`pd.NaT` as null; empty string is
+  not null (Informatica-aligned)
+- **`type_cast`** — `type_cast(value, target_type, ...)` for all Informatica data
+  types — string, integer, decimal (precision/scale/ROUND_HALF_UP), float, date,
+  datetime, boolean; strips financial formatting (`$1,234`); tries multiple date
+  formats before failing; returns `default` on null or cast failure
+- **`string_clean`** — `to_upper/lower`, `trim/ltrim/rtrim`, `lpad/rpad`,
+  `substr` (1-based, Informatica-aligned), `instr`, `replace_chr/str`,
+  `clean_whitespace`, `normalize_string`
+- **`watermark_manager`** — `WatermarkManager(engine)` reads/writes
+  `ETL_WATERMARKS` control table; auto-creates DDL on first use; all types
+  serialised to `VARCHAR(500)`; convenience functions `read_watermark` /
+  `write_watermark`
+- **`file_lifecycle`** — `FileValidator` (pre-read: exists, non-empty, min rows,
+  expected column count); `RejectWriter` (CSV context manager, dict or list rows,
+  DataFrame batch write, `reject_count` property); `archive_file`/`archive_glob`
+  (dated `YYYY-MM-DD` subdirs); `reject_path_for`; `lifecycle_from_config`
+
+##### IO abstraction layer (`io/`)
+
+- **`base.py`** — `BaseReader` (`read()` / `read_chunks()`) and `BaseWriter`
+  (`write() → int`) abstract classes; `from_config()` class method
+- **`readers/db_reader.py`** — `DatabaseReader`: full-table, custom SQL, chunked
+  (100k default); `build_incremental_query(watermark_val)` for watermark-filtered
+  reads; lazy engine init; exposes `get_engine()` for pattern reuse
+- **`readers/flat_file_reader.py`** — `FlatFileReader`: glob multi-file, delimiter,
+  encoding, has_header, skip_rows, null_values, dtype, column_map, chunked; file
+  lifecycle validation integration
+- **`readers/fixed_width_reader.py`** — `FixedWidthReader`: column `start`+`length`
+  specs (1-based), mainframe encoding (default `latin-1`), per-column `strip` and
+  `dtype` override; pure line-by-line reader (no pandas FWF dependency)
+- **`writers/db_writer.py`** — `DatabaseWriter`: `append` (pandas to_sql),
+  `replace` (drop + recreate), `upsert` (dialect-agnostic DELETE+INSERT batch
+  loop); `truncate()` for explicit truncate calls; `get_engine()` accessor
+- **`writers/flat_file_writer.py`** — `FlatFileWriter`: delimiter, encoding,
+  header, quoting (minimal/all/nonnumeric/none), compression, date_format, decimal
+  separator, `{date}` path substitution, overwrite/append mode; auto-creates dirs
+- **`get_reader(source_config)`** / **`get_writer(target_config)`** factory
+  functions — type string → class dispatch; alias map
+  (e.g. `csv` → `FlatFileReader`)
+
+##### Patterns (`patterns/`)
+
+- **`base.py`** — `BasePattern`: IO wiring from config, metadata injection,
+  timing, `pre_load()` / `transform()` / `post_load()` hooks; result dict
+  `{pattern, mapping_name, rows_read, rows_written, elapsed_s, status, error?}`
+- **`pass_through.py`** — fully implemented: optional column selection and rename
+- **`truncate_and_load.py`** — fully implemented: full-refresh with optional
+  `column_map` YAML expression block via `apply_column_map`
+- **8 pattern stubs** (`incremental_append`, `upsert`, `scd2`, `lookup_enrich`,
+  `aggregation_load`, `filter_and_route`, `union_consolidate`,
+  `expression_transform`) — raise `PatternNotFoundError` with build-schedule note
+
+##### Tests (`tests/`)
+
+- **`test_utils.py`** (52 tests) — `TestNullSafe` (15), `TestTypeCast` (11),
+  `TestStringClean` (12), `TestEtlMetadata` (9)
+- **`test_expression.py`** (20 tests) — `TestEvaluate` (16), `TestApplyColumnMap` (4)
+- **`test_config_loader.py`** (12 tests) — `TestValidate` (6),
+  `TestRegisteredPatterns` (1), `TestLoad` (3)
 
 ---
 
