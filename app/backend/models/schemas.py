@@ -182,6 +182,10 @@ class ComplexityReport(BaseModel):
     data_volume_est: Optional[str]
     special_flags:   List[str]
     rationale:       str
+    # ── Pattern classification (v2.16.0-phase5) ──────────────────────────
+    suggested_pattern:    Optional[str] = None  # e.g. "aggregation_load"
+    pattern_confidence:   Optional[str] = None  # HIGH | MEDIUM | LOW | NONE
+    pattern_rationale:    Optional[str] = None  # brief explanation of why this pattern was chosen
 
 
 # ─────────────────────────────────────────────

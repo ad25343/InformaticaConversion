@@ -620,6 +620,7 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
             session_parse_report=session_parse_report,
             verification_flags=v_flags_raw or None,
             manifest_overrides=manifest_overrides,
+            complexity_report=complexity,
         )
         file_list = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())
@@ -1101,6 +1102,7 @@ async def resume_after_security_fix_request(
             session_parse_report=session_parse_report,
             verification_flags=v_flags_fix or None,
             manifest_overrides=manifest_overrides,
+            complexity_report=complexity,
         )
         file_list   = list(conversion_output.files.keys())
         total_lines = sum(c.count("\n") for c in conversion_output.files.values())

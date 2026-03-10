@@ -8,12 +8,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### In progress — v2.16.0 — Config-Driven Pattern Library (Phase 5)
+---
 
-Phases 1–4 complete (see below). Remaining:
+## [2.16.0] — 2026-03-10 — Config-Driven Pattern Library Complete (v2.16.0-phase5)
 
-- **Phase 5** — Classifier extension + Conversion Agent integration;
-  `etl_patterns` bundled in generated project output
+All 10 etl_patterns patterns implemented. Phases 1–4 laid the pattern library
+foundation; Phase 5 closes the loop by adding automatic pattern classification
+in the classifier and emitting ready-to-run config skeletons from the conversion
+agent.
+
+### Added
+
+**`app/backend/agents/classifier_agent.py`** — `_classify_pattern()` decision tree
+10-rule priority-ordered pattern classifier that fires immediately after the
+existing complexity tier logic:
+
+1. `filter_and_route`   — Router transformation detected
+2. `union_consolidate`  — ≥3 Source Qualifiers or Union transformation
+3. `aggregation_load`   — Aggregator transformation detected
+4. `scd2`               — Target name contains SCD/HISTORY/HIST/ARCHIVE
+5. `upsert`             — Target name contains DIM_/UPSERT/MERGE, or single Joiner
+6. `lookup_enrich`      — 1+ Lookup transformations without Aggregator/Router
+7. `incremental_append` — Target name contains APPEND/INC/DELTA + Expression present
+8. `expression_transform` — Expression + ≤4 trans + single source/target
+9. `truncate_and_load`  — Single source/target + ≤6 transformations
+10. `pass_through`       — ≤2 transformations
+
+Produces `suggested_pattern` (string|None), `pattern_confidence`
+(HIGH|MEDIUM|LOW|NONE), and `pattern_rationale` (brief explanation).
+Unsupported transformations (Java/ExternalProc) short-circuit to NONE.
+
+**`app/backend/agents/classifier_agent.py`** — `_build_pattern_yaml_skeleton()`
+Generates a pre-filled YAML config skeleton for the suggested pattern using
+source/target names parsed from the graph. All fields requiring human review
+are annotated with `# TODO`. Union_consolidate skeletons include a guidance
+comment about the multi-source `sources:` block.
+
+**`app/backend/agents/conversion_agent.py`** — etl_patterns config injection
+After the standard code generation completes, when `complexity_report` has a
+non-NONE pattern confidence:
+- Emits `config/{mapping_slug}.yaml` (the pattern YAML skeleton).
+- Emits `run.py` (a ready-to-run entry-point script using `etl_patterns.config_loader`).
+- Appends an informational note with install instructions.
+- New optional parameter `complexity_report: Optional[ComplexityReport] = None`
+  (backward-compatible; existing callers unaffected).
+- New helper `_build_etl_patterns_run_script()` generates the `run.py` template.
+
+**`app/backend/models/schemas.py`** — `ComplexityReport` extended
+Three new optional fields (default None — fully backward-compatible with stored
+`state_json` blobs from prior versions):
+- `suggested_pattern: Optional[str]`
+- `pattern_confidence: Optional[str]`
+- `pattern_rationale: Optional[str]`
+
+**`app/backend/orchestrator.py`** — `complexity_report` wired to `convert()`
+Both call sites (initial conversion + security-fix regeneration path) now pass
+`complexity_report=complexity` so the config skeleton is emitted on both paths.
+
+### Summary — full v2.16.0 scope
+
+| Phase | Patterns | Tests |
+|-------|----------|-------|
+| 1 | truncate_and_load, pass_through + base infra | 84 |
+| 2 | incremental_append, expression_transform | 127 |
+| 3 | upsert, scd2, lookup_enrich | 160 |
+| 4 | aggregation_load, filter_and_route, union_consolidate | 199 |
+| 5 | Classifier decision tree + conversion agent integration | 199 |
+
+Total: **199 tests, 100% passing**.  All 10 patterns registered in `config_loader`.
 
 ---
 
