@@ -138,18 +138,14 @@ class WatermarkManager:
         serialised = _serialise(value)
         now        = datetime.now(tz=timezone.utc)
 
-        upsert_sql = _build_upsert(self._table)
+        delete_sql, insert_sql = _build_upsert(self._table)
+        params = {"mn": mapping_name, "wc": watermark_col, "val": serialised, "ts": now}
         try:
             with self._engine.begin() as conn:
-                conn.execute(
-                    text(upsert_sql),
-                    {
-                        "mn":  mapping_name,
-                        "wc":  watermark_col,
-                        "val": serialised,
-                        "ts":  now,
-                    },
-                )
+                # Execute DELETE and INSERT as separate statements; SQLAlchemy 2.x
+                # does not allow multiple statements in a single execute() call.
+                conn.execute(text(delete_sql), {"mn": mapping_name, "wc": watermark_col})
+                conn.execute(text(insert_sql), params)
             log.info(
                 "Watermark updated: %s/%s = %r",
                 mapping_name, watermark_col, serialised,
@@ -209,13 +205,18 @@ def _serialise(value: Any) -> str | None:
     return str(value)
 
 
-def _build_upsert(table: str) -> str:
+def _build_upsert(table: str) -> tuple[str, str]:
     """
-    Build a dialect-agnostic upsert.  We use a DELETE + INSERT pattern which
-    works on SQLite, PostgreSQL, MySQL, and SQL Server without dialect flags.
+    Build a dialect-agnostic upsert as two separate SQL statements.
+
+    Returns (delete_sql, insert_sql).  Callers must execute them separately
+    because SQLAlchemy 2.x does not allow multiple statements in one execute().
+    The DELETE + INSERT pattern works on SQLite, PostgreSQL, MySQL, and SQL
+    Server without any dialect-specific MERGE / ON CONFLICT syntax.
     """
-    return (
-        f"DELETE FROM {table} WHERE mapping_name = :mn AND watermark_col = :wc; "
+    delete_sql = f"DELETE FROM {table} WHERE mapping_name = :mn AND watermark_col = :wc"
+    insert_sql = (
         f"INSERT INTO {table} (mapping_name, watermark_col, watermark_val, updated_at) "
         f"VALUES (:mn, :wc, :val, :ts)"
     )
+    return delete_sql, insert_sql

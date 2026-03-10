@@ -125,8 +125,14 @@ def evaluate(expression: Any, row: dict[str, Any]) -> Any:
         args_str  = fm.group(2)
         return _call_function(func_name, args_str, row)
 
-    # Arithmetic: contains operators after column substitution
-    if any(op in expr for op in ("+", "-", "*", "/", "%")):
+    # Arithmetic and comparison operators — route to safe eval
+    _INFIX_OPS = ("+", "-", "*", "/", "%", "==", "!=", ">=", "<=")
+    _WORD_OPS  = (" and ", " or ", " not ", " > ", " < ")
+    if (
+        any(op in expr for op in _INFIX_OPS)
+        or any(op in expr for op in _WORD_OPS)
+        or expr.startswith("not ")
+    ):
         return _eval_arithmetic(expr, row)
 
     # Bare string (no {placeholders}) — literal value
@@ -231,13 +237,21 @@ def _call_function(func_name: str, args_str: str, row: dict) -> Any:
 
 
 def _eval_arithmetic(expr: str, row: dict) -> Any:
-    """Evaluate a simple arithmetic expression with column substitutions."""
-    # Substitute {COL} → numeric value
+    """
+    Evaluate arithmetic and comparison expressions with column substitutions.
+
+    String column values are emitted as ``repr(val)`` so that comparison
+    operators like ``==``, ``!=``, ``>`` work correctly on string columns
+    (e.g. ``{STATUS} == 'A'`` → ``'I' == 'A'`` → False).
+    Numeric values use ``str(val)`` to avoid unnecessary quoting.
+    """
     def _sub(m: re.Match) -> str:
         val = _resolve_col(m.group(1), row)
         if _is_null(val):
             return "None"
-        return str(val)
+        if isinstance(val, (int, float, complex, bool)):
+            return str(val)
+        return repr(val)
 
     substituted = _COL_REF.sub(_sub, expr)
     try:

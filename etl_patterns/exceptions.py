@@ -30,6 +30,10 @@ class ExpressionError(ETLPatternError):
     """Raised when a column-map expression cannot be evaluated."""
 
 
+class PatternError(ETLPatternError):
+    """Raised for pattern-level runtime errors (e.g. misconfigured pattern execution)."""
+
+
 class WatermarkError(ETLPatternError):
     """Raised when watermark read or write fails."""
 

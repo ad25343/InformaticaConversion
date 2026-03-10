@@ -682,20 +682,27 @@ component at runtime.
   no `eval` on arbitrary code — uses `ast.Constant` + `ast.literal_eval`
 - **Pattern base class** (`patterns/base.py`): IO wiring, ETL metadata injection,
   timing, structured result dict `{rows_read, rows_written, elapsed_s, status}`
-- **Two fully implemented patterns** (Phase 1):
+- **Four fully implemented patterns** (Phases 1–2):
   - `pass_through` — 1:1 extract with optional column selection/rename
   - `truncate_and_load` — full-refresh with optional `column_map` YAML expression block
-- **Eight pattern stubs** (Phases 2–4): `incremental_append`, `upsert`, `scd2`,
-  `lookup_enrich`, `aggregation_load`, `filter_and_route`, `union_consolidate`,
-  `expression_transform`
-- **84 unit tests** covering all shared utilities, expression evaluator, and
-  config loader; `pytest` wired into `pyproject.toml`
+  - `incremental_append` — watermark-driven append (DB + flat-file); auto-advances
+    watermark to `MAX(col)` after each successful run
+  - `expression_transform` — full `column_map` with row filter, dedup, and sort
+- **Six pattern stubs** (Phases 3–4): `upsert`, `scd2`, `lookup_enrich`,
+  `aggregation_load`, `filter_and_route`, `union_consolidate`
+- **127 unit + integration tests** covering all shared utilities, expression
+  evaluator, config loader, and Phase 1–2 patterns; `pytest` wired into
+  `pyproject.toml`
+- **Expression DSL enhancement** — comparison and boolean operators (`==`, `!=`,
+  `>=`, `<=`, `>`, `<`, `and`, `or`, `not`) now supported alongside arithmetic
+- **Watermark manager fix** — DELETE + INSERT split into two sequential executes
+  for SQLAlchemy 2.x compatibility
 
-#### Phase 2 — Core Patterns (planned)
+#### Phase 2 — Core Patterns (complete — 2026-03-10)
 
-Implement `pass_through`, `truncate_and_load`, `incremental_append`,
-`expression_transform` patterns fully; end-to-end integration test per pattern
-using FirstBank Digital sample data.
+Implemented `incremental_append` and `expression_transform` patterns fully, plus
+48 integration tests. Also fixed expression DSL for comparison operators and
+corrected watermark manager for SQLAlchemy 2.x multi-statement limitation.
 
 #### Phase 3 — Complex Patterns (planned)
 
