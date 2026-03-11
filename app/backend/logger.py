@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import traceback as _tb
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -291,8 +292,8 @@ class JobLogger:
         }
         try:
             self._fh.write(json.dumps(entry) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            sys.stderr.write(f"[logger] state_change write failed: {exc}\n")
         self._current_state = to_status
         _update_registry(self.job_id, {"status": to_status, "steps_completed": step})
 
@@ -315,8 +316,8 @@ class JobLogger:
         }
         try:
             self._fh.write(json.dumps(footer) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            sys.stderr.write(f"[logger] finalize write failed: {exc}\n")
 
         _update_registry(self.job_id, {
             "status":          final_status,
@@ -396,8 +397,8 @@ class JobLogger:
         # Write to per-job file
         try:
             self._fh.write(json.dumps(entry) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover
+            sys.stderr.write(f"[logger] _write failed ({level}): {exc}\n")
 
         # Route through root logger (console + app.log)
         extra: dict = {"job_id": self.job_id}

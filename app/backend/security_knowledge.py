@@ -52,8 +52,8 @@ def _load_default_rules_from_yaml() -> dict:
             data = yaml.safe_load(fh) or {}
         if data.get("rules"):
             return data
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not load security_rules.yaml (%s: %s) — using sentinel fallback.", type(exc).__name__, exc)
     # Absolute last resort if the file truly doesn't exist yet — single sentinel rule
     return {
         "rules": [{
@@ -314,7 +314,8 @@ def promote_patterns_to_rules(threshold: int = 3) -> int:
     try:
         with RULES_PATH.open("r", encoding="utf-8") as fh:
             rules_data = yaml.safe_load(fh) or {"rules": []}
-    except Exception:
+    except Exception as exc:
+        log.debug("Could not read rules file for dedup check (%s: %s) — treating as empty.", type(exc).__name__, exc)
         rules_data = {"rules": []}
 
     existing_rules = rules_data.get("rules", [])

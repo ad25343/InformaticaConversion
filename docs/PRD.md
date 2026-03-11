@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.16.0 (Phase 1) / App 2.15.1
+**Version:** 2.16.0 (complete) / App 2.16.0
 **Author:** ad25343
 **Last Updated:** 2026-03-10
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
@@ -625,7 +625,7 @@ Six targeted fixes across the app backend. No pipeline behaviour changes.
   `TRUSTED_PROXY_COUNT`, `RATE_LIMIT_JOBS`, `RATE_LIMIT_LOGIN`,
   `VERIFY_TIMEOUT_SECS`, `AGENT_TIMEOUT_SECS`, `EXTENDED_OUTPUT_BETA`
 
-### v2.16.0 — Config-Driven Pattern Library (in progress — Phase 1 complete)
+### v2.16.0 — Config-Driven Pattern Library (✅ complete — 2026-03-10)
 
 A fundamental shift in conversion output quality and code footprint. Instead of
 generating bespoke code for every mapping, the conversion agent identifies which
@@ -635,105 +635,110 @@ component at runtime.
 
 **Core design:** see `docs/DESIGN_PATTERN_LIBRARY.md` for the full specification.
 
-**Status:** Phase 1 complete (commit `b8f8d77`) — 38 files, 3,606 lines,
-84/84 unit tests green. Package: `etl_patterns/` at repo root (pip-installable).
+**Status:** All 5 phases complete — 199/199 tests passing.
+Package: `etl_patterns/` at repo root (pip-installable via `pip install -e etl_patterns/`).
 
-#### Phase 1 — Foundation (✅ complete, commit b8f8d77)
+#### Phase 1 — Foundation (✅ complete, commit `b8f8d77`)
 
-- **`etl_patterns/` pip-installable package** at repo root (`pyproject.toml`,
-  `setuptools.build_meta`)
+84 tests. Full infrastructure layer — no pattern logic, needed by everything:
+
+- **`etl_patterns/` pip-installable package** (`pyproject.toml`, `setuptools.build_meta`)
 - **Exception hierarchy** (`exceptions.py`): `ETLPatternError` → `ConfigError`,
   `PatternNotFoundError`, `ReaderError`, `WriterError`, `ExpressionError`,
-  `WatermarkError`, `ValidationError`
-- **Shared utility library** (`utils/`):
-  - `etl_metadata` — ETL audit column injection (`ETL_LOAD_DATE`, `ETL_BATCH_ID`,
-    `ETL_SOURCE_SYSTEM`, `ETL_SOURCE_FILE`, `ETL_RUN_ID`)
-  - `null_safe` — `null_safe`, `coalesce`, `nvl`, `nvl2`, `is_null`; mirrors
-    Informatica `ISNULL` / `IIF(ISNULL(...), ...)` idiom
-  - `type_cast` — `type_cast(value, target_type)` for all Informatica data types:
-    string, integer, decimal (precision/scale), float, date, datetime, boolean;
-    handles `$1,234` financial formatting, ISO and common date formats
-  - `string_clean` — `to_upper/lower`, `trim/ltrim/rtrim`, `lpad/rpad`,
-    `substr`, `instr`, `replace_chr/str`, `clean_whitespace`, `normalize_string`
-  - `watermark_manager` — `WatermarkManager` reads/writes `ETL_WATERMARKS`
-    control table; auto-creates on first use; serialises all types to `VARCHAR(500)`
-  - `file_lifecycle` — `FileValidator` (pre-read checks), `RejectWriter` (CSV
-    reject file context manager), `archive_file/glob` (dated archive dirs),
-    `lifecycle_from_config` (YAML block → ready objects)
-- **IO abstraction layer** (`io/`):
-  - `BaseReader` / `BaseWriter` abstract classes with `read()` / `read_chunks()` /
-    `write()` interface
-  - `DatabaseReader` — SQLAlchemy full-table / custom SQL; `build_incremental_query()`
-    for watermark-based incremental reads
-  - `FlatFileReader` — glob multi-file, chunked 100k rows, column rename/dtype,
-    null-value override
-  - `FixedWidthReader` — mainframe FWF by column `start` + `length` (1-based,
-    Informatica-aligned), per-column dtype, configurable encoding
-  - `DatabaseWriter` — `append`, `replace` (drop + recreate), and dialect-agnostic
-    `upsert` (DELETE matching PKs + INSERT) modes
-  - `FlatFileWriter` — delimited output with `{date}` path substitution,
-    quoting, compression, column selection/ordering, append mode
-  - `get_reader()` / `get_writer()` factory functions — type-dispatch from YAML config
-- **Config loader** (`config_loader.py`): `run("path.yaml")` one-call entry point;
-  YAML load, schema validation, lazy pattern dispatch; `registered_patterns()` list
+  `WatermarkError`, `ValidationError`, `PatternError`
+- **Shared utilities** (`utils/`): `etl_metadata`, `null_safe`, `type_cast`,
+  `string_clean`, `watermark_manager`, `file_lifecycle`
+- **IO abstraction layer** (`io/`): `DatabaseReader`, `FlatFileReader`,
+  `FixedWidthReader`, `DatabaseWriter`, `FlatFileWriter`, factory functions
+- **Config loader** (`config_loader.py`): one-call `run("path.yaml")` entry point;
+  lazy pattern dispatch; all 10 patterns registered
 - **Expression evaluator** (`expression.py`): safe column DSL — `{COL}` references,
-  `null_safe`, `coalesce`, `iif`, `type_cast`, all string functions, arithmetic
-  operators; `apply_column_map(column_map, row)` for full mapping column lists;
-  no `eval` on arbitrary code — uses `ast.Constant` + `ast.literal_eval`
-- **Pattern base class** (`patterns/base.py`): IO wiring, ETL metadata injection,
-  timing, structured result dict `{rows_read, rows_written, elapsed_s, status}`
-- **Seven fully implemented patterns** (Phases 1–3):
-  - `pass_through` — 1:1 extract with optional column selection/rename
-  - `truncate_and_load` — full-refresh with optional `column_map` YAML expression block
-  - `incremental_append` — watermark-driven append (DB + flat-file); auto-advances
-    watermark to `MAX(col)` after each successful run
-  - `expression_transform` — full `column_map` with row filter, dedup, and sort
-  - `upsert` — SCD Type 1 merge on business key; existing rows overwritten, new inserted
-  - `scd2` — SCD Type 2 full-history merge with effective dates and `is_current` flag
-  - `lookup_enrich` — joins N reference datasets (DB or flat-file) into main stream
-- **Three pattern stubs** (Phase 4): `aggregation_load`, `filter_and_route`,
-  `union_consolidate`
-- **160 unit + integration tests** (100% passing)
-- **Expression DSL enhancement** — comparison and boolean operators (`==`, `!=`,
-  `>=`, `<=`, `>`, `<`, `and`, `or`, `not`) now supported alongside arithmetic
-- **DB writer fix** — `_write_upsert` splits DELETE and INSERT into separate
-  transactions; numpy scalar coercion added for reliable SQLAlchemy binding
+  named functions, arithmetic, comparison and boolean operators; no `eval`
+- **Pattern base class** (`patterns/base.py`): IO wiring, metadata injection,
+  timing, structured result dict
+- **Two fully implemented patterns**: `pass_through`, `truncate_and_load`
 
-#### Phase 2 — Core Patterns (complete — 2026-03-10)
+#### Phase 2 — High-frequency Patterns (✅ complete, commit `a1a64d7`)
 
-Implemented `incremental_append` and `expression_transform` patterns fully, plus
-48 integration tests. Also fixed expression DSL for comparison operators and
-corrected watermark manager for SQLAlchemy 2.x multi-statement limitation.
+127 tests. 43 new tests added.
 
-#### Phase 3 — Complex Patterns (complete — 2026-03-10)
+- **`incremental_append`** — watermark-driven append (DB + flat-file); patches
+  `DatabaseReader.read()` with a watermark-filtered SQL closure; auto-advances
+  watermark to `MAX(col)` after each successful run
+- **`expression_transform`** — full column_map DSL with row-level `filter_expr`,
+  `dedup_keys`, and `sort_by`
+- **Expression DSL fix** — comparison operators (`==`, `!=`, `>=`, `<=`, `>`, `<`,
+  `and`, `or`, `not`) now supported; `repr()` quoting for string values
+- **WatermarkManager fix** — split DELETE + INSERT into two separate `conn.execute()`
+  calls to comply with SQLAlchemy 2.x single-statement restriction
 
-Implemented `upsert` (SCD1), `scd2` (SCD2 full-history merge), and
-`lookup_enrich` (N-way reference join); 33 integration tests. Fixed
-`DatabaseWriter._write_upsert` for SQLAlchemy 2.x transaction isolation.
+#### Phase 3 — Complex Patterns (✅ complete, commit `5fb0ef5`)
 
-#### Phase 4 — Multi-stream Patterns (planned)
+160 tests. 33 new tests added.
 
-Implement `aggregation_load`, `filter_and_route`, `union_consolidate`.
+- **`upsert`** — SCD Type 1 merge on business key; validates `unique_key` config;
+  existing rows overwritten, new rows inserted
+- **`scd2`** — SCD Type 2 full-history merge with `effective_from`, `effective_to`,
+  `is_current`; new rows inserted, changed rows expired + re-inserted, unchanged skipped;
+  first-run safe (handles missing target table)
+- **`lookup_enrich`** — N-way reference join (DB or flat-file); module-level cache;
+  `join_keys` dict, optional `prefix`, `left`/`inner` join types
+- **DB writer fix** — `_write_upsert` split into two transactions (DELETE then INSERT)
+  to prevent SQLAlchemy 2.x silent transaction interference; numpy scalar coercion added
 
-#### Phase 5 — Classifier + Conversion Agent Integration (planned)
+#### Phase 4 — Multi-stream Patterns (✅ complete, commit `4cd4756`)
 
-- Extend `classifier_agent.py` with the 10-pattern decision tree
-- Gate 1 surfaces confidence classification (HIGH / MEDIUM / LOW / NONE)
-- Conversion agent emits `config/<mapping>.yaml` + static `run.py` when
-  confidence ≥ LOW; falls back to bespoke code generation for NONE
-- `etl_patterns` bundled in generated project output
+199 tests. 39 new tests added.
+
+- **`aggregation_load`** — GROUP BY + named aggregations (sum, count, avg→mean, min,
+  max, first, last, nunique, std, var, median); optional `having` DSL filter;
+  optional `sort_by`
+- **`filter_and_route`** — Router equivalent; single source → N targets each with a
+  `filter_expr`; optional per-target `column_map`; catch-all `"true"` target supported;
+  overrides `BasePattern._write()`
+- **`union_consolidate`** — Union equivalent; N sources each with optional per-source
+  `column_map` for schema normalisation; `dedup_keys`; `sort_by`; overrides `execute()`
+- **FlatFileReader fix** — ETL-style `column_map` (list of expression dicts) is stripped
+  from reader config before IO wiring to prevent conflict with reader's rename-style map
+
+#### Phase 5 — Classifier + Conversion Agent Integration (✅ complete, commit `3b43411`)
+
+- **10-pattern decision tree** in `classifier_agent._classify_pattern()` — priority-ordered
+  rules matching transformation topology to pattern name; returns `suggested_pattern`,
+  `pattern_confidence` (HIGH / MEDIUM / LOW / NONE), and `pattern_rationale`
+- **`_build_pattern_yaml_skeleton()`** — generates a pre-filled starter YAML config
+  from the parsed graph (source/target names, pattern-specific blocks, all ambiguous
+  fields annotated `# TODO`)
+- **Conversion agent integration** — after code generation, when confidence ≠ NONE,
+  emits `config/<mapping>.yaml` and `run.py` into the output file set; non-blocking
+  (falls back gracefully on any error)
+- **`ComplexityReport` schema extended** — three new optional fields:
+  `suggested_pattern`, `pattern_confidence`, `pattern_rationale` (default `None`;
+  fully backward-compatible with stored state blobs from prior versions)
+- **Orchestrator updated** — both convert call sites (initial run + security-fix
+  regeneration path) pass `complexity_report` to `convert()`
+
+#### Summary
+
+| Phase | Patterns added | Cumulative tests |
+|-------|---------------|-----------------|
+| 1 | pass_through, truncate_and_load + full infra | 84 |
+| 2 | incremental_append, expression_transform | 127 |
+| 3 | upsert, scd2, lookup_enrich | 160 |
+| 4 | aggregation_load, filter_and_route, union_consolidate | 199 |
+| 5 | Classifier decision tree + conversion agent integration | 199 |
+
+All 10 patterns registered in `config_loader`. 199/199 tests passing.
 
 #### Design notes
 
-- **IO abstraction**: source/target blocks support database connections,
-  delimited flat files, fixed-width flat files, XML, JSON, and Excel — any
-  combination (file→DB, DB→file, file→file all valid)
-- **Confidence classification**: HIGH (auto-config), MEDIUM (config + flagged
-  elements), LOW (pattern suggested, human confirms), NONE (falls back to current
-  bespoke code generation) — surfaces at existing Gate 1, no new gate required
-- **Deterministic decision tree**: pattern assignment driven by transformation
-  topology (Aggregator present → Aggregation Load; self-referential Lookup →
-  SCD2; etc.) — not naming conventions, not AI heuristics
+- **IO abstraction**: source/target blocks support database (SQLAlchemy), delimited
+  flat files, and fixed-width flat files — any combination is valid
+- **Confidence classification**: HIGH (auto-config), MEDIUM (config + flagged elements),
+  LOW (pattern suggested, human confirms), NONE (falls back to bespoke LLM generation)
+  — surfaces in the existing pipeline output, no new gate required
+- **Deterministic decision tree**: pattern assignment driven by transformation topology
+  — not naming conventions, not AI heuristics
 - **Future roadmap (out of scope for v2.16.0)**: message queues (Kafka, SQS),
   REST API sources, FTP/SFTP, cloud storage (S3/ADLS/GCS), streaming targets
 

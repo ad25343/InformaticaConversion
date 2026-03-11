@@ -1,6 +1,6 @@
 # Design: Config-Driven Pattern Library for Informatica Conversion
 
-**Status:** Design / Pre-implementation
+**Status:** ✅ Complete — all 5 phases shipped (v2.16.0)
 **Version target:** v2.16.0
 **Last updated:** 2026-03-10
 **Authors:** Engineering
@@ -988,41 +988,42 @@ a better path for the majority of mappings.
 
 ## 11. Build Sequence
 
-### Phase 1 — Shared utilities (no pattern logic, needed by everything)
+### Phase 1 — Shared utilities (✅ complete, commit `b8f8d77`, 84 tests)
 
-- `etl_metadata` (dbt macro + PySpark function + Pandas function)
-- `null_safe`, `type_cast`, `string_clean`
-- `config_loader` (reads YAML, validates, dispatches)
+- `etl_metadata`, `null_safe`, `type_cast`, `string_clean`
+- `config_loader` (reads YAML, validates, dispatches to all 10 patterns)
 - `watermark_manager`
 - `file_lifecycle` (archive, reject writer, validator)
-- IO readers/writers for: database, delimited flat file, fixed-width flat file
+- IO readers/writers: database, delimited flat file, fixed-width flat file
+- Patterns: `pass_through`, `truncate_and_load`
 
-### Phase 2 — High-frequency patterns (covers ~70% of a typical estate)
+### Phase 2 — High-frequency patterns (✅ complete, commit `a1a64d7`, 127 tests)
 
-- `truncate_and_load`
-- `incremental_append`
-- `pass_through`
-- `expression_transform`
+- `incremental_append` — watermark-driven delta append
+- `expression_transform` — expression-based column mapping with filter/dedup/sort
+- Expression DSL fix: comparison operators, string quoting
+- WatermarkManager fix: SQLAlchemy 2.x single-statement compliance
 
-### Phase 3 — Medium-complexity patterns
+### Phase 3 — Medium-complexity patterns (✅ complete, commit `5fb0ef5`, 160 tests)
 
-- `scd2`
-- `upsert`
-- `lookup_enrich`
+- `scd2` — SCD Type 2 full-history merge
+- `upsert` — SCD Type 1 business-key overwrite
+- `lookup_enrich` — N-way reference join with caching
+- DB writer fix: two-transaction upsert for SQLAlchemy 2.x
 
-### Phase 4 — Remaining patterns
+### Phase 4 — Remaining patterns (✅ complete, commit `4cd4756`, 199 tests)
 
-- `aggregation_load`
-- `filter_and_route`
-- `union_consolidate`
+- `aggregation_load` — GROUP BY + multi-function aggregations + HAVING + sort
+- `filter_and_route` — Router: 1 source → N filtered targets
+- `union_consolidate` — Union: N sources → 1 consolidated target
 
-### Phase 5 — Classifier extension
+### Phase 5 — Classifier extension (✅ complete, commit `3b43411`)
 
-- Extend `classifier_agent.py` to emit pattern name + confidence level +
-  config parameter extraction
-- Extend Gate 1 review to surface confidence and flagged elements
-- Extend conversion agent to call config generator (HIGH/MEDIUM confidence)
-  or existing bespoke generator (LOW/NONE confidence)
+- `_classify_pattern()` 10-rule decision tree in `classifier_agent.py`
+- `_build_pattern_yaml_skeleton()` — pre-filled YAML config from parsed graph
+- Conversion agent emits `config/<slug>.yaml` + `run.py` when confidence ≠ NONE
+- `ComplexityReport` extended with `suggested_pattern`, `pattern_confidence`,
+  `pattern_rationale` (optional, backward-compatible)
 
 ---
 
