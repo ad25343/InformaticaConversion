@@ -3,10 +3,10 @@
   "label": "Apex P&C Insurance \u2014 Underwriting & Claims DWH v1.0",
   "description": "Informatica PowerCenter test estate for Apex Property & Casualty Insurance",
   "creation_date": "10/03/2026 09:00:00",
-  "total_mappings": 54,
+  "total_mappings": 50,
   "mapping_distribution": {
-    "simple": 17,
-    "medium": 26,
+    "simple": 15,
+    "medium": 20,
     "complex": 15
   },
   "mappings": [
@@ -59,10 +59,6 @@
     "m_fct_lapse_analysis.xml",
     "m_fct_channel_performance.xml",
     "m_fct_subrogation.xml",
-    "m_etl_audit_framework.xml",
-    "m_fct_claim_feed_incremental.xml",
-    "m_fct_premium_union_load.xml",
-    "m_stg_raw_quote_passthru.xml",
-    "m_fct_claim_severity_route3.xml"
+    "m_etl_audit_framework.xml"
   ]
 }
