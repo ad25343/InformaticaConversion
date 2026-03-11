@@ -80,3 +80,45 @@ COMPLEX MAPPINGS (15):
 Total: 50 mappings
 Domain: Manufacturing / Supply Chain
 Repository DB: Microsoft SQL Server
+
+
+================================================================================
+GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
+================================================================================
+
+  m_fct_inventory_append
+    Pattern: incremental_append  |  Tier: medium
+    Purpose: Incremental inventory snapshot — watermark on SNAP_DT
+
+  m_fct_shipment_union_load
+    Pattern: union_consolidate  |  Tier: medium
+    Purpose: Union of road + rail + air shipment events
+
+  m_stg_raw_iot_passthru
+    Pattern: pass_through  |  Tier: simple
+    Purpose: Raw IoT sensor staging passthrough — no transformation
+
+  m_fct_order_priority_route3
+    Pattern: filter_and_route  |  Tier: medium
+    Purpose: 3-way order priority routing: STANDARD/RUSH/CRIT/HOLD
+
+
+================================================================================
+GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
+================================================================================
+
+  m_fct_inventory_append
+    Pattern: incremental_append  |  Tier: medium
+    Purpose: Incremental inventory snapshot — watermark on SNAP_DT
+
+  m_fct_shipment_union_load
+    Pattern: union_consolidate  |  Tier: medium
+    Purpose: Union of road + rail + air shipment events
+
+  m_stg_raw_iot_passthru
+    Pattern: pass_through  |  Tier: simple
+    Purpose: Raw IoT sensor staging passthrough — no transformation
+
+  m_fct_order_priority_route3
+    Pattern: filter_and_route  |  Tier: medium
+    Purpose: 3-way order priority routing: STANDARD/RUSH/CRIT/HOLD

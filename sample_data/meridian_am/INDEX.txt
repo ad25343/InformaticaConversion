@@ -195,3 +195,45 @@ Transformation Types: SQ, EXP, FIL, LKP, AGG, JNR, RTR, UNI
 Overall Status:   ✓ COMPLETE & VALIDATED
 
 ================================================================================
+
+
+================================================================================
+GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
+================================================================================
+
+  m_fct_position_incremental
+    Pattern: incremental_append  |  Tier: medium
+    Purpose: Incremental position feed — watermark on TRADE_DATE
+
+  m_fct_order_union_load
+    Pattern: union_consolidate  |  Tier: medium
+    Purpose: Union of equity + fixed-income + derivative orders
+
+  m_stg_raw_tick_passthru
+    Pattern: pass_through  |  Tier: simple
+    Purpose: Raw tick data staging passthrough — no transform
+
+  m_fct_portfolio_risk_route3
+    Pattern: filter_and_route  |  Tier: medium
+    Purpose: 3-way portfolio risk routing: LOW/WATCH/HIGH/BREACH
+
+
+================================================================================
+GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
+================================================================================
+
+  m_fct_position_incremental
+    Pattern: incremental_append  |  Tier: medium
+    Purpose: Incremental position feed — watermark on TRADE_DATE
+
+  m_fct_order_union_load
+    Pattern: union_consolidate  |  Tier: medium
+    Purpose: Union of equity + fixed-income + derivative orders
+
+  m_stg_raw_tick_passthru
+    Pattern: pass_through  |  Tier: simple
+    Purpose: Raw tick data staging passthrough — no transform
+
+  m_fct_portfolio_risk_route3
+    Pattern: filter_and_route  |  Tier: medium
+    Purpose: 3-way portfolio risk routing: LOW/WATCH/HIGH/BREACH

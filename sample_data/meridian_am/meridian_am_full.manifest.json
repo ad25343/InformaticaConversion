@@ -3,10 +3,10 @@
   "label": "Meridian Asset Management \u2014 Investment DWH v1.0",
   "description": "Informatica PowerCenter test estate for Meridian Asset Management investment platform",
   "creation_date": "10/03/2026 09:00:00",
-  "total_mappings": 50,
+  "total_mappings": 54,
   "mapping_distribution": {
-    "simple": 15,
-    "medium": 20,
+    "simple": 17,
+    "medium": 26,
     "complex": 15
   },
   "mappings": [
@@ -59,6 +59,10 @@
     "m_fct_counterparty_risk.xml",
     "m_fct_order_routing.xml",
     "m_fct_portfolio_simulation.xml",
-    "m_etl_control_framework.xml"
+    "m_etl_control_framework.xml",
+    "m_fct_position_incremental.xml",
+    "m_fct_order_union_load.xml",
+    "m_stg_raw_tick_passthru.xml",
+    "m_fct_portfolio_risk_route3.xml"
   ]
 }

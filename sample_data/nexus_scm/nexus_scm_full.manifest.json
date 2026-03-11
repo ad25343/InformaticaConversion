@@ -3,10 +3,10 @@
   "label": "Nexus Manufacturing Corp \u2014 Supply Chain & Inventory DWH v1.0",
   "description": "Informatica PowerCenter test estate for Nexus Manufacturing supply chain platform",
   "creation_date": "10/03/2026 09:00:00",
-  "total_mappings": 50,
+  "total_mappings": 54,
   "mapping_distribution": {
-    "simple": 15,
-    "medium": 20,
+    "simple": 17,
+    "medium": 26,
     "complex": 15
   },
   "mappings": [
@@ -59,6 +59,10 @@
     "m_fct_co2_footprint.xml",
     "m_fct_yield_analysis.xml",
     "m_fct_production_planning.xml",
-    "m_etl_control_framework.xml"
+    "m_etl_control_framework.xml",
+    "m_fct_inventory_append.xml",
+    "m_fct_shipment_union_load.xml",
+    "m_stg_raw_iot_passthru.xml",
+    "m_fct_order_priority_route3.xml"
   ]
 }
