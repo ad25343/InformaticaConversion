@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
+<POWERMART CREATION_DATE="10/03/2026 09:00:00" REPOSITORY_VERSION="112">
+<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Microsoft SQL Server" NAME="MERIDIAN_DWH" VERSION="112">
+<FOLDER DESCRIPTION="Meridian Asset Management — Investment DWH" GROUP="" NAME="Meridian_AM" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
+  <CONFIG DESCRIPTION="" ISDEFAULT="NO" NAME="default_session_config" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
+    <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Commit Type" VALUE="Source"/>
+    <ATTRIBUTE NAME="Rollback Incomplete Target Rows" VALUE="YES"/>
+  </CONFIG>
+  <TASK DESCRIPTION="Session for m_fct_corporate_actions" ISVALID="YES" NAME="s_m_fct_corporate_actions" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_corporate_actions"/>
+    <ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
+    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_corporate_actions.log"/>
+    <ATTRIBUTE NAME="Row Count Commit Interval" VALUE="10000"/>
+  </TASK>
+  <WORKFLOW DESCRIPTION="Workflow for m_fct_corporate_actions" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_corporate_actions" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
+    <TASKINSTANCE DESCRIPTION="" ISOVERRIDABLE="NO" NAME="s_m_fct_corporate_actions" TASKTYPENAME="Session" TASKNAME="s_m_fct_corporate_actions"/>
+  </WORKFLOW>
+</FOLDER>
+</REPOSITORY>
+</POWERMART>

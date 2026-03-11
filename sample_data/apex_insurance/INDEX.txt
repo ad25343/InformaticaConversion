@@ -1,0 +1,150 @@
+================================================================================
+APEX P&C INSURANCE — INFORMATICA POWERCENTRE TEST ESTATE
+INDEX OF ALL MAPPINGS
+================================================================================
+
+GENERATED: 10/03/2026 09:00:00
+REPOSITORY: APEX_INS_DWH (Oracle, PowerCenter v112)
+LOCATION: /sessions/ecstatic-nice-albattani/mnt/InformaticaConversion/sample_data/apex_insurance/
+
+================================================================================
+SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
+================================================================================
+ 1.  m_dim_policyholder_load
+    Policyholder master dimension
+ 2.  m_dim_policy_load
+    Insurance policy dimension
+ 3.  m_dim_agent_load
+    Insurance agent dimension
+ 4.  m_dim_coverage_load
+    Coverage type reference dimension
+ 5.  m_dim_vehicle_load
+    Insured vehicle dimension
+ 6.  m_dim_date_load
+    Date dimension with insurance periods
+ 7.  m_dim_geography_load
+    Geographic territory dimension
+ 8.  m_dim_product_load
+    Insurance product reference
+ 9.  m_dim_channel_load
+    Distribution channel dimension
+10.  m_stg_claim_extract
+    Claim staging from claims system
+11.  m_stg_premium_extract
+    Premium transaction staging
+12.  m_ref_rate_table
+    Underwriting rate table reference
+13.  m_ref_coverage_limits
+    Coverage limit schedule reference
+14.  m_ref_peril_codes
+    Peril cause-of-loss code reference
+15.  m_fct_premium_earned
+    Earned premium daily fact
+
+================================================================================
+MEDIUM MAPPINGS (20) — Lookups, Aggregations, SCD2
+================================================================================
+16.  m_dim_policy_scd2
+    Policy dimension SCD Type 2 tracking
+17.  m_dim_agent_scd2
+    Agent dimension SCD Type 2
+18.  m_dim_policyholder_scd2
+    Policyholder dimension SCD Type 2
+19.  m_fct_claim_payments
+    Claim payment transactions fact
+20.  m_fct_claim_reserves
+    Claim reserve movement fact
+21.  m_fct_premium_written
+    Written premium fact by policy/coverage
+22.  m_fct_underwriting_results
+    Underwriting results by policy
+23.  m_fct_reinsurance_ceded
+    Reinsurance cession fact
+24.  m_fct_salvage_recovery
+    Salvage and subrogation recoveries
+25.  m_agg_loss_ratio
+    Loss ratio aggregation by product/territory
+26.  m_agg_combined_ratio
+    Combined ratio aggregation
+27.  m_fct_policy_renewal
+    Policy renewal and retention fact
+28.  m_fct_cancellations
+    Policy cancellation and return premium
+29.  m_fct_endorsements
+    Mid-term policy endorsements fact
+30.  m_fct_agent_commissions
+    Agent commission calculation
+31.  m_fct_investment_income
+    Insurance investment income allocation
+32.  m_fct_ibnr_reserve
+    IBNR reserve estimation
+33.  m_agg_geographic_exposure
+    Geographic TIV and exposure aggregation
+34.  m_fct_motor_premium
+    Motor premium rating and loadings
+35.  m_bridge_policy_coverage
+    Policy-coverage bridge table
+
+================================================================================
+COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Union
+================================================================================
+36.  m_fct_claims_triage
+    Sources: STG_CLAIM, CLAIM_FRAUD_INDICATORS, COVERAGE_VALIDATION
+    Targets: FCT_AUTO_CLAIMS, FCT_MANUAL_REVIEW_CLAIMS
+37.  m_fct_fraud_detection
+    Sources: STG_CLAIM, HISTORICAL_CLAIM_PATTERNS, WATCHLIST
+    Targets: FCT_FRAUD_SCORES, FCT_SIU_REFERRALS
+38.  m_fct_cat_modeling
+    Sources: FCT_PREMIUM_WRITTEN, CAT_EVENT_PARAMETERS, LOCATION_EXPOSURES
+    Targets: FCT_CAT_LOSS_ESTIMATES
+39.  m_fct_reinsurance_treaty
+    Sources: FCT_PREMIUM_WRITTEN, FCT_CLAIM_PAYMENTS, TREATY_STRUCTURE
+    Targets: FCT_TREATY_CESSIONS
+40.  m_fct_pricing_actuarial
+    Sources: AGG_LOSS_RATIO, TREND_FACTORS, EXPENSE_COMPONENTS
+    Targets: FCT_PRICING_INDICATION
+41.  m_fct_ifrs17_measurement
+    Sources: FCT_PREMIUM_WRITTEN, FCT_CLAIM_RESERVES, IFRS17_DISCOUNT_CURVES
+    Targets: FCT_IFRS17_LIABILITY
+42.  m_fct_solvency_capital
+    Sources: AGG_GEOGRAPHIC_EXPOSURE, MARKET_RISK_POSITIONS, OPERATIONAL_RISK_DATA
+    Targets: FCT_SCR_CALCULATION, FCT_SCR_BREACHES
+43.  m_fct_claims_development
+    Sources: PAID_LOSS_HISTORY, INCURRED_LOSS_HISTORY, CLAIM_COUNT_HISTORY
+    Targets: FCT_DEVELOPMENT_TRIANGLES
+44.  m_fct_rate_adequacy
+    Sources: FCT_PRICING_INDICATION, FILED_RATES, COMPETITOR_RATES
+    Targets: FCT_RATE_ADEQUACY
+45.  m_agg_portfolio_analytics
+    Sources: FCT_PREMIUM_WRITTEN, AGG_LOSS_RATIO, AGG_GEOGRAPHIC_EXPOSURE
+    Targets: FCT_PORTFOLIO_ANALYTICS
+46.  m_fct_regulatory_return
+    Sources: FCT_UNDERWRITING_RESULTS, FCT_INVESTMENT_INCOME, FCT_IFRS17_LIABILITY
+    Targets: FCT_STATUTORY_SCHEDULES, FCT_REGULATORY_BREACHES
+47.  m_fct_lapse_analysis
+    Sources: FCT_POLICY_RENEWAL, DIM_POLICYHOLDER, MACRO_INDICATORS
+    Targets: FCT_LAPSE_ANALYSIS
+48.  m_fct_channel_performance
+    Sources: FCT_PREMIUM_WRITTEN, FCT_AGENT_COMMISSIONS, FCT_CLAIM_PAYMENTS
+    Targets: FCT_CHANNEL_PERFORMANCE
+49.  m_fct_subrogation
+    Sources: FCT_CLAIM_PAYMENTS, THIRD_PARTY_LIABILITY, LEGAL_PROCEEDINGS
+    Targets: FCT_SUBROGATION
+50.  m_etl_audit_framework
+    Sources: ETL_CONTROL_TABLE, SOURCE_COUNTS, TARGET_COUNTS
+    Targets: FCT_ETL_AUDIT_LOG, FCT_DQ_EXCEPTIONS
+
+================================================================================
+STATISTICS
+================================================================================
+
+Total Mappings: 50
+  Simple: 15
+  Medium: 20
+  Complex: 15
+
+Domain: Property & Casualty Insurance
+Repository DB: Oracle
+Overall Status: ✓ COMPLETE & VALIDATED
+
+================================================================================

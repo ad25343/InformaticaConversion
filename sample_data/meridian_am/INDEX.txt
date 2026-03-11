@@ -1,0 +1,197 @@
+================================================================================
+MERIDIAN ASSET MANAGEMENT — INFORMATICA POWERCENTRE TEST ESTATE
+INDEX OF ALL MAPPINGS
+================================================================================
+
+GENERATED: 10/03/2026 09:00:00
+REPOSITORY: MERIDIAN_DWH (SQL Server, PowerCenter v112)
+LOCATION: /sessions/ecstatic-nice-albattani/mnt/InformaticaConversion/sample_data/meridian_am/
+
+================================================================================
+SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
+================================================================================
+ 1.  m_dim_portfolio_load
+    Source: PORTFOLIO → Target: DIM_PORTFOLIO
+    Pattern: SQ → EXP → Target
+    Business: Portfolio master dimension load
+ 2.  m_dim_security_load
+    Source: SECURITY_MASTER → Target: DIM_SECURITY
+    Pattern: SQ → EXP → Target
+    Business: Security reference dimension
+ 3.  m_dim_account_load
+    Source: CLIENT_ACCOUNT → Target: DIM_ACCOUNT
+    Pattern: SQ → EXP → Target
+    Business: Client account dimension
+ 4.  m_dim_fund_load
+    Source: FUND_MASTER → Target: DIM_FUND
+    Pattern: SQ → EXP → Target
+    Business: Fund master dimension
+ 5.  m_dim_currency_load
+    Source: CURRENCY_REF → Target: DIM_CURRENCY
+    Pattern: SQ → EXP → Target
+    Business: Currency reference dimension
+ 6.  m_dim_date_load
+    Source: DATE_DIM_STAGING → Target: DIM_DATE
+    Pattern: SQ → EXP → Target
+    Business: Date dimension with fiscal calendar
+ 7.  m_dim_benchmark_load
+    Source: BENCHMARK_REF → Target: DIM_BENCHMARK
+    Pattern: SQ → EXP → Target
+    Business: Benchmark index dimension
+ 8.  m_dim_asset_class_load
+    Source: ASSET_CLASS_REF → Target: DIM_ASSET_CLASS
+    Pattern: SQ → EXP → Target
+    Business: Asset class reference
+ 9.  m_dim_exchange_load
+    Source: EXCHANGE_REF → Target: DIM_EXCHANGE
+    Pattern: SQ → EXP → Target
+    Business: Exchange/venue reference
+10.  m_dim_manager_load
+    Source: PORTFOLIO_MANAGER → Target: DIM_MANAGER
+    Pattern: SQ → EXP → Target
+    Business: Portfolio manager dimension
+11.  m_stg_trade_extract
+    Source: OMS_TRADES → Target: STG_TRADE
+    Pattern: SQ → FIL → EXP → Target
+    Business: Trade staging extraction from OMS
+12.  m_stg_position_extract
+    Source: CUSTODY_POSITIONS → Target: STG_POSITION
+    Pattern: SQ → FIL → EXP → Target
+    Business: Position staging from custody system
+13.  m_ref_exchange_rates
+    Source: FX_RATE_FEED → Target: REF_EXCHANGE_RATES
+    Pattern: SQ → EXP → Target
+    Business: Daily FX rate reference load
+14.  m_ref_benchmark_returns
+    Source: BENCHMARK_RETURN_FEED → Target: REF_BENCHMARK_RETURNS
+    Pattern: SQ → EXP → Target
+    Business: Benchmark daily return reference
+15.  m_fct_cash_movements
+    Source: CASH_LEDGER → Target: FCT_CASH_MOVEMENTS
+    Pattern: SQ → EXP → Target
+    Business: Cash movement fact table load
+
+================================================================================
+MEDIUM MAPPINGS (20) — Lookups, Aggregations, SCD2
+================================================================================
+16.  m_dim_security_scd2
+    Security dimension SCD Type 2 tracking
+17.  m_dim_portfolio_scd2
+    Portfolio dimension SCD Type 2
+18.  m_dim_account_scd2
+    Account dimension SCD Type 2
+19.  m_fct_daily_positions
+    Daily position fact with 4 dimension lookups
+20.  m_fct_trade_settlements
+    Trade settlement fact load
+21.  m_fct_dividend_income
+    Dividend income fact
+22.  m_fct_coupon_income
+    Fixed income coupon accrual
+23.  m_fct_capital_gains
+    Realized capital gains on sales
+24.  m_fct_realized_pnl
+    Realized P&L calculation
+25.  m_agg_portfolio_nav
+    Portfolio NAV aggregation
+26.  m_agg_fund_returns
+    Fund daily/MTD/YTD return aggregation
+27.  m_fct_corporate_actions
+    Corporate action event processing
+28.  m_fct_management_fees
+    Management fee accrual
+29.  m_fct_performance_fees
+    Performance fee high watermark calc
+30.  m_fct_currency_hedging
+    FX hedging P&L fact
+31.  m_agg_asset_class_exposure
+    Asset class exposure aggregation
+32.  m_fct_compliance_check
+    Investment guideline compliance
+33.  m_fct_margin_calls
+    Derivatives margin call processing
+34.  m_fct_securities_lending
+    Securities lending income accrual
+35.  m_bridge_portfolio_security
+    Portfolio-security bridge (multi-share classes)
+
+================================================================================
+COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Union
+================================================================================
+36.  m_fct_attribution_analysis
+    Sources: FCT_DAILY_POSITIONS, REF_BENCHMARK_RETURNS, AGG_ASSET_CLASS_EXPOSURE
+    Targets: FCT_ATTRIBUTION_EFFECTS, FCT_ATTRIBUTION_SUMMARY
+    Business: Performance attribution (Brinson model)
+37.  m_fct_risk_decomposition
+    Sources: FCT_DAILY_POSITIONS, RISK_FACTOR_RETURNS, FACTOR_LOADINGS
+    Targets: FCT_FACTOR_RISK
+    Business: Portfolio risk factor decomposition
+38.  m_fct_stress_testing
+    Sources: FCT_DAILY_POSITIONS, STRESS_SCENARIOS, SHOCK_PARAMETERS
+    Targets: FCT_STRESS_PNL, FCT_STRESS_BREACHES
+    Business: Scenario stress-test P&L
+39.  m_fct_benchmark_comparison
+    Sources: AGG_FUND_RETURNS, REF_BENCHMARK_RETURNS, AGG_ASSET_CLASS_EXPOSURE
+    Targets: FCT_BENCHMARK_COMPARISON
+    Business: Portfolio vs benchmark comparison
+40.  m_fct_regulatory_reporting
+    Sources: FCT_DAILY_POSITIONS, FCT_TRADE_SETTLEMENTS, FCT_LEVERAGE_CALC
+    Targets: FCT_REGULATORY_POSITIONS, FCT_REGULATORY_BREACHES
+    Business: AIFMD / MiFID II regulatory reporting
+41.  m_fct_derivatives_pricing
+    Sources: DERIVATIVE_POSITIONS, MARKET_RATES, YIELD_CURVES
+    Targets: FCT_DERIVATIVES_MTM
+    Business: OTC derivatives mark-to-market
+42.  m_fct_liquidity_analysis
+    Sources: FCT_DAILY_POSITIONS, SECURITY_ADTV, REDEMPTION_PROFILES
+    Targets: FCT_LIQUIDITY_ANALYSIS
+    Business: Portfolio liquidity tiering and concentration
+43.  m_fct_esg_scoring
+    Sources: FCT_DAILY_POSITIONS, ESG_SCORES_FEED, CONTROVERSY_FLAGS
+    Targets: FCT_ESG_SCORES
+    Business: ESG composite score aggregation
+44.  m_fct_rebalancing_signals
+    Sources: AGG_ASSET_CLASS_EXPOSURE, TARGET_WEIGHTS, TOLERANCE_BANDS
+    Targets: FCT_REBALANCING_SIGNALS, FCT_REBALANCING_ORDERS
+    Business: Portfolio rebalancing trigger detection
+45.  m_agg_quarterly_performance
+    Sources: AGG_FUND_RETURNS, COMPOSITE_MEMBERSHIP, BENCHMARK_RETURNS_MONTHLY
+    Targets: FCT_QUARTERLY_PERFORMANCE
+    Business: Quarterly composite performance aggregation
+46.  m_fct_tax_lot_matching
+    Sources: STG_TRADE, OPEN_TAX_LOTS, TAX_METHOD_TABLE
+    Targets: FCT_TAX_LOT_MATCHING
+    Business: Tax lot FIFO/LIFO/specific-ID matching
+47.  m_fct_counterparty_risk
+    Sources: DERIVATIVE_POSITIONS, REPO_TRANSACTIONS, PRIME_BROKERAGE_EXPOSURE
+    Targets: FCT_COUNTERPARTY_EXPOSURE
+    Business: Counterparty credit exposure aggregation
+48.  m_fct_order_routing
+    Sources: EXECUTED_ORDERS, MARKET_QUOTES, ALGORITHM_METADATA
+    Targets: FCT_TCA_ANALYSIS, FCT_ORDER_ROUTING
+    Business: Best execution order routing analysis
+49.  m_fct_portfolio_simulation
+    Sources: FCT_DAILY_POSITIONS, HISTORICAL_RETURNS_MATRIX, CORRELATION_MATRIX
+    Targets: FCT_VAR_RESULTS
+    Business: Monte Carlo VaR / CVaR simulation
+50.  m_etl_control_framework
+    Sources: ETL_CONTROL_TABLE, SOURCE_RECORD_COUNTS, TARGET_RECORD_COUNTS
+    Targets: FCT_ETL_RUN_LOG, FCT_ETL_EXCEPTIONS
+    Business: ETL audit and reconciliation control
+
+================================================================================
+STATISTICS
+================================================================================
+
+Total Mappings:   50
+  Simple:         15
+  Medium:         20
+  Complex:        15
+
+Domain:           Investment Management / Asset Management
+Repository DB:    Microsoft SQL Server
+Transformation Types: SQ, EXP, FIL, LKP, AGG, JNR, RTR, UNI
+
+Overall Status:   ✓ COMPLETE & VALIDATED
+
+================================================================================

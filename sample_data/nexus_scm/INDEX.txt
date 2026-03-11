@@ -1,0 +1,82 @@
+================================================================================
+NEXUS MANUFACTURING CORP — INFORMATICA POWERCENTRE TEST ESTATE
+INDEX OF ALL MAPPINGS
+================================================================================
+
+GENERATED: 10/03/2026 09:00:00
+REPOSITORY: NEXUS_SCM_DWH (SQL Server, PowerCenter v112)
+
+SIMPLE MAPPINGS (15):
+   1. m_dim_supplier_load — Supplier master dimension load
+   2. m_dim_product_load — Product/SKU master dimension
+   3. m_dim_warehouse_load — Warehouse/DC location dimension
+   4. m_dim_customer_load — Customer/ship-to dimension
+   5. m_dim_plant_load — Manufacturing plant dimension
+   6. m_dim_date_load — Date dimension with planning periods
+   7. m_dim_carrier_load — Carrier/3PL provider dimension
+   8. m_dim_employee_load — Employee/planner dimension
+   9. m_dim_uom_load — Unit of measure reference dimension
+  10. m_stg_po_extract — Purchase order staging from ERP
+  11. m_stg_receipt_extract — Goods receipt staging from WMS
+  12. m_ref_incoterms — Incoterms reference data
+  13. m_ref_currency — Currency conversion reference
+  14. m_ref_lead_times — Supplier lead time reference by product/lane
+  15. m_fct_inventory_snapshot — Daily inventory snapshot fact
+
+MEDIUM MAPPINGS (20):
+  16. m_dim_supplier_scd2 — Supplier dimension SCD Type 2 tracking
+  17. m_dim_product_scd2 — Product dimension SCD Type 2
+  18. m_dim_customer_scd2 — Customer dimension SCD Type 2
+  19. m_fct_purchase_orders — Purchase order fact table load
+  20. m_fct_goods_receipt — Goods receipt quality and timing fact
+  21. m_fct_sales_orders — Sales order fact table
+  22. m_fct_shipments — Outbound shipment fact
+  23. m_fct_returns — Customer return and RMA fact
+  24. m_fct_invoice_matching — 3-way invoice matching (PO/receipt/invoice)
+  25. m_agg_inventory_daily — Daily inventory aggregation by product/warehouse
+  26. m_agg_fill_rate — Order fill rate aggregation
+  27. m_fct_stock_adjustments — Inventory adjustment transactions
+  28. m_fct_demand_forecast — Statistical demand forecast fact
+  29. m_fct_safety_stock — Safety stock calculation fact
+  30. m_fct_reorder_points — Reorder point calculation
+  31. m_fct_supplier_scorecard — Supplier KPI scorecard monthly
+  32. m_agg_warehouse_utilization — Warehouse utilization aggregation
+  33. m_fct_transfer_orders — Inter-warehouse transfer fact
+  34. m_fct_cycle_count — Cycle count accuracy fact
+  35. m_bridge_bom — Bill of materials bridge (parent-child)
+
+COMPLEX MAPPINGS (15):
+  36. m_fct_multi_echelon_inv
+      Sources: FCT_INVENTORY_SNAPSHOT, FCT_DEMAND_FORECAST, FCT_SALES_ORDERS
+  37. m_fct_demand_sensing
+      Sources: FCT_SALES_ORDERS, POINT_OF_SALE_DATA, EXTERNAL_SIGNALS
+  38. m_fct_supplier_risk
+      Sources: FCT_SUPPLIER_SCORECARD, SUPPLIER_FINANCIAL_DATA, EXTERNAL_RISK_SCORES
+  39. m_fct_network_optimization
+      Sources: FCT_SHIPMENTS, FCT_TRANSFER_ORDERS, AGG_WAREHOUSE_UTILIZATION
+  40. m_fct_landed_cost
+      Sources: FCT_PURCHASE_ORDERS, FCT_SHIPMENTS, DUTY_AND_TARIFF_RATES
+  41. m_fct_abc_xyz_analysis
+      Sources: AGG_INVENTORY_DAILY, AGG_FILL_RATE, FCT_DEMAND_FORECAST
+  42. m_fct_mrp_planning
+      Sources: FCT_DEMAND_FORECAST, FCT_INVENTORY_SNAPSHOT, BRIDGE_BOM
+  43. m_fct_backlog_analysis
+      Sources: FCT_SALES_ORDERS, FCT_SHIPMENTS, CUSTOMER_COMMITMENTS
+  44. m_fct_customer_service
+      Sources: FCT_SHIPMENTS, AGG_FILL_RATE, FCT_SALES_ORDERS
+  45. m_agg_spend_analytics
+      Sources: FCT_PURCHASE_ORDERS, FCT_INVOICE_MATCHING, FCT_GOODS_RECEIPT
+  46. m_fct_tariff_compliance
+      Sources: FCT_PURCHASE_ORDERS, CUSTOMS_DECLARATIONS, TARIFF_SCHEDULE
+  47. m_fct_co2_footprint
+      Sources: FCT_SHIPMENTS, FCT_PURCHASE_ORDERS, PRODUCTION_ENERGY_DATA
+  48. m_fct_yield_analysis
+      Sources: PRODUCTION_ORDERS, QUALITY_INSPECTION_RESULTS, SCRAP_RECORDS
+  49. m_fct_production_planning
+      Sources: PRODUCTION_PLAN, PRODUCTION_ACTUALS, CAPACITY_CONSTRAINTS
+  50. m_etl_control_framework
+      Sources: ETL_CONTROL_TABLE, SOURCE_ROW_COUNTS, TARGET_ROW_COUNTS
+
+Total: 50 mappings
+Domain: Manufacturing / Supply Chain
+Repository DB: Microsoft SQL Server
