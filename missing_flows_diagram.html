@@ -1,0 +1,1216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Missing Flows — Informatica Conversion Pipeline</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #080b14;
+    color: #e2e8f0;
+    font-size: 13px;
+  }
+  header {
+    background: #111827;
+    border-bottom: 2px solid #1e2533;
+    padding: 18px 28px;
+    position: sticky; top: 0; z-index: 200;
+    display: flex; align-items: center; gap: 20px;
+  }
+  header h1 { font-size: 16px; font-weight: 700; color: #f1f5f9; }
+  header p  { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  .toc {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto;
+  }
+  .toc a {
+    font-size: 10px; font-weight: 600; color: #64748b;
+    text-decoration: none; padding: 3px 8px;
+    border: 1px solid #1e2533; border-radius: 20px;
+    transition: all .15s;
+  }
+  .toc a:hover { color: #f1f5f9; border-color: #4a5568; }
+
+  /* ── section wrapper ───────────────────────────── */
+  .section {
+    margin: 0;
+    border-bottom: 1px solid #1e2533;
+  }
+  .section-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 28px;
+    background: #0d1117;
+    border-bottom: 1px solid #1e2533;
+    cursor: pointer;
+    user-select: none;
+  }
+  .section-header:hover { background: #111827; }
+  .section-icon { font-size: 18px; }
+  .section-title { font-size: 13px; font-weight: 700; }
+  .section-sub   { font-size: 11px; color: #64748b; margin-top: 1px; }
+  .section-count {
+    margin-left: auto; font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 10px;
+    background: #1e2533; color: #94a3b8;
+  }
+  .section-body {
+    padding: 20px 28px 28px;
+    display: grid;
+    gap: 16px;
+  }
+
+  /* 2-col grid */
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid-1 { grid-template-columns: 1fr; }
+
+  /* ── flow card ─────────────────────────────────── */
+  .flow-card {
+    border-radius: 10px;
+    border: 1.5px solid;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .flow-card-header {
+    padding: 10px 14px;
+    display: flex; align-items: flex-start; gap: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .flow-num {
+    font-size: 10px; font-weight: 800;
+    padding: 2px 6px; border-radius: 4px;
+    flex-shrink: 0; margin-top: 1px;
+  }
+  .flow-name { font-size: 12px; font-weight: 700; line-height: 1.3; }
+  .flow-trigger { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+
+  .flow-body { padding: 12px 14px; flex: 1; }
+
+  /* mini step nodes */
+  .steps { display: flex; flex-direction: column; gap: 6px; }
+  .step-row { display: flex; align-items: flex-start; gap: 8px; }
+  .step-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+  .step-text { font-size: 11px; line-height: 1.5; color: #cbd5e1; }
+  .step-text strong { color: #f1f5f9; font-weight: 600; }
+
+  /* decision boxes */
+  .decision {
+    background: rgba(139,92,246,0.08);
+    border: 1px solid rgba(139,92,246,0.35);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0;
+  }
+  .decision-q  { font-size: 11px; font-weight: 600; color: #c4b5fd; margin-bottom: 4px; }
+  .decision-y  { font-size: 10.5px; color: #86efac; margin: 2px 0 2px 10px; }
+  .decision-n  { font-size: 10.5px; color: #fca5a5; margin: 2px 0 2px 10px; }
+  .decision-y::before { content: '✓ YES → '; }
+  .decision-n::before { content: '✗ NO  → '; }
+
+  /* output block */
+  .outputs {
+    background: rgba(6,95,70,0.1);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 8px;
+  }
+  .outputs-label { font-size: 9.5px; font-weight: 700; color: #10b981;
+                   letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+  .outputs-item  { font-size: 10.5px; color: #a7f3d0; line-height: 1.6; }
+  .outputs-item::before { content: '→ '; }
+
+  /* code inline */
+  code { font-family: 'Cascadia Code','Fira Code',monospace;
+         font-size: 10px; background: #1e2533; padding: 1px 4px;
+         border-radius: 3px; color: #7dd3fc; }
+
+  .code-block {
+    font-family: 'Cascadia Code','Fira Code',monospace;
+    font-size: 9.5px; background: #0d1117;
+    border: 1px solid #1e2533; border-radius: 5px;
+    padding: 7px 10px; color: #a5f3fc;
+    line-height: 1.7; margin: 6px 0;
+    white-space: pre;
+  }
+
+  /* badges */
+  .badge {
+    display: inline-block; font-size: 9px; font-weight: 700;
+    padding: 1px 6px; border-radius: 10px; margin: 0 2px;
+  }
+  .badge-ok   { background:#064e3b; color:#6ee7b7; }
+  .badge-err  { background:#450a0a; color:#fca5a5; }
+  .badge-warn { background:#341907; color:#fdba74; }
+  .badge-info { background:#0f1f3d; color:#7dd3fc; }
+  .badge-gate { background:#451a03; color:#fde68a; }
+  .badge-nb   { background:#1e2533; color:#94a3b8; }
+
+  /* pill tags */
+  .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .tag  { font-size: 9.5px; background:#1e2533; color:#94a3b8;
+          padding: 2px 8px; border-radius: 10px; border: 1px solid #2d3748; }
+
+  /* arrow connectors in mini-flow */
+  .arr-down { text-align: center; color: #334155; font-size: 14px; margin: 2px 0; line-height: 1; }
+  .arr-label { font-size: 9px; color: #475569; font-weight: 600;
+               text-transform: uppercase; letter-spacing: .05em; }
+
+  /* colour themes per section */
+  .theme-pre   { border-color: #1d4ed8; }  /* blue */
+  .theme-pre .flow-card-header { background: rgba(29,78,216,0.12); }
+  .theme-pre .flow-num { background:#1d4ed8; color:#bfdbfe; }
+
+  .theme-manifest { border-color: #0e7490; }
+  .theme-manifest .flow-card-header { background: rgba(14,116,144,0.12); }
+  .theme-manifest .flow-num { background:#0e7490; color:#a5f3fc; }
+
+  .theme-quality { border-color: #7c3aed; }
+  .theme-quality .flow-card-header { background: rgba(124,58,237,0.12); }
+  .theme-quality .flow-num { background:#7c3aed; color:#ddd6fe; }
+
+  .theme-security { border-color: #be123c; }
+  .theme-security .flow-card-header { background: rgba(190,18,60,0.12); }
+  .theme-security .flow-num { background:#be123c; color:#fecdd3; }
+
+  .theme-zip { border-color: #b45309; }
+  .theme-zip .flow-card-header { background: rgba(180,83,9,0.12); }
+  .theme-zip .flow-num { background:#b45309; color:#fde68a; }
+
+  .theme-batch { border-color: #15803d; }
+  .theme-batch .flow-card-header { background: rgba(21,128,61,0.12); }
+  .theme-batch .flow-num { background:#15803d; color:#bbf7d0; }
+
+  .theme-audit { border-color: #6b7280; }
+  .theme-audit .flow-card-header { background: rgba(107,114,128,0.12); }
+  .theme-audit .flow-num { background:#6b7280; color:#f3f4f6; }
+
+  /* watcher timeline */
+  .watcher-timeline {
+    position: relative; padding-left: 20px;
+  }
+  .watcher-timeline::before {
+    content: '';
+    position: absolute; left: 6px; top: 4px; bottom: 4px;
+    width: 2px; background: linear-gradient(#0e7490, #134e4a);
+    border-radius: 2px;
+  }
+  .wt-step {
+    position: relative; margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #1e2533;
+    background: #0d1117;
+  }
+  .wt-step::before {
+    content: '';
+    position: absolute; left: -17px; top: 50%; transform: translateY(-50%);
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #0e7490; border: 2px solid #0a0e1a;
+  }
+  .wt-title { font-size: 11px; font-weight: 700; color: #22d3ee; margin-bottom: 3px; }
+  .wt-desc  { font-size: 10.5px; color: #94a3b8; line-height: 1.5; }
+
+  /* loop diagram */
+  .loop-box {
+    border: 1.5px dashed #f97316;
+    border-radius: 8px;
+    padding: 10px;
+    position: relative;
+    margin: 8px 0;
+  }
+  .loop-label {
+    position: absolute; top: -9px; left: 12px;
+    font-size: 9px; font-weight: 700; color: #f97316;
+    background: #080b14; padding: 0 4px;
+    letter-spacing: .05em; text-transform: uppercase;
+  }
+
+  /* section colour accents */
+  .sec-pre       .section-header { border-left: 3px solid #1d4ed8; }
+  .sec-manifest  .section-header { border-left: 3px solid #0e7490; }
+  .sec-quality   .section-header { border-left: 3px solid #7c3aed; }
+  .sec-security  .section-header { border-left: 3px solid #be123c; }
+  .sec-zip       .section-header { border-left: 3px solid #b45309; }
+  .sec-batch     .section-header { border-left: 3px solid #15803d; }
+  .sec-audit     .section-header { border-left: 3px solid #6b7280; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Conversion Pipeline — Missing / Additional Flows (23 flows)</h1>
+    <p>Supplement to the Full Pipeline &amp; Upload Flow diagrams · orchestrator.py · routes.py · watcher.py · zip_extractor.py</p>
+  </div>
+  <nav class="toc">
+    <a href="#sec-pre">Pre-Pipeline</a>
+    <a href="#sec-manifest">Manifest</a>
+    <a href="#sec-quality">Quality Checks</a>
+    <a href="#sec-security">Security</a>
+    <a href="#sec-zip">ZIP / Extraction</a>
+    <a href="#sec-batch">Batch &amp; Status</a>
+    <a href="#sec-audit">Audit &amp; Lifecycle</a>
+  </nav>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 1: PRE-PIPELINE                                -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-pre" id="sec-pre">
+  <div class="section-header">
+    <span class="section-icon">🔌</span>
+    <div>
+      <div class="section-title" style="color:#60a5fa">Pre-Pipeline Entry Flows (Step 0 area)</div>
+      <div class="section-sub">Workflow XML cross-reference · embedded credentials scan · no-mappings guard</div>
+    </div>
+    <div class="section-count">Flows 1–3</div>
+  </div>
+  <div class="section-body grid-3">
+
+    <!-- Flow 1 -->
+    <div class="flow-card theme-pre">
+      <div class="flow-card-header">
+        <div class="flow-num">F1</div>
+        <div>
+          <div class="flow-name">Workflow XML + Parameter File (Step 0)</div>
+          <div class="flow-trigger">Trigger: upload includes optional workflow.xml or params.xml</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">📋</span>
+            <div class="step-text"><strong>Optional fields:</strong> <code>workflow_xml_content</code> + <code>parameter_file_content</code> on job create</div>
+          </div>
+          <div class="arr-down">↓</div>
+          <div class="decision">
+            <div class="decision-q">Has workflow XML?</div>
+            <div class="decision-y">Run Step 0: cross-reference validate mapping ↔ workflow</div>
+            <div class="decision-n">Skip Step 0 entirely, jump to Step 1</div>
+          </div>
+          <div class="decision">
+            <div class="decision-q">Cross-ref validation passes?</div>
+            <div class="decision-y">Store <code>session_parse_report</code>, proceed to Step 1</div>
+            <div class="decision-n">BLOCKED — pipeline stops, clear error returned</div>
+          </div>
+          <div class="decision">
+            <div class="decision-q">Step 0 errors + mapping-only mode?</div>
+            <div class="decision-y">Skip Step 0 with warning, fall through to Step 1</div>
+            <div class="decision-n">FAILED — halt pipeline</div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Outputs</div>
+          <div class="outputs-item"><code>session_parse_report</code>: uploaded_files, cross_ref status, unresolved_variables, notes</div>
+          <div class="outputs-item">Parameter file values available for substitution in Step 7 (conversion)</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L63-123</span>
+          <span class="badge badge-nb">non-blocking if mapping-only</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 2 -->
+    <div class="flow-card theme-pre">
+      <div class="flow-card-header">
+        <div class="flow-num">F2</div>
+        <div>
+          <div class="flow-name">XML Credential Pre-scan (Step 0b)</div>
+          <div class="flow-trigger">Trigger: always runs after Step 0 (or Step 0 skip)</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🔐</span>
+            <div class="step-text">Scans uploaded mapping XML for <strong>hardcoded credentials</strong> in CONNECTION / SESSION attributes before any LLM call</div>
+          </div>
+          <div class="arr-down">↓</div>
+          <div class="decision">
+            <div class="decision-q">Credentials found?</div>
+            <div class="decision-y">Store <code>xml_credential_count</code> in state, log warning — pipeline CONTINUES</div>
+            <div class="decision-n">Continue silently</div>
+          </div>
+          <div class="decision">
+            <div class="decision-q">Scan itself errors?</div>
+            <div class="decision-y">Log warning only, continue — truly non-blocking</div>
+            <div class="decision-n">Continue</div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Outputs</div>
+          <div class="outputs-item"><code>xml_credential_count</code> stored in state if &gt; 0</div>
+          <div class="outputs-item">Warnings surface at Gate 1 as informational flags</div>
+          <div class="outputs-item">Does NOT block pipeline — advisory only at this point</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L124-140</span>
+          <span class="badge badge-nb">non-blocking</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 3 -->
+    <div class="flow-card theme-pre">
+      <div class="flow-card-header">
+        <div class="flow-num">F3</div>
+        <div>
+          <div class="flow-name">No Mappings Found Guard (Step 1 exit)</div>
+          <div class="flow-trigger">Trigger: Step 1 parse completes with 0 mapping names</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🚫</span>
+            <div class="step-text">After Step 1 parse, <code>parse_report.mapping_names</code> is checked</div>
+          </div>
+          <div class="arr-down">↓</div>
+          <div class="decision">
+            <div class="decision-q">mapping_names is empty?</div>
+            <div class="decision-y"><span class="badge badge-err">BLOCKED</span> Pipeline stops immediately with targeted error message</div>
+            <div class="decision-n">Proceed normally to Step 2</div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Error Message Returned</div>
+          <div class="outputs-item">"No Mapping definitions found in the uploaded file. If you uploaded a Workflow file as the primary mapping, please re-upload the correct mapping XML."</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L198-211</span>
+          <span class="badge badge-err">BLOCKED</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 2: MANIFEST LIFECYCLE                          -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-manifest" id="sec-manifest">
+  <div class="section-header">
+    <span class="section-icon">📑</span>
+    <div>
+      <div class="section-title" style="color:#22d3ee">Manifest Lifecycle Flows</div>
+      <div class="section-sub">Pre-conversion manifest generation · reviewer override upload · Manifest Watcher auto-ingest</div>
+    </div>
+    <div class="section-count">Flows 4–6 + Watcher detail</div>
+  </div>
+  <div class="section-body grid-2">
+
+    <!-- Flow 4: manifest generation -->
+    <div class="flow-card theme-manifest">
+      <div class="flow-card-header">
+        <div class="flow-num">F4</div>
+        <div>
+          <div class="flow-name">Manifest Generation (Step 1.5)</div>
+          <div class="flow-trigger">Trigger: after Step 1 parse succeeds</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">📊</span>
+            <div class="step-text">Builds an <strong>Excel workbook</strong> from the parsed source-target graph immediately after parse — gives reviewer a preview before S2T agent runs</div>
+          </div>
+          <div class="arr-down">↓</div>
+          <div class="decision">
+            <div class="decision-q">Generation succeeds?</div>
+            <div class="decision-y">Store <code>manifest_report</code>; xlsx available for download at Gate 1</div>
+            <div class="decision-n">Non-blocking — log warning, continue to Step 2 without manifest</div>
+          </div>
+          <div class="decision">
+            <div class="decision-q">Low-confidence / unmapped fields?</div>
+            <div class="decision-y"><code>review_required = true</code>; reviewer prompted to annotate &amp; re-upload overrides</div>
+            <div class="decision-n"><code>review_required = false</code></div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Outputs</div>
+          <div class="outputs-item"><code>manifest_report</code>: source_count, review_required, unmapped_count, low_confidence_count</div>
+          <div class="outputs-item">Excel bytes generated on-demand at <code>GET /jobs/{id}/manifest.xlsx</code></div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L217-244</span>
+          <span class="badge badge-nb">non-blocking gen failure</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 5: manifest override upload -->
+    <div class="flow-card theme-manifest">
+      <div class="flow-card-header">
+        <div class="flow-num">F5</div>
+        <div>
+          <div class="flow-name">Reviewer Manifest Override Upload (Gate 1 pause)</div>
+          <div class="flow-trigger">Trigger: reviewer annotates manifest.xlsx, re-uploads during AWAITING_REVIEW</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">📤</span>
+            <div class="step-text">Reviewer downloads manifest → fills "Reviewer Override" column → uploads via <code>POST /jobs/{id}/manifest-override</code></div>
+          </div>
+          <div class="arr-down">↓</div>
+          <div class="decision">
+            <div class="decision-q">Job status = AWAITING_REVIEW?</div>
+            <div class="decision-y">Accept upload and parse overrides</div>
+            <div class="decision-n"><span class="badge badge-err">400</span> "Manifests can only be uploaded while awaiting review"</div>
+          </div>
+          <div class="decision">
+            <div class="decision-q">File is valid .xlsx?</div>
+            <div class="decision-y">Parse <code>manifest_overrides</code> list, store in state</div>
+            <div class="decision-n"><span class="badge badge-err">400</span> file validation error</div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Outputs</div>
+          <div class="outputs-item"><code>manifest_overrides</code> list stored in job state</div>
+          <div class="outputs-item">Overrides injected into Step 7 conversion prompt → LLM uses reviewer's explicit field mappings</div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L790-862</span>
+          <span class="badge badge-gate">during Gate 1</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 6: Watcher -->
+    <div class="flow-card theme-manifest" style="grid-column: span 2;">
+      <div class="flow-card-header">
+        <div class="flow-num">F6</div>
+        <div>
+          <div class="flow-name">Manifest Watcher Auto-Ingest — Full Lifecycle</div>
+          <div class="flow-trigger">Trigger: background task polls WATCHER_DIR every WATCHER_POLL_INTERVAL_SECS for *.manifest.json files</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div class="watcher-timeline">
+            <div class="wt-step">
+              <div class="wt-title">① Manifest File Detection</div>
+              <div class="wt-desc">Poll finds <code>*.manifest.json</code> in WATCHER_DIR<br>
+              Already-seen (in processed/ or failed/)? → Skip</div>
+            </div>
+            <div class="wt-step">
+              <div class="wt-title">② JSON + Schema Validation</div>
+              <div class="wt-desc">
+                <div class="decision" style="margin:0;">
+                  <div class="decision-q" style="font-size:10px;">Valid JSON + v2.14.1 schema?</div>
+                  <div class="decision-n" style="font-size:10px;">Move to <code>failed/</code> with <code>.error</code> sidecar</div>
+                  <div class="decision-y" style="font-size:10px;">Continue</div>
+                </div>
+              </div>
+            </div>
+            <div class="wt-step">
+              <div class="wt-title">③ File Reference Resolution</div>
+              <div class="wt-desc">Apply top-level defaults (workflow, params) to each mapping entry<br>
+                Enumerate all referenced XMLs on disk<br>
+                <div class="decision" style="margin:4px 0 0;">
+                  <div class="decision-q" style="font-size:10px;">All files present?</div>
+                  <div class="decision-n" style="font-size:10px;">Start TTL clock. If waiting &gt; INCOMPLETE_TTL_SECS (300s): move to <code>failed/</code><br>Else: leave for next poll</div>
+                  <div class="decision-y" style="font-size:10px;">Continue</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="watcher-timeline">
+            <div class="wt-step">
+              <div class="wt-title">④ XML Content Validation</div>
+              <div class="wt-desc">Read all file contents, validate each mapping XML starts with <code>&lt;</code><br>
+                Bad XML? → Move to <code>failed/</code> with sidecar</div>
+            </div>
+            <div class="wt-step">
+              <div class="wt-title">⑤ Duplicate Mapping Check</div>
+              <div class="wt-desc">Duplicate mapping filenames in manifest?<br>
+                → Reject, move to <code>failed/</code></div>
+            </div>
+            <div class="wt-step">
+              <div class="wt-title">⑥ Batch Creation &amp; Submit</div>
+              <div class="wt-desc">
+                Output dir: <code>&lt;label&gt;_YYYYMMDD_HHMMSS_ffffff/</code><br>
+                Call <code>_submit_batch()</code> → creates batch_id + N job_ids<br>
+                <div class="decision" style="margin:4px 0 0;">
+                  <div class="decision-q" style="font-size:10px;">Submit succeeds?</div>
+                  <div class="decision-y" style="font-size:10px;">Move to <code>processed/</code>, return (batch_id, job_count)</div>
+                  <div class="decision-n" style="font-size:10px;">Move to <code>failed/</code>, log error</div>
+                </div>
+              </div>
+            </div>
+            <div class="wt-step">
+              <div class="wt-title">⑦ Watcher-tagged Job Export</div>
+              <div class="wt-desc">Jobs tagged with <code>watcher_output_dir</code> + <code>watcher_mapping_stem</code><br>
+                Job exporter writes to:<br>
+                <code>OUTPUT_DIR/&lt;label&gt;_&lt;ts&gt;/&lt;mapping_stem&gt;/</code></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 3: QUALITY CHECKS                              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-quality" id="sec-quality">
+  <div class="section-header">
+    <span class="section-icon">🔬</span>
+    <div>
+      <div class="section-title" style="color:#a78bfa">Quality Check Flows (post-step non-blocking)</div>
+      <div class="section-sub">Doc truncation · smoke execution check · JSON parse failure · S2T reconciliation report</div>
+    </div>
+    <div class="section-count">Flows 7–10</div>
+  </div>
+  <div class="section-body grid-2">
+
+    <!-- Flow 7: doc truncation -->
+    <div class="flow-card theme-quality">
+      <div class="flow-card-header">
+        <div class="flow-num">F7</div>
+        <div>
+          <div class="flow-name">Documentation Truncation Warning (Step 3 post)</div>
+          <div class="flow-trigger">Trigger: after Step 3 docs agent completes</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">Doc contains truncation sentinel?</div>
+          <div class="decision-y"><code>doc_truncated = true</code> → inject HIGH-severity <code>DOCUMENTATION_TRUNCATED</code> flag into verification</div>
+          <div class="decision-n">Continue</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Doc missing completion sentinel (not truncated)?</div>
+          <div class="decision-y"><code>doc_missing_sentinel = true</code> → inject HIGH-severity warning flag</div>
+          <div class="decision-n">Continue</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Gate 1 Impact</div>
+          <div class="outputs-item">Reviewer sees prominent warning: "Documentation hit token limit — review carefully before approving"</div>
+          <div class="outputs-item">Reviewer decides whether to approve, reject, or amend+regen</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L339-375</span>
+          <span class="badge badge-nb">non-blocking</span>
+          <span class="badge badge-gate">surfaced at Gate 1</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 8: smoke check -->
+    <div class="flow-card theme-quality">
+      <div class="flow-card-header">
+        <div class="flow-num">F8</div>
+        <div>
+          <div class="flow-name">Smoke Execution Check (Step 7b post-conversion)</div>
+          <div class="flow-trigger">Trigger: after Step 7 conversion, before Step 8 security</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🔥</span>
+            <div class="step-text">Syntax/structural validation per file type:</div>
+          </div>
+        </div>
+        <div class="code-block">Python/PySpark → py_compile check
+dbt SQL       → Jinja {{ }} balance + SELECT check
+YAML          → yaml.safe_load check</div>
+        <div class="decision">
+          <div class="decision-q">Any file fails smoke check?</div>
+          <div class="decision-y">Inject <code>SMOKE_CHECK_FAILED</code> HIGH-severity flags into verification state (one per failing file)</div>
+          <div class="decision-n">Log success, no flags added</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Gate 3 Impact</div>
+          <div class="outputs-item">Smoke failures appear at Gate 3 as HIGH warnings — not blockers, reviewer decides</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L677-720</span>
+          <span class="badge badge-nb">non-blocking</span>
+          <span class="badge badge-gate">surfaced at Gate 3</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 9: JSON parse failure -->
+    <div class="flow-card theme-quality">
+      <div class="flow-card-header">
+        <div class="flow-num">F9</div>
+        <div>
+          <div class="flow-name">Conversion JSON Parse Failure (Step 7 guard)</div>
+          <div class="flow-trigger">Trigger: Claude's JSON-wrapped response from Step 7 fails to parse</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">conversion_output.parse_ok = false?</div>
+          <div class="decision-y"><span class="badge badge-err">HARD FAIL</span> Halt pipeline immediately. Partial files recovered and marked incomplete.</div>
+          <div class="decision-n">Continue to Step 8 normally</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Error Details</div>
+          <div class="outputs-item">"JSON parse failed; files recovered may be incomplete"</div>
+          <div class="outputs-item">Partial files available for inspection (not production-ready)</div>
+          <div class="outputs-item">Cause: mapping too large for single generation pass → consider splitting</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L656-676</span>
+          <span class="badge badge-err">FAILED — no retry</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 10: reconciliation -->
+    <div class="flow-card theme-quality">
+      <div class="flow-card-header">
+        <div class="flow-num">F10</div>
+        <div>
+          <div class="flow-name">S2T Reconciliation Report (Step 9 post-code-review)</div>
+          <div class="flow-trigger">Trigger: after Step 9 code review completes</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🔗</span>
+            <div class="step-text">Validates every target field from <code>s2t_state["fields"]</code> appears in the generated code files</div>
+          </div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">All S2T fields found in generated code?</div>
+          <div class="decision-y"><code>final_status: OK</code>, <code>match_rate: 100%</code></div>
+          <div class="decision-n"><code>final_status: WARNING / DEGRADED</code> + <code>mismatched_fields</code> list</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Outputs</div>
+          <div class="outputs-item"><code>reconciliation_report</code>: final_status (OK/WARNING/DEGRADED), match_rate %, mismatched_fields list</div>
+          <div class="outputs-item">Shown to Gate 3 reviewer alongside code review results</div>
+          <div class="outputs-item">Non-blocking — reviewer makes final call</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L845-878</span>
+          <span class="badge badge-nb">non-blocking</span>
+          <span class="badge badge-gate">surfaced at Gate 3</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 4: SECURITY FLOWS                              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-security" id="sec-security">
+  <div class="section-header">
+    <span class="section-icon">🔒</span>
+    <div>
+      <div class="section-title" style="color:#f87171">Security Automation Flows</div>
+      <div class="section-sub">Gate 2 auto-bypass · remediation loop (max 2 rounds) · test file scan · knowledge base learning</div>
+    </div>
+    <div class="section-count">Flows 11–14</div>
+  </div>
+  <div class="section-body grid-2">
+
+    <!-- Flow 11: auto-bypass -->
+    <div class="flow-card theme-security">
+      <div class="flow-card-header">
+        <div class="flow-num">F11</div>
+        <div>
+          <div class="flow-name">Security Gate 2 Auto-Bypass</div>
+          <div class="flow-trigger">Trigger: Step 8 security scan completes with APPROVED recommendation</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">Scan recommendation = APPROVED (no findings)?</div>
+          <div class="decision-y"><strong>Auto-skip Gate 2</strong> — no human review needed<br>Pipeline continues directly to Step 9 (Code Review)<br>No webhook fired for Gate 2</div>
+          <div class="decision-n">Pause at Gate 2, set status = <code>AWAITING_SEC_REVIEW</code><br>Fire webhook with finding count</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Log Message (auto-proceed)</div>
+          <div class="outputs-item">"Security scan clean (APPROVED) — auto-proceeding to Step 10"</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L763-788</span>
+          <span class="badge badge-ok">bypasses Gate 2</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 12: remediation loop -->
+    <div class="flow-card theme-security" style="grid-column: span 1; grid-row: span 2;">
+      <div class="flow-card-header">
+        <div class="flow-num">F12</div>
+        <div>
+          <div class="flow-name">Security Remediation Loop (Gate 2 → re-convert → re-scan)</div>
+          <div class="flow-trigger">Trigger: reviewer chooses REQUEST_FIX at Gate 2</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="loop-box">
+          <div class="loop-label">Remediation Loop (max 2 rounds)</div>
+          <div class="steps">
+            <div class="step-row"><span class="step-icon">1️⃣</span>
+              <div class="step-text"><strong>Step 7 re-run:</strong> Converts with security findings injected as mandatory fix requirements in prompt</div>
+            </div>
+            <div class="arr-down">↓</div>
+            <div class="step-row"><span class="step-icon">2️⃣</span>
+              <div class="step-text"><strong>Step 8 re-run:</strong> Security scan on new output</div>
+            </div>
+            <div class="arr-down">↓</div>
+            <div class="decision">
+              <div class="decision-q">New scan = APPROVED?</div>
+              <div class="decision-y">Auto-sign-off with system note, continue to Step 9</div>
+              <div class="decision-n">Check remediation_round counter</div>
+            </div>
+            <div class="decision">
+              <div class="decision-q">remediation_round &lt; MAX (2)?</div>
+              <div class="decision-y">Re-present Gate 2 WITH "Request Fix" button</div>
+              <div class="decision-n"><code>can_request_fix = false</code><br>Present Gate 2 WITHOUT "Request Fix"<br>Reviewer must choose APPROVED, ACKNOWLEDGED, or FAILED</div>
+            </div>
+          </div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">State Tracking</div>
+          <div class="outputs-item">Previous scans archived in <code>security_scan_rounds[]</code> for UI comparison</div>
+          <div class="outputs-item"><code>remediation_round</code> counter stored in state</div>
+          <div class="outputs-item"><code>can_request_fix</code> boolean controls UI button visibility</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L976-1208</span>
+          <span class="badge badge-warn">max 2 rounds</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 13: test file scan -->
+    <div class="flow-card theme-security">
+      <div class="flow-card-header">
+        <div class="flow-num">F13</div>
+        <div>
+          <div class="flow-name">Test File Security Scan (Step 11b)</div>
+          <div class="flow-trigger">Trigger: after Step 11 test generation, if test files exist</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">Test files exist AND security_scan exists?</div>
+          <div class="decision-y">Run <code>security_agent.scan_files()</code> on test code</div>
+          <div class="decision-n">Skip</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Test scan finds HIGH findings?</div>
+          <div class="decision-y">Merge into main security_scan report<br>If scan was APPROVED → downgrade to REVIEW_RECOMMENDED<br>Re-pause at Gate 2</div>
+          <div class="decision-n">Merge counts, no recommendation change</div>
+        </div>
+        <div class="tags">
+          <span class="tag">orchestrator.py L932-955</span>
+          <span class="badge badge-warn">can re-trigger Gate 2</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 14: KB learning -->
+    <div class="flow-card theme-security">
+      <div class="flow-card-header">
+        <div class="flow-num">F14</div>
+        <div>
+          <div class="flow-name">Security Knowledge Base Learning (post Gate 2)</div>
+          <div class="flow-trigger">Trigger: after Gate 2 APPROVED or ACKNOWLEDGED decision</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🧠</span>
+            <div class="step-text">Extracts patterns from security findings of this job, records them for future scans</div>
+          </div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Recording succeeds?</div>
+          <div class="decision-y">Patterns stored in KB, accessible via <code>GET /security/knowledge</code></div>
+          <div class="decision-n">Log warning, continue — non-fatal</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Purpose</div>
+          <div class="outputs-item">Future jobs' security scans can reference learned patterns</div>
+          <div class="outputs-item">Continuously improves detection accuracy over time</div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L604-619</span>
+          <span class="badge badge-nb">non-blocking</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 5: ZIP EXTRACTION                              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-zip" id="sec-zip">
+  <div class="section-header">
+    <span class="section-icon">📦</span>
+    <div>
+      <div class="section-title" style="color:#fbbf24">ZIP Extraction Security &amp; Classification</div>
+      <div class="section-sub">Zip Slip / Zip Bomb protection · file-type classification · duplicate handling · batch subfolder grouping</div>
+    </div>
+    <div class="section-count">Flows 15–16</div>
+  </div>
+  <div class="section-body grid-2">
+
+    <!-- Flow 15: single ZIP -->
+    <div class="flow-card theme-zip">
+      <div class="flow-card-header">
+        <div class="flow-num">F15</div>
+        <div>
+          <div class="flow-name">Single ZIP Extraction (extract_informatica_zip)</div>
+          <div class="flow-trigger">Trigger: POST /convert/zip — one mapping per ZIP</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🛡️</span>
+            <div class="step-text"><strong>Security checks first:</strong></div>
+          </div>
+        </div>
+        <div class="code-block">Zip Slip check    → path escapes extraction dir?
+Zip Bomb check    → file count / total size limits
+Symlink check     → reject symbolic links
+→ Fail any: raise ZipExtractionError</div>
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🗂️</span>
+            <div class="step-text"><strong>Per-entry classification:</strong></div>
+          </div>
+        </div>
+        <div class="code-block">macOS/Windows metadata → skip
+Not UTF-8 decodable   → skip, add to skipped[]
+MAPPING XML           → keep first; warn if multiple
+WORKFLOW XML          → keep first; warn if multiple
+PARAMETER file        → keep first; warn if multiple
+UNCLASSIFIED          → add to skipped[]</div>
+        <div class="decision">
+          <div class="decision-q">No mapping XML found after all entries?</div>
+          <div class="decision-y"><span class="badge badge-err">ZipExtractionError</span> "No Mapping XML found"</div>
+          <div class="decision-n">Return ZipParseResult</div>
+        </div>
+        <div class="tags">
+          <span class="tag">zip_extractor.py L65-200</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 16: batch ZIP -->
+    <div class="flow-card theme-zip">
+      <div class="flow-card-header">
+        <div class="flow-num">F16</div>
+        <div>
+          <div class="flow-name">Batch ZIP Extraction (extract_batch_zip)</div>
+          <div class="flow-trigger">Trigger: POST /convert/batch — structured ZIP with one subfolder per mapping</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🗃️</span>
+            <div class="step-text">Same security checks, then entries <strong>grouped by top-level folder</strong></div>
+          </div>
+        </div>
+        <div class="code-block">Top-level files (no subfolder) → log warning, ignore
+macOS metadata             → skip
+Grouped by folder name     → sorted for determinism</div>
+        <div class="decision">
+          <div class="decision-q">No subfolders found?</div>
+          <div class="decision-y"><span class="badge badge-err">ZipExtractionError</span> "No subfolders found"</div>
+          <div class="decision-n">Process each folder</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Folder has no mapping XML?</div>
+          <div class="decision-y">Skip folder with warning</div>
+          <div class="decision-n">Add ZipParseResult to results list</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Results list empty after all folders?</div>
+          <div class="decision-y"><span class="badge badge-err">ZipExtractionError</span> "No valid mapping folders"</div>
+          <div class="decision-n">Return list[ZipParseResult] sorted by folder name</div>
+        </div>
+        <div class="tags">
+          <span class="tag">zip_extractor.py L200-327</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 6: BATCH & STATUS                              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-batch" id="sec-batch">
+  <div class="section-header">
+    <span class="section-icon">⚡</span>
+    <div>
+      <div class="section-title" style="color:#4ade80">Batch Creation &amp; Status Rollup</div>
+      <div class="section-sub">Atomic batch job creation · semaphore-limited parallel launch · status rollup computation</div>
+    </div>
+    <div class="section-count">Flows 17–18</div>
+  </div>
+  <div class="section-body grid-2">
+
+    <!-- Flow 17: atomic batch -->
+    <div class="flow-card theme-batch">
+      <div class="flow-card-header">
+        <div class="flow-num">F17</div>
+        <div>
+          <div class="flow-name">Atomic Batch Job Creation (create_batch_jobs)</div>
+          <div class="flow-trigger">Trigger: POST /convert/batch after successful ZIP extraction</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">File is .zip?</div>
+          <div class="decision-y">Extract, continue</div>
+          <div class="decision-n"><span class="badge badge-err">400</span></div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">ZIP extraction succeeds?</div>
+          <div class="decision-y">Get list[ZipParseResult], continue</div>
+          <div class="decision-n"><span class="badge badge-err">400</span> extraction error</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Atomic batch creation in single DB transaction?</div>
+          <div class="decision-y">batch_id + job_ids returned</div>
+          <div class="decision-n"><span class="badge badge-err">500</span> "Atomic batch creation failed"</div>
+        </div>
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">⚡</span>
+            <div class="step-text"><strong>Parallel launch per job:</strong> acquire semaphore slot (max 3) → run pipeline → push progress events → release slot. Exception? → mark FAILED, push sentinel.</div>
+          </div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L1055-1165</span>
+          <span class="badge badge-info">max 3 concurrent</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 18: batch status rollup -->
+    <div class="flow-card theme-batch">
+      <div class="flow-card-header">
+        <div class="flow-num">F18</div>
+        <div>
+          <div class="flow-name">Batch Status Rollup (_compute_batch_status)</div>
+          <div class="flow-trigger">Trigger: GET /batches/{batch_id}</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">📊</span>
+            <div class="step-text">Aggregates status across all constituent jobs:</div>
+          </div>
+        </div>
+        <div class="code-block">Terminal states  : COMPLETE, FAILED, BLOCKED
+In-flight states : everything else
+
+Decision tree:
+  Any jobs in-flight?   → batch = RUNNING
+  All jobs COMPLETE?    → batch = COMPLETE
+  Some COMPLETE?        → batch = PARTIAL
+  None COMPLETE?        → batch = FAILED</div>
+        <div class="outputs">
+          <div class="outputs-label">Response</div>
+          <div class="outputs-item">Batch record with computed status + per-job summary list</div>
+          <div class="outputs-item">Enables "N completed, M failed" batch dashboard view</div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L1038-1053</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 7: AUDIT & LIFECYCLE                           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section sec-audit" id="sec-audit">
+  <div class="section-header">
+    <span class="section-icon">📜</span>
+    <div>
+      <div class="section-title" style="color:#9ca3af">Audit Trail &amp; Job Lifecycle Flows</div>
+      <div class="section-sub">Immutable gate audit log · soft delete + orphan cleanup · disk export structure · file download security</div>
+    </div>
+    <div class="section-count">Flows 19–23</div>
+  </div>
+  <div class="section-body grid-3">
+
+    <!-- Flow 19: audit trail -->
+    <div class="flow-card theme-audit">
+      <div class="flow-card-header">
+        <div class="flow-num">F19</div>
+        <div>
+          <div class="flow-name">Immutable Gate Decision Audit Log</div>
+          <div class="flow-trigger">Trigger: after every Gate 1 / 2 / 3 decision</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🔏</span>
+            <div class="step-text">Every gate decision recorded to <code>job_audit_log</code> table — immutable, never deleted</div>
+          </div>
+        </div>
+        <div class="code-block">audit_id      uuid
+gate          gate1 / gate2 / gate3
+event_type    approved / rejected / acknowledged
+              / request_fix / ...
+reviewer_name
+reviewer_role
+decision      full decision value
+notes         reviewer notes
+extra_json    {remediation_round: N, ...}
+created_at    ISO timestamp</div>
+        <div class="outputs">
+          <div class="outputs-label">API</div>
+          <div class="outputs-item"><code>GET /jobs/{id}/audit</code> → full decision history</div>
+          <div class="outputs-item">Compliance: who approved what, when, and with what notes</div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L481-490, 557-567, 670-679</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 20: soft delete -->
+    <div class="flow-card theme-audit">
+      <div class="flow-card-header">
+        <div class="flow-num">F20</div>
+        <div>
+          <div class="flow-name">Soft Delete &amp; Orphaned Log Cleanup</div>
+          <div class="flow-trigger">Trigger: DELETE /jobs/{id} · GET /logs/history</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🗑️</span>
+            <div class="step-text"><strong>Soft Delete:</strong> sets <code>deleted_at</code> timestamp. Cleans up S2T Excel file. Keeps log file + registry entry for history.</div>
+          </div>
+        </div>
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">📚</span>
+            <div class="step-text"><strong>Archive History (<code>GET /logs/history</code>):</strong> returns merged list of soft-deleted jobs + orphaned registry entries (in log registry but not in DB), sorted by deletion date DESC</div>
+          </div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L297-318, L404-435</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 21: disk export -->
+    <div class="flow-card theme-audit">
+      <div class="flow-card-header">
+        <div class="flow-num">F21</div>
+        <div>
+          <div class="flow-name">Job Export to Disk (job_exporter)</div>
+          <div class="flow-trigger">Trigger: after Gate 3 final approval</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="code-block" style="font-size:9px;">UI jobs:
+OUTPUT_DIR/{job_id}/
+  input/    mapping.xml, workflow.xml, params.xml
+  output/   converted files + tests/
+  docs/     documentation.md, s2t.xlsx,
+            manifest.xlsx, security_scan.md
+  logs/     {job_id}.log
+
+Watcher jobs:
+OUTPUT_DIR/{label}_{YYYYMMDD_HHMMSS}/
+  {mapping_stem}/  (same structure)
+
+Batch manifest jobs:
+OUTPUT_DIR/{label}_{ts}/
+  batch_index.json
+  {mapping_stem_1}/
+  {mapping_stem_2}/</div>
+        <div class="decision">
+          <div class="decision-q">OUTPUT_DIR = "disabled" or unavailable?</div>
+          <div class="decision-y">Skip export with warning — never blocks pipeline</div>
+          <div class="decision-n">Write files to disk</div>
+        </div>
+        <div class="tags">
+          <span class="tag">job_exporter.py</span>
+          <span class="tag">orchestrator.py L1491-1499</span>
+          <span class="badge badge-nb">non-fatal</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 22: output zip -->
+    <div class="flow-card theme-audit">
+      <div class="flow-card-header">
+        <div class="flow-num">F22</div>
+        <div>
+          <div class="flow-name">On-Demand Output ZIP Download</div>
+          <div class="flow-trigger">Trigger: GET /jobs/{id}/output.zip (post-completion)</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="decision">
+          <div class="decision-q">Job has conversion output files?</div>
+          <div class="decision-y">Bundle all files from <code>state["conversion"]["files"]</code> into ZIP and stream</div>
+          <div class="decision-n"><span class="badge badge-err">404</span> "No output files found"</div>
+        </div>
+        <div class="outputs">
+          <div class="outputs-label">Response</div>
+          <div class="outputs-item">ZIP filename: <code>{mapping_name}_output.zip</code></div>
+          <div class="outputs-item">Folder structure preserved inside archive</div>
+        </div>
+        <div class="tags">
+          <span class="tag">routes.py L907-939</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Flow 23: file download security -->
+    <div class="flow-card theme-audit">
+      <div class="flow-card-header">
+        <div class="flow-num">F23</div>
+        <div>
+          <div class="flow-name">File Download Path &amp; Extension Security</div>
+          <div class="flow-trigger">Trigger: GET /jobs/{id}/download/{filename} or /tests/download/{filename:path}</div>
+        </div>
+      </div>
+      <div class="flow-body">
+        <div class="steps">
+          <div class="step-row"><span class="step-icon">🛡️</span>
+            <div class="step-text">Two-stage security check before serving any file:</div>
+          </div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Filename contains path separators (../)?</div>
+          <div class="decision-y">Strip ALL directory components — keep only basename</div>
+          <div class="decision-n">Use as-is</div>
+        </div>
+        <div class="decision">
+          <div class="decision-q">Extension in allowlist?</div>
+          <div class="decision-y">Serve file as JSON {filename, content}</div>
+          <div class="decision-n"><span class="badge badge-err">400</span> "Extension not permitted"</div>
+        </div>
+        <div class="code-block">Allowlist: .py .sql .yaml .yml .txt
+           .md .json .sh .cfg .ini .toml</div>
+        <div class="tags">
+          <span class="tag">routes.py L865-901</span>
+          <span class="badge badge-err">path traversal blocked</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

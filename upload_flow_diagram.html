@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Upload Flow — Single Mapping / Batch / Full Project</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0a0e1a;
+    color: #e2e8f0;
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(135deg, #1a1f2e 0%, #0f1117 100%);
+    border-bottom: 1px solid #2d3748;
+    padding: 18px 32px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  header h1 { font-size: 17px; font-weight: 700; color: #f7fafc; }
+  header p  { font-size: 12px; color: #718096; margin-top: 3px; }
+
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    border-top: 3px solid #1a1f2e;
+  }
+
+  .col {
+    border-right: 1px solid #1e2533;
+    padding: 0 0 60px;
+    position: relative;
+  }
+  .col:last-child { border-right: none; }
+
+  .col-header {
+    padding: 20px 24px 16px;
+    background: #111827;
+    border-bottom: 2px solid;
+    margin-bottom: 8px;
+    position: sticky;
+    top: 63px;
+    z-index: 90;
+  }
+
+  .col-1 .col-header { border-color: #10b981; }
+  .col-2 .col-header { border-color: #3b82f6; }
+  .col-3 .col-header { border-color: #f59e0b; }
+
+  .col-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .col-1 .col-title { color: #10b981; }
+  .col-2 .col-title { color: #60a5fa; }
+  .col-3 .col-title { color: #f59e0b; }
+
+  .col-sub  { font-size: 11px; color: #718096; margin-top: 3px; }
+  .col-api  { font-size: 10px; font-family: 'Cascadia Code', 'Fira Code', monospace;
+               color: #4a5568; margin-top: 6px; background: #0f1117;
+               padding: 3px 8px; border-radius: 4px; display: inline-block; }
+
+  /* ── flow nodes ──────────────────────────────── */
+  .flow { padding: 12px 20px; }
+
+  .node {
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 0 auto 6px;
+    max-width: 340px;
+    position: relative;
+  }
+  .node-title { font-size: 12px; font-weight: 600; }
+  .node-desc  { font-size: 10.5px; color: rgba(255,255,255,0.6); margin-top: 3px; line-height: 1.5; }
+  .node-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+                padding: 2px 6px; border-radius: 10px; margin-right: 4px; vertical-align: middle; }
+
+  /* node colours */
+  .n-upload  { background: #064e3b; border: 1.5px solid #10b981; }
+  .n-step    { background: #1e3a5f; border: 1.5px solid #3b82f6; }
+  .n-decide  { background: #2e1065; border: 1.5px solid #8b5cf6; }
+  .n-gate    { background: #451a03; border: 1.5px solid #f59e0b; }
+  .n-output  { background: #134e4a; border: 1.5px solid #2dd4bf; }
+  .n-error   { background: #450a0a; border: 1.5px solid #ef4444; }
+  .n-warn    { background: #341907; border: 1.5px solid #f97316; }
+  .n-info    { background: #0f1f3d; border: 1.5px solid #60a5fa; }
+  .n-parallel{ background: #1a1035; border: 1.5px dashed #8b5cf6; }
+
+  /* badges */
+  .badge-step  { background: #1d4ed8; color: #bfdbfe; }
+  .badge-gate  { background: #92400e; color: #fef3c7; }
+  .badge-decide{ background: #5b21b6; color: #ede9fe; }
+  .badge-ok    { background: #065f46; color: #d1fae5; }
+  .badge-err   { background: #7f1d1d; color: #fee2e2; }
+  .badge-warn  { background: #451a03; color: #fed7aa; }
+
+  /* arrow connector */
+  .arrow {
+    text-align: center;
+    font-size: 18px;
+    color: #374151;
+    line-height: 1;
+    margin: 2px 0;
+  }
+  .arrow-label {
+    font-size: 9.5px;
+    color: #6b7280;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    display: block;
+    text-align: center;
+    margin: -2px 0 2px;
+  }
+  .arrow-branch {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin: 4px 0;
+  }
+  .branch-arm {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 9px;
+    color: #6b7280;
+  }
+  .branch-line {
+    width: 1.5px;
+    height: 20px;
+    background: #374151;
+    margin: 2px 0;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px dashed #1e2533;
+    margin: 10px 20px;
+  }
+
+  .code-block {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 9.5px;
+    background: #0f1117;
+    border: 1px solid #1e2533;
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: #a5f3fc;
+    line-height: 1.6;
+    margin: 4px 0;
+  }
+
+  .pill-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 4px 0;
+  }
+  .pill {
+    font-size: 9.5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #1e2533;
+    color: #94a3b8;
+    border: 1px solid #2d3748;
+  }
+
+  .shared-pipe {
+    background: #0f172a;
+    border-top: 2px dashed #4a5568;
+    margin: 0;
+    padding: 20px 24px;
+  }
+  .shared-pipe h2 {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #4a5568;
+    margin-bottom: 12px;
+  }
+  .pipe-steps {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pipe-step {
+    flex: 1;
+    min-width: 140px;
+    background: #1e3a5f;
+    border: 1.5px solid #3b82f6;
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .pipe-step-title { font-size: 11px; font-weight: 600; color: #93c5fd; }
+  .pipe-step-sub   { font-size: 9.5px; color: #60a5fa; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Upload Flow — Three Entry Paths into the Conversion Pipeline</h1>
+  <p>Single mapping · Batch of mappings · Full project · All converge into the same 10-step processing pipeline</p>
+</header>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="columns">
+
+  <!-- ════ COL 1: SINGLE MAPPING ════ -->
+  <div class="col col-1">
+    <div class="col-header">
+      <div class="col-title">① Single Mapping Upload</div>
+      <div class="col-sub">One Informatica mapping at a time — interactive use</div>
+      <div class="col-api">POST /convert  · multipart/form-data</div>
+    </div>
+
+    <div class="flow">
+
+      <div class="node n-upload">
+        <div class="node-title">User uploads 1–3 files</div>
+        <div class="node-desc">
+          <b>Required:</b> mapping XML<br>
+          <b>Required:</b> etl_patterns YAML (config skeleton)<br>
+          <b>Optional:</b> context document (PDF/DOCX — business rules)
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S0</span>
+        <span class="node-title">Session Parse</span>
+        <div class="node-desc">
+          route handler validates files<br>
+          creates job record (status = PENDING)<br>
+          dispatches single-mapping worker
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-decide">
+        <span class="node-badge badge-decide">?</span>
+        <span class="node-title">ZIP or 3-file?</span>
+        <div class="node-desc">
+          If user uploaded a .zip → <code>zip_extractor</code> unpacks<br>
+          extracts XML + YAML + optional doc<br>
+          If 3 raw files → used directly
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-info">
+        <div class="node-title">Single-Mapping Worker</div>
+        <div class="node-desc">
+          Runs Steps 1–10 sequentially<br>
+          One job_id tracks the entire run<br>
+          Real-time status via <code>GET /jobs/{id}</code>
+        </div>
+        <div class="code-block">job = {
+  job_id:       uuid4(),
+  status:       "RUNNING",
+  current_step: 1,
+  state_json:   gzip({}),
+  complexity_tier: null → filled at S2
+}</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 1</span>
+        <span class="node-title">Human reviews S2T + docs</span>
+        <div class="node-desc">Frontend shows parsed mappings, S2T table, docs<br>
+          User approves, rejects, or amends inline</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 2</span>
+        <span class="node-title">Human reviews generated code</span>
+        <div class="node-desc">Shows converted files + security report<br>
+          User can request changes → regen loop</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 3</span>
+        <span class="node-title">Final approval</span>
+        <div class="node-desc">Code review (Stage A/B/C) + perf report shown<br>
+          User approves → export triggered</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-output">
+        <div class="node-title">✓ Output ZIP downloaded</div>
+        <div class="node-desc">
+          Single mapping package:<br>
+          <div class="pill-row">
+            <span class="pill">main.py / model.sql</span>
+            <span class="pill">s2t.yaml</span>
+            <span class="pill">mapping_spec.md</span>
+            <span class="pill">reviews.json</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════ COL 2: BATCH OF MAPPINGS ════ -->
+  <div class="col col-2">
+    <div class="col-header">
+      <div class="col-title">② Batch of Mappings Upload</div>
+      <div class="col-sub">Multiple mappings from one or more sources — parallel processing</div>
+      <div class="col-api">POST /convert/batch  · multipart/form-data</div>
+    </div>
+
+    <div class="flow">
+
+      <div class="node n-upload">
+        <div class="node-title">User uploads batch ZIP</div>
+        <div class="node-desc">
+          ZIP contains <em>N</em> mapping XMLs<br>
+          Each mapping has its own YAML config<br>
+          (or a shared config is applied to all)<br>
+          Optional: shared context doc
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S0</span>
+        <span class="node-title">Batch Session Parse</span>
+        <div class="node-desc">
+          <code>zip_extractor</code> unpacks archive<br>
+          identifies N mapping XMLs<br>
+          creates one <b>batch_id</b> + N <b>job_ids</b><br>
+          queues all jobs (status = PENDING)
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-parallel">
+        <div class="node-title">⚡ Parallel Orchestrator</div>
+        <div class="node-desc">
+          Max <b>3 concurrent</b> mapping workers<br>
+          Semaphore prevents overload<br>
+          Each worker is independent — one failure<br>
+          does not block the others
+        </div>
+        <div class="code-block">async with semaphore:          # max 3
+    await run_mapping(job_id)  # Steps 1-10</div>
+      </div>
+      <div class="arrow">↓</div>
+      <span class="arrow-label">per mapping (in parallel)</span>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S1–S5</span>
+        <span class="node-title">Parse → Classify → S2T → Docs → Verify</span>
+        <div class="node-desc">
+          Runs identically to single-mapping path<br>
+          Results stored in each job's <code>state_json</code>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 1 (batch)</span>
+        <span class="node-title">Review all mappings' S2T</span>
+        <div class="node-desc">
+          UI shows a mapping-by-mapping table<br>
+          Reviewer can approve each individually<br>
+          or approve all in one action<br>
+          Failed mappings shown separately
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S7–S9</span>
+        <span class="node-title">Stack Assign → Convert → Security → Code Review</span>
+        <div class="node-desc">
+          Each mapping converted independently<br>
+          Same parallel semaphore used<br>
+          Stage A/B/C review per mapping
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 2 + 3 (batch)</span>
+        <span class="node-title">Review code + final approval</span>
+        <div class="node-desc">
+          Batch summary view: N approved, M failed<br>
+          Reviewer can drill into individual mappings<br>
+          Rejected mappings excluded from export
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">Agg</span>
+        <span class="node-title">Batch Aggregator</span>
+        <div class="node-desc">
+          Waits for all workers to finish or time-out<br>
+          Collects completed vs failed counts<br>
+          Merges approved outputs into one archive
+        </div>
+        <div class="code-block">{
+  "batch_id":  "...",
+  "total":      N,
+  "completed":  K,
+  "failed":     N-K,
+  "artifacts":  ["job1.zip", "job2.zip", ...]
+}</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-output">
+        <div class="node-title">✓ Batch Output ZIP downloaded</div>
+        <div class="node-desc">
+          One ZIP per approved mapping inside a<br>
+          top-level batch archive:<br>
+          <div class="pill-row">
+            <span class="pill">mapping_1/</span>
+            <span class="pill">mapping_2/</span>
+            <span class="pill">…</span>
+            <span class="pill">batch_summary.json</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════ COL 3: FULL PROJECT ════ -->
+  <div class="col col-3">
+    <div class="col-header">
+      <div class="col-title">③ Full Project Upload</div>
+      <div class="col-sub">Entire Informatica PowerCenter project export — all mappings, workflows, params</div>
+      <div class="col-api">POST /convert/batch  · project ZIP  OR  manifest watcher</div>
+    </div>
+
+    <div class="flow">
+
+      <div class="node n-upload">
+        <div class="node-title">User uploads project ZIP (or drops in /watch dir)</div>
+        <div class="node-desc">
+          Project export contains:<br>
+          <div class="pill-row">
+            <span class="pill">mappings/ (XML files)</span>
+            <span class="pill">workflows/</span>
+            <span class="pill">parameter_files/</span>
+            <span class="pill">INDEX.txt</span>
+            <span class="pill">manifest.json</span>
+          </div>
+          Structure mirrors Informatica folder export
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S0</span>
+        <span class="node-title">Project Session Parse</span>
+        <div class="node-desc">
+          <code>zip_extractor</code> recursively unpacks<br>
+          reads <b>manifest.json</b> → ordered mapping list<br>
+          falls back to scanning all .xml files<br>
+          assigns priority order (simple → medium → complex)
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-decide">
+        <span class="node-badge badge-decide">?</span>
+        <span class="node-title">Manifest-driven or scan?</span>
+        <div class="node-desc">
+          <b>manifest.json found</b> → use declared mapping list + metadata<br>
+          <b>No manifest</b> → scan all XML files, auto-classify complexity
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-info">
+        <div class="node-title">Project Metadata Extraction</div>
+        <div class="node-desc">
+          Reads global project config from manifest:<br>
+          <div class="code-block">project_name, source_db, target_stack,
+folder_description, owner,
+etl_pattern overrides per mapping</div>
+          Parameter files (dev/uat/prod) noted<br>
+          Workflow dependencies noted (not converted)
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-parallel">
+        <div class="node-title">⚡ Parallel Orchestrator (project scope)</div>
+        <div class="node-desc">
+          Same semaphore (max 3 concurrent)<br>
+          Prioritises SIMPLE mappings first<br>
+          (lower complexity → faster, unblocks reviewer sooner)<br>
+          VERY_HIGH complexity flagged for human triage before conversion
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <span class="arrow-label">per mapping (in parallel, ordered by complexity)</span>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S1–S5</span>
+        <span class="node-title">Parse → Classify → S2T → Docs → Verify</span>
+        <div class="node-desc">
+          Identical per-mapping pipeline<br>
+          Project context doc injected as extra context<br>
+          Cross-mapping field lineage noted (future)
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 1 (project)</span>
+        <span class="node-title">Bulk S2T review — project dashboard</span>
+        <div class="node-desc">
+          Project overview: complexity breakdown,<br>
+          pattern distribution chart, per-mapping status<br>
+          Reviewer can filter by pattern / tier<br>
+          Approve tiers in bulk or individually
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">S6–S9</span>
+        <span class="node-title">Stack Assign → Convert → Security → Code Review</span>
+        <div class="node-desc">
+          Stack determined per-mapping (can vary within project)<br>
+          or set globally in manifest<br>
+          All 3 review stages run per mapping
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-gate">
+        <span class="node-badge badge-gate">GATE 2 + 3 (project)</span>
+        <span class="node-title">Code review + final sign-off</span>
+        <div class="node-desc">
+          Project-level perf summary shown<br>
+          (aggregate Stage C findings)<br>
+          Reviewer signs off per-mapping or in bulk
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-step">
+        <span class="node-badge badge-step">Exp</span>
+        <span class="node-title">Project Export Packager</span>
+        <div class="node-desc">
+          Mirrors original project folder structure<br>
+          Adds converted code alongside original XML<br>
+          Generates project-level summary report
+        </div>
+        <div class="code-block">firstbank_converted/
+  mappings/
+    simple/   m_customer_load/ → main.py
+    medium/   m_account_scd2/  → models/
+    complex/  m_gl_reconcile/  → ...
+  project_summary.md
+  batch_summary.json</div>
+      </div>
+      <div class="arrow">↓</div>
+
+      <div class="node n-output">
+        <div class="node-title">✓ Full project converted ZIP</div>
+        <div class="node-desc">
+          Complete project with all approved mappings<br>
+          <div class="pill-row">
+            <span class="pill">N converted mappings</span>
+            <span class="pill">project_summary.md</span>
+            <span class="pill">batch_summary.json</span>
+            <span class="pill">perf_report.json</span>
+          </div>
+          Ready for deployment to target stack
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- /columns -->
+
+<!-- ════ SHARED PIPELINE BANNER ════ -->
+<div class="shared-pipe">
+  <h2>↓ All three paths feed into the same 10-step processing pipeline ↓</h2>
+  <div class="pipe-steps">
+    <div class="pipe-step">
+      <div class="pipe-step-title">S1 — Parse XML</div>
+      <div class="pipe-step-sub">parser_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S2 — Classify</div>
+      <div class="pipe-step-sub">10-rule classifier</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S3 — S2T Map</div>
+      <div class="pipe-step-sub">s2t_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S4 — Docs</div>
+      <div class="pipe-step-sub">docs_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S5 — Verify</div>
+      <div class="pipe-step-sub">verification_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">⚑ Gate 1</div>
+      <div class="pipe-step-sub">Human review S2T</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S6 — Stack</div>
+      <div class="pipe-step-sub">stack_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S7 — Convert</div>
+      <div class="pipe-step-sub">conversion_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S8 — Security</div>
+      <div class="pipe-step-sub">security_agent</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">⚑ Gate 2</div>
+      <div class="pipe-step-sub">Human review code</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">S9 — Code Review</div>
+      <div class="pipe-step-sub">review_agent A+B+C</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-step-title">⚑ Gate 3</div>
+      <div class="pipe-step-sub">Final approval</div>
+    </div>
+    <div class="pipe-step" style="border-color:#2dd4bf; background:#0d3330;">
+      <div class="pipe-step-title" style="color:#5eead4;">S10 — Export</div>
+      <div class="pipe-step-sub" style="color:#2dd4bf;">zip_exporter</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
