@@ -62,6 +62,12 @@ def parse_xml(xml_content: str) -> tuple[ParseReport, dict]:
         counts["Source"] = counts.get("Source", 0) + 1
         graph["sources"].append(_extract_source(src))
 
+    # For flat file sources, the SQ TABLEATTRIBUTE nodes hold the real file
+    # path and delimiter (Informatica stores "Source File Name",
+    # "Source File Directory", "Delimiter" there).  Build a lookup keyed by
+    # source name so we can merge these values back into graph["sources"].
+    _merge_flatfile_sq_attribs(root, graph["sources"])
+
     # ── Targets ──────────────────────────────
     for tgt in root.iter("TARGET"):
         counts["Target"] = counts.get("Target", 0) + 1
@@ -462,6 +468,59 @@ def _extract_transformation(trans_el: etree._Element, flags: list) -> dict:
     }
 
 
+def _merge_flatfile_sq_attribs(root: etree._Element, sources: list[dict]) -> None:
+    """
+    For every flat file source in *sources*, locate the paired Source Qualifier
+    and pull "Source File Name", "Source File Directory", and "Delimiter" from
+    its TABLEATTRIBUTE nodes.  These values take precedence over anything
+    extracted from the SOURCE element itself (they are more reliable).
+
+    Informatica stores the SQ paired to a flat file source with the naming
+    convention SQ_<SOURCE_NAME>.  We try that first, then fall back to any
+    Source Qualifier whose TABLEATTRIBUTE "Source Table Name" matches.
+    """
+    flat_sources = {s["name"]: s for s in sources if s.get("db_type") == "Flat File"}
+    if not flat_sources:
+        return
+
+    for trans_el in root.iter("TRANSFORMATION"):
+        if trans_el.get("TYPE") != "Source Qualifier":
+            continue
+        attribs: dict[str, str] = {
+            ta.get("NAME", ""): ta.get("VALUE", "")
+            for ta in trans_el.iter("TABLEATTRIBUTE")
+        }
+        sq_name     = trans_el.get("NAME", "")
+        table_name  = attribs.get("Source Table Name", "")
+
+        # Match by SQ_<source> naming convention or "Source Table Name" attrib
+        matched_src = None
+        for src_name, src in flat_sources.items():
+            if sq_name == f"SQ_{src_name}" or table_name == src_name:
+                matched_src = src
+                break
+
+        if matched_src is None:
+            continue
+
+        ff = matched_src.setdefault("flat_file", {})
+        if attribs.get("Source File Name"):
+            ff["file_name"] = attribs["Source File Name"]
+        if attribs.get("Source File Directory"):
+            ff["file_dir"] = attribs["Source File Directory"]
+        if attribs.get("Delimiter"):
+            raw_delim = attribs["Delimiter"]
+            # Informatica encodes common delimiters as words
+            ff["delimiter"] = {
+                "COMMA": ",", "TAB": "\t", "PIPE": "|",
+                "SEMICOLON": ";", "SPACE": " ",
+            }.get(raw_delim.upper(), raw_delim)
+        if "Skip Header" in attribs:
+            ff["has_header"] = attribs["Skip Header"] != "NO"
+        if "Row Delimiter" in attribs:
+            ff["row_delimiter"] = attribs["Row Delimiter"]
+
+
 def _extract_source(src_el: etree._Element) -> dict:
     fields = []
     for f in src_el.iter("SOURCEFIELD"):
@@ -470,12 +529,27 @@ def _extract_source(src_el: etree._Element) -> dict:
             "datatype": f.get("DATATYPE", ""),
             "length":   f.get("LENGTH", ""),
         })
-    return {
+    result = {
         "name":    src_el.get("NAME", ""),
         "db_type": src_el.get("DATABASETYPE", ""),
         "owner":   src_el.get("OWNERNAME", ""),
         "fields":  fields,
     }
+
+    # For flat file sources Informatica stores file metadata on the SOURCE
+    # element itself (FILE_NAME, DELIMITER, SKIP_ROWS) and on the paired
+    # Source Qualifier's TABLEATTRIBUTE nodes.  Capture what we can from the
+    # SOURCE element here; the SQ TABLEATTRIBUTE values are merged in
+    # _merge_flatfile_sq_attribs() during the mapping extraction pass.
+    if result["db_type"] == "Flat File":
+        result["flat_file"] = {
+            "file_name":  src_el.get("FILE_NAME", ""),
+            "file_dir":   src_el.get("FILE_DIR", ""),
+            "delimiter":  src_el.get("DELIMITER", ","),
+            "has_header": src_el.get("HASHEADER", "YES") != "NO",
+            "skip_rows":  int(src_el.get("SKIPROWS", "0") or "0"),
+        }
+    return result
 
 
 def _extract_target(tgt_el: etree._Element) -> dict:

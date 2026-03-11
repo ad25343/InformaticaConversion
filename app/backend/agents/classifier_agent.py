@@ -383,8 +383,11 @@ def _build_pattern_yaml_skeleton(
     # Gather source and target info from the graph
     sources = graph.get("sources", [])
     targets = graph.get("targets", [])
-    src_name = sources[0].get("name", "SOURCE_TABLE") if sources else "SOURCE_TABLE"
+    src      = sources[0] if sources else {}
+    src_name = src.get("name", "SOURCE_TABLE")
     tgt_name = targets[0].get("name", "TARGET_TABLE") if targets else "TARGET_TABLE"
+    is_flat_file = src.get("db_type", "") == "Flat File"
+    ff_meta      = src.get("flat_file", {}) if is_flat_file else {}
 
     # Collect all field expressions from Aggregator/Expression transformations
     all_exprs: list[dict] = []
@@ -402,12 +405,42 @@ def _build_pattern_yaml_skeleton(
     ]
 
     # ── source block ──────────────────────────────────────────────────────────
-    lines += [
-        "source:",
-        f"  type:    database   # TODO: adjust to flat_file if source is a file",
-        f"  connection_string: ${{{{SOURCE_CONN}}}}   # TODO: set env var",
-        f"  table:   {src_name}",
-    ]
+    if is_flat_file:
+        # Derive path from parsed flat_file metadata; fall back to TODO placeholders
+        file_dir  = ff_meta.get("file_dir", "")   or "/data/in"
+        file_name = ff_meta.get("file_name", "") or f"{src_name.lower()}.csv"
+        delimiter = ff_meta.get("delimiter", ",")
+        has_header = ff_meta.get("has_header", True)
+        skip_rows  = ff_meta.get("skip_rows", 0)
+        full_path  = (
+            f"{file_dir.rstrip('/')}/{file_name}"
+            if file_dir and file_name
+            else f"/data/in/{src_name.lower()}.csv   # TODO: set actual file path"
+        )
+        lines += [
+            "source:",
+            f"  type:       flat_file",
+            f"  name:       {src_name}",
+            f"  path:       {full_path}",
+            f"  delimiter:  \"{delimiter}\"",
+            f"  has_header: {'true' if has_header else 'false'}",
+        ]
+        if skip_rows:
+            lines.append(f"  skip_rows:  {skip_rows}")
+        lines += [
+            "  encoding:   utf-8   # TODO: confirm encoding",
+            "  file_lifecycle:",
+            "    archive_dir:   /data/archive   # TODO: set archive path",
+            "    archive_dated: true",
+            "    reject_dir:    /data/rejects   # TODO: set reject path",
+        ]
+    else:
+        lines += [
+            "source:",
+            f"  type:    database",
+            f"  connection_string: ${{{{SOURCE_CONN}}}}   # TODO: set env var",
+            f"  table:   {src_name}",
+        ]
 
     # ── pattern-specific blocks ───────────────────────────────────────────────
     if pattern == "incremental_append":
