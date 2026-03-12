@@ -1840,3 +1840,92 @@ async def export_progress_csv():
     except Exception as e:
         logger.error(f"Error exporting progress CSV: {e}")
         raise HTTPException(500, f"Error exporting progress CSV: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# Test Runner  (admin only — persona: Asin D)
+# ─────────────────────────────────────────────
+
+_SUITE_FILES = {
+    "auth":       "tests/playwright/auth.spec.js",
+    "landing":    "tests/playwright/landing.spec.js",
+    "navigation": "tests/playwright/navigation.spec.js",
+    "submission": "tests/playwright/submission.spec.js",
+    "history":    "tests/playwright/history.spec.js",
+    "review":     "tests/playwright/review.spec.js",
+    "security":   "tests/playwright/security.spec.js",
+}
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+@router.get("/run-tests")
+async def run_tests(request: Request, suites: str = ""):
+    """
+    SSE stream that runs the selected Playwright suites and streams output
+    line-by-line.  Admin-only: requires persona cookie == 'Asin D'.
+    """
+    persona = request.cookies.get("persona", "")
+    if persona != "Asin D":
+        raise HTTPException(403, "Test runner is restricted to the admin persona.")
+
+    # Build list of spec files to pass to playwright
+    selected = [s.strip() for s in suites.split(",") if s.strip() in _SUITE_FILES]
+    if not selected:
+        raise HTTPException(400, "No valid suites specified.")
+
+    spec_paths = [_SUITE_FILES[s] for s in selected]
+    cmd = ["npx", "playwright", "test", "--reporter=line"] + spec_paths
+
+    async def _stream() -> AsyncGenerator[str, None]:
+        def _evt(payload: dict) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        yield _evt({"type": "start", "suites": selected, "cmd": " ".join(cmd)})
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=_REPO_ROOT,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, "FORCE_COLOR": "0", "CI": "1"},
+            )
+
+            passed = failed = skipped = 0
+
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if not line:
+                    continue
+
+                # Parse playwright summary line  e.g. "5 passed (12s)"  "2 failed"
+                import re as _re
+                m_pass  = _re.search(r"(\d+)\s+passed",  line)
+                m_fail  = _re.search(r"(\d+)\s+failed",  line)
+                m_skip  = _re.search(r"(\d+)\s+skipped", line)
+                if m_pass:  passed  = int(m_pass.group(1))
+                if m_fail:  failed  = int(m_fail.group(1))
+                if m_skip:  skipped = int(m_skip.group(1))
+
+                yield _evt({"type": "line", "text": line})
+
+            await proc.wait()
+            rc = proc.returncode
+
+            yield _evt({
+                "type":    "done",
+                "rc":      rc,
+                "passed":  passed,
+                "failed":  failed,
+                "skipped": skipped,
+            })
+
+        except Exception as exc:
+            yield _evt({"type": "error", "text": str(exc)})
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

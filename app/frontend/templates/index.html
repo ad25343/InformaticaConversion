@@ -485,6 +485,9 @@
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
         👁 Review Queue <span id="navReviewBadge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px">0</span>
       </button>
+      <button id="navTests" onclick="setMainView('tests')" style="display:none;padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        🧪 Tests
+      </button>
       <!-- Persona chip (right side) -->
       <div class="persona-chip" id="personaChip" style="margin-left:auto" title="Signed in as…">
         <div class="persona-avatar-sm" id="personaAvatarNav">?</div>
@@ -665,6 +668,50 @@
       </div>
     </div>
 
+    <!-- ── Test Runner panel (admin: Asin D only) ── -->
+    <div id="panelTests" style="display:none;flex:1;overflow-y:auto;padding:24px 32px;flex-direction:column;gap:20px">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:20px;font-weight:700">🧪 Test Runner</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">
+            Select suites and run the Playwright e2e suite against the live server.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-ghost" onclick="testSelectAll()">Select all</button>
+          <button class="btn btn-sm btn-ghost" onclick="testClearAll()">Clear</button>
+        </div>
+      </div>
+
+      <!-- Suite toggle grid -->
+      <div id="testSuiteGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px"></div>
+
+      <!-- Run button + status -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <button id="testRunBtn" class="btn btn-primary" onclick="runTests()" disabled
+                style="min-width:140px">▶ Run Selected</button>
+        <div id="testStatus" style="font-size:13px;color:var(--muted)">No run yet</div>
+      </div>
+
+      <!-- Results bar (shown after run) -->
+      <div id="testResultBar" style="display:none;padding:12px 16px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+        <span id="testResPassed" style="font-size:14px;font-weight:700;color:#4ade80">&#10003; 0 passed</span>
+        <span id="testResFailed" style="font-size:14px;font-weight:700;color:#f87171">&#10007; 0 failed</span>
+        <span id="testResSkipped" style="font-size:14px;color:var(--muted)">&#8854; 0 skipped</span>
+        <a id="testReportLink" href="/tests/playwright/report/index.html" target="_blank"
+           style="margin-left:auto;font-size:12px;color:var(--accent)">View HTML report &#8599;</a>
+      </div>
+
+      <!-- Live log -->
+      <div id="testLog"
+           style="flex:1;min-height:320px;background:#0d1117;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.6;color:#c9d1d9;white-space:pre-wrap;word-break:break-all">
+        <span style="color:var(--muted)">Log output will appear here&#8230;</span>
+      </div>
+
+    </div>
+
   </main>
 </div>
 
@@ -795,12 +842,16 @@ function initPersonaUI() {
   // Pre-fill submitter name if empty
   const sn = document.getElementById('submitterName');
   if (sn && !sn.value) sn.value = name;
+
+  // Admin-only nav items
+  const navTests = document.getElementById('navTests');
+  if (navTests) navTests.style.display = (name === 'Asin D') ? '' : 'none';
 }
 
 // ── Main view switcher (top nav tabs) ─────────
 function setMainView(view) {
   _mainView = view;
-  const views = ['landing', 'dashboard', 'history', 'review'];
+  const views = ['landing', 'dashboard', 'history', 'review', 'tests'];
   views.forEach(v => {
     const panel = document.getElementById('panel' + v.charAt(0).toUpperCase() + v.slice(1));
     if (panel) {
@@ -824,6 +875,7 @@ function setMainView(view) {
   if (view === 'review')  loadReviewQueue();
   if (view === 'history') loadHistory();
   if (view === 'landing') loadLandingStats();
+  if (view === 'tests')   initTestRunner();
 }
 
 // ── Landing stats ──────────────────────────────
@@ -3700,6 +3752,160 @@ function renderS2TTable() {
     ).join('');
   }
 }
+
+// ─────────────────────────────────────────────
+// Test Runner
+// ─────────────────────────────────────────────
+
+const TEST_SUITES = [
+  { id: 'auth',       label: 'Auth & Session',    count: 13, icon: '🔐' },
+  { id: 'landing',    label: 'Landing Page',       count: 7,  icon: '🏠' },
+  { id: 'navigation', label: 'Navigation',         count: 8,  icon: '🗺' },
+  { id: 'submission', label: 'File Submission',    count: 9,  icon: '📤' },
+  { id: 'history',    label: 'Job History',        count: 8,  icon: '📋' },
+  { id: 'review',     label: 'Review Queue',       count: 8,  icon: '👁' },
+  { id: 'security',   label: 'Security & Headers', count: 8,  icon: '🔒' },
+];
+
+let _testRunnerReady = false;
+let _testRunning = false;
+
+function initTestRunner() {
+  if (_testRunnerReady) return;
+  _testRunnerReady = true;
+  const grid = document.getElementById('testSuiteGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const s of TEST_SUITES) {
+    const card = document.createElement('label');
+    card.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface2);border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s;user-select:none';
+    card.innerHTML = `
+      <input type="checkbox" data-suite="${s.id}" style="accent-color:var(--accent);width:16px;height:16px;flex-shrink:0">
+      <span style="font-size:20px">${s.icon}</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-size:13px;font-weight:600">${s.label}</span>
+        <span style="font-size:11px;color:var(--muted)">~${s.count} tests</span>
+      </span>`;
+    card.querySelector('input').addEventListener('change', () => {
+      card.style.borderColor = card.querySelector('input').checked ? 'var(--accent)' : 'var(--border)';
+      card.style.background  = card.querySelector('input').checked ? 'rgba(108,99,255,.08)' : 'var(--surface2)';
+      _updateRunBtn();
+    });
+    grid.appendChild(card);
+  }
+}
+
+function _updateRunBtn() {
+  const btn = document.getElementById('testRunBtn');
+  if (!btn) return;
+  const any = [...document.querySelectorAll('#testSuiteGrid input[type=checkbox]')].some(c => c.checked);
+  btn.disabled = !any || _testRunning;
+}
+
+function testSelectAll() {
+  document.querySelectorAll('#testSuiteGrid input[type=checkbox]').forEach(c => {
+    c.checked = true;
+    c.dispatchEvent(new Event('change'));
+  });
+}
+
+function testClearAll() {
+  document.querySelectorAll('#testSuiteGrid input[type=checkbox]').forEach(c => {
+    c.checked = false;
+    c.dispatchEvent(new Event('change'));
+  });
+}
+
+function _appendLog(text, color) {
+  const log = document.getElementById('testLog');
+  if (!log) return;
+  const span = document.createElement('span');
+  if (color) span.style.color = color;
+  span.textContent = text + '\n';
+  // Remove placeholder on first real line
+  const ph = log.querySelector('span[style*="muted"]');
+  if (ph) ph.remove();
+  log.appendChild(span);
+  log.scrollTop = log.scrollHeight;
+}
+
+function _colorForLine(line) {
+  if (/\bpassed\b/i.test(line))  return '#4ade80';
+  if (/\bfailed\b/i.test(line))  return '#f87171';
+  if (/\bskipped\b/i.test(line)) return '#facc15';
+  if (/^\s+\d+ /.test(line))      return '#94a3b8';   // indented test lines
+  if (/Error|FAIL/i.test(line))    return '#f87171';
+  return null; // default terminal colour
+}
+
+async function runTests() {
+  const suites = [...document.querySelectorAll('#testSuiteGrid input[type=checkbox]')]
+    .filter(c => c.checked).map(c => c.dataset.suite);
+  if (!suites.length) return;
+
+  _testRunning = true;
+  _updateRunBtn();
+  document.getElementById('testRunBtn').textContent = '⏳ Running…';
+  document.getElementById('testStatus').textContent = `Running: ${suites.join(', ')}`;
+  document.getElementById('testResultBar').style.display = 'none';
+
+  const log = document.getElementById('testLog');
+  if (log) log.innerHTML = '';
+  _appendLog(`▶ Starting: ${suites.join(', ')}`, '#a5b4fc');
+
+  try {
+    const res = await fetch(`/run-tests?suites=${encodeURIComponent(suites.join(','))}`);
+    if (!res.ok) {
+      _appendLog(`Error: ${res.status} ${res.statusText}`, '#f87171');
+      _testRunning = false; _updateRunBtn();
+      document.getElementById('testRunBtn').textContent = '▶ Run Selected';
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+
+      for (const part of parts) {
+        if (!part.startsWith('data:')) continue;
+        let evt;
+        try { evt = JSON.parse(part.slice(5).trim()); } catch { continue; }
+
+        if (evt.type === 'line') {
+          _appendLog(evt.text, _colorForLine(evt.text));
+        } else if (evt.type === 'done') {
+          const ok = evt.rc === 0;
+          document.getElementById('testResPassed').textContent  = `✓ ${evt.passed}  passed`;
+          document.getElementById('testResFailed').textContent  = `✗ ${evt.failed}  failed`;
+          document.getElementById('testResSkipped').textContent = `⊘ ${evt.skipped} skipped`;
+          document.getElementById('testResultBar').style.display = 'flex';
+          document.getElementById('testStatus').textContent = ok ? '✓ All suites passed' : `✗ ${evt.failed} test(s) failed`;
+          document.getElementById('testStatus').style.color = ok ? '#4ade80' : '#f87171';
+          _appendLog('', null);
+          _appendLog(ok ? '✓ Run complete — all tests passed.' : `✗ Run complete — ${evt.failed} failed.`,
+                     ok ? '#4ade80' : '#f87171');
+        } else if (evt.type === 'error') {
+          _appendLog(`Error: ${evt.text}`, '#f87171');
+        }
+      }
+    }
+  } catch (err) {
+    _appendLog(`Network error: ${err.message}`, '#f87171');
+  }
+
+  _testRunning = false;
+  _updateRunBtn();
+  document.getElementById('testRunBtn').textContent = '▶ Run Selected';
+}
+
 </script>
 
 <!-- ── S2T Full Mapping Modal ───────────────────────────────────── -->
