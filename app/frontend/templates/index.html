@@ -443,6 +443,25 @@
 
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
     </div>
+
+    <!-- ── Sidebar footer: persona + sign out ── -->
+    <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div id="sidebarAvatar"
+             style="width:32px;height:32px;border-radius:50%;background:rgba(108,99,255,.25);color:#a5b4fc;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">?</div>
+        <div style="min-width:0">
+          <div id="sidebarName" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">User</div>
+          <div id="sidebarRole" style="font-size:11px;color:var(--muted)">–</div>
+        </div>
+      </div>
+      <a href="/logout" style="text-decoration:none">
+        <button style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--border);background:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:color .15s,border-color .15s,background .15s"
+                onmouseover="this.style.color='var(--danger)';this.style.borderColor='var(--danger)';this.style.background='rgba(248,113,113,.06)'"
+                onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)';this.style.background='none'">
+          ↩ Sign out
+        </button>
+      </a>
+    </div>
   </aside>
 
   <!-- ── Main Panel ───────────────────────── -->
@@ -747,13 +766,21 @@ function initPersonaUI() {
   const name = getPersonaCookie();
   const meta = PERSONA_META[name] || { role: '', initials: (name[0] || '?').toUpperCase(),
                                         color: 'rgba(108,99,255,.25)', fg: '#a5b4fc' };
-  // Nav chip
+  // Top nav chip
   const av = document.getElementById('personaAvatarNav');
   const nm = document.getElementById('personaNameNav');
   const rl = document.getElementById('personaRoleNav');
   if (av) { av.textContent = meta.initials; av.style.background = meta.color; av.style.color = meta.fg; }
   if (nm) nm.textContent = name;
   if (rl) rl.textContent = meta.role;
+
+  // Sidebar footer
+  const sav = document.getElementById('sidebarAvatar');
+  const snm = document.getElementById('sidebarName');
+  const srl = document.getElementById('sidebarRole');
+  if (sav) { sav.textContent = meta.initials; sav.style.background = meta.color; sav.style.color = meta.fg; }
+  if (snm) snm.textContent = name;
+  if (srl) srl.textContent = meta.role;
 
   // Landing greeting
   const firstName = name.split(' ')[0];
