@@ -1,0 +1,30 @@
+{
+  "name": "informaticaconversion",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report tests/playwright/report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ad25343/InformaticaConversion.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ad25343/InformaticaConversion/issues"
+  },
+  "homepage": "https://github.com/ad25343/InformaticaConversion#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.51.0"
+  }
+}

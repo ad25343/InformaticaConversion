@@ -48,3 +48,6 @@ informatica_conversion_tool_prompt_v4.md
 # ── Claude worktree artifacts ──────────────────────────────────────────────────
 .claude/
 **/.claude/
+node_modules/
+tests/playwright/report/
+test-results/
