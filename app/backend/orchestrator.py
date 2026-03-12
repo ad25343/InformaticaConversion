@@ -308,15 +308,17 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.claude_call(3, "documentation generation")
 
     # G6: Check if this step should be skipped per org_config pipeline_options
-    _pattern = state.get("pattern_classification", {}).get("pattern")
-    _tier = state.get("complexity", {}).get("tier")
+    # NOTE: pattern_classification is determined later (gate review); use None here.
+    #       complexity is already available as a local variable from step 2.
+    _pattern = None
+    _tier = complexity.tier.value if complexity else None
     if should_skip_step(3, pattern=_pattern, tier=_tier):
         _orch_log.info("Step 3 (documentation) skipped per pipeline_options config")
         log.info("Step 3 skipped per org_config pipeline_options", step=3)
-        state["documentation_md"] = "(skipped per org config)"
-        state["doc_truncated"] = False
-        yield await emit(3, JobStatus.DOCUMENTING, "Documentation skipped per org config")
         documentation_md = "(skipped per org config)"
+        doc_truncated = False
+        yield await emit(3, JobStatus.DOCUMENTING, "Documentation skipped per org config",
+                         {"documentation_md": documentation_md, "doc_truncated": doc_truncated})
     else:
         yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
 
@@ -343,6 +345,10 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
                     f"Generating documentation — {_pass_hint} ({_elapsed_str} elapsed)",
                 )
                 continue
+            except Exception:
+                # Non-timeout exception from the shielded task (e.g. API error).
+                # Break out so _doc_task.result() re-raises it through the handler below.
+                break
             break  # task completed normally
 
         try:
