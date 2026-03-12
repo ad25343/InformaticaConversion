@@ -9,11 +9,11 @@ const { test, expect } = require('@playwright/test');
 const { login, logout, PERSONAS, APP_PASSWORD } = require('./helpers');
 
 // ─── AUTH-01: Login page structure ───────────────────────────────────────────
-test('AUTH-01: login page shows 4 persona cards', async ({ page }) => {
+test('AUTH-01: login page shows 5 persona cards', async ({ page }) => {
   await page.goto('/login');
 
   const cards = page.locator('.persona-option');
-  await expect(cards).toHaveCount(4);
+  await expect(cards).toHaveCount(5);
 
   for (const p of PERSONAS) {
     await expect(page.locator('.persona-option').filter({ hasText: p.name })).toBeVisible();
@@ -85,7 +85,7 @@ test('AUTH-04: wrong password shows error, stays on login page', async ({ page }
   expect(sessionCookie).toBeFalsy();
 });
 
-// ─── AUTH-05: All 4 personas can log in ──────────────────────────────────────
+// ─── AUTH-05: All 5 personas can log in ──────────────────────────────────────
 for (const persona of PERSONAS) {
   test(`AUTH-05: persona "${persona.name}" logs in successfully`, async ({ browser }) => {
     // Each persona gets its own isolated browser context (no shared cookies)

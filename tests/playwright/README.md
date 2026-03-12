@@ -14,6 +14,9 @@ Set your server password in the environment before running:
 export APP_PASSWORD="your-password-here"
 ```
 
+> **Note:** `APP_PASSWORD` is a single shared password for the entire app — all personas
+> use the same value. Persona selection on the login page controls identity only.
+
 ## Running tests
 
 ```bash
@@ -67,9 +70,13 @@ integration pass with a real API key.
 
 ## Personas used
 
-| Persona | Role | Used in |
-|---------|------|---------|
-| Aravind Doma | Data Engineer | Most submission/history/security tests |
-| Sarah Chen | Migration Lead | Review queue tests |
-| James Park | Security Architect | Navigation, review tests |
-| Maya Patel | Platform Engineer | Landing page tests |
+| Persona | Role | Gate | Used in |
+|---------|------|------|---------|
+| Asin D | Data Engineer | — (Admin / Submitter) | Auth, submission, history, security |
+| Priya Nair | Business Analyst | Gate 1 — business logic review | Auth, review queue |
+| James Park | Security Architect | Gate 2 — security findings | Auth, navigation, review |
+| Sarah Chen | Migration Lead | Gate 3 — release sign-off | Auth, review queue |
+| Maya Patel | Platform Engineer | — (Submitter) | Auth, landing page |
+
+All five personas share the same `APP_PASSWORD`. AUTH-05 iterates through every persona
+to verify each can log in and renders the correct name, role, and cookie value.

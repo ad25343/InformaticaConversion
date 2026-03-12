@@ -27,7 +27,7 @@ pip install bandit
 cp .env.example .env
 # Open .env and fill in:
 #   ANTHROPIC_API_KEY  — get one at https://console.anthropic.com
-#   APP_PASSWORD       — login password for the web UI
+#   APP_PASSWORD       — shared login password (all personas use the same value)
 #   SECRET_KEY         — any long random string for session signing
 
 # 4. Start the server
@@ -242,7 +242,7 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | Yes | — | Claude API key |
-| `APP_PASSWORD` | Yes | — | Web UI login password |
+| `APP_PASSWORD` | Yes | — | Shared login password for the web UI. All personas use the same value — persona selection controls identity only, not authentication. |
 | `SECRET_KEY` | Yes | — | Session signing key (any long random string) |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-5-20250929` | Override Claude model |
 | `HOST` | No | `0.0.0.0` | Server bind address |
