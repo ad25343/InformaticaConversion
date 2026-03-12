@@ -878,9 +878,15 @@ function setMainView(view) {
     }
   });
   if (view === 'review')  loadReviewQueue();
-  if (view === 'history') loadHistory();
+  if (view === 'history') { loadHistory(); }
+  if (view !== 'history') _stopHistLive();
   if (view === 'landing') loadLandingStats();
   if (view === 'tests')   initTestRunner();
+  // Remove stale "Back to History" bar when switching away from the detail view
+  if (view !== 'dashboard') {
+    const bb = document.getElementById('histBackBar');
+    if (bb) bb.remove();
+  }
 }
 
 // ── Landing stats ──────────────────────────────
@@ -1037,9 +1043,11 @@ startBtn.addEventListener('click', async () => {
           batchWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
           batchWarnings.style.display = 'block';
         }
-        setMainView('dashboard');
+        const n = data.jobs ? data.jobs.length : '?';
+        showToast('✓ Batch queued', `${n} mapping${n !== 1 ? 's' : ''} submitted — track each one in Job History.`, 'ok', 6000);
+        resetSubmitForm();
         await loadJobs();
-        if (data.jobs && data.jobs.length) openJob(data.jobs[0].job_id);
+        if (_mainView === 'history') loadHistory();
       } else {
         alert('Batch upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1064,9 +1072,10 @@ startBtn.addEventListener('click', async () => {
           zipWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
           zipWarnings.style.display = 'block';
         }
-        setMainView('dashboard');
+        showToast('✓ ZIP queued', `${selectedZipFile.name} is processing — track it in Job History.`, 'ok', 6000);
+        resetSubmitForm();
         await loadJobs();
-        openJob(data.job_id);
+        if (_mainView === 'history') loadHistory();
       } else {
         alert('ZIP upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1089,13 +1098,11 @@ startBtn.addEventListener('click', async () => {
       const res  = await fetch('/api/jobs', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.job_id) {
-        selectedWorkflowFile = null; selectedParamFile = null;
-        workflowLabel.textContent = 'Drop Workflow .xml or click';
-        paramLabel.textContent    = 'Drop parameter file or click';
-        dropzoneWF.style.borderColor = ''; dropzonePF.style.borderColor = '';
-        setMainView('dashboard');
+        const fname = selectedFile ? selectedFile.name : 'file';
+        showToast('✓ Job queued', `${fname} is processing — track it in Job History.`, 'ok', 6000);
+        resetSubmitForm();
         await loadJobs();
-        openJob(data.job_id);
+        if (_mainView === 'history') loadHistory();
       } else {
         alert('Upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1116,6 +1123,41 @@ let _allJobs    = [];
 let _allHistory = [];
 let _jobPage    = 0;
 const _JOB_PAGE_SIZE = 30;
+
+// ─────────────────────────────────────────────
+// Submit form reset helper
+// ─────────────────────────────────────────────
+function resetSubmitForm() {
+  // Clear all file selections
+  selectedFile         = null;
+  selectedZipFile      = null;
+  selectedBatchFile    = null;
+  selectedWorkflowFile = null;
+  selectedParamFile    = null;
+
+  // Reset dropzone labels
+  const xmlLabel   = document.getElementById('xmlLabel');
+  const zipLabel   = document.getElementById('zipLabel');
+  const batchLabel = document.getElementById('batchLabel');
+  if (xmlLabel)   xmlLabel.textContent   = 'Drop Mapping .xml or click';
+  if (zipLabel)   zipLabel.textContent   = 'Drop ZIP or click';
+  if (batchLabel) batchLabel.textContent = 'Drop batch ZIP or click';
+
+  const wfLabel = document.getElementById('wfLabel');
+  const pfLabel = document.getElementById('pfLabel');
+  if (wfLabel) wfLabel.textContent = 'Drop Workflow .xml or click';
+  if (pfLabel) pfLabel.textContent = 'Drop parameter file or click';
+
+  // Reset dropzone borders
+  ['dropzoneXML','dropzoneZIP','dropzoneBatch','dropzoneWF','dropzonePF'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.borderColor = '';
+  });
+
+  // Re-enable + re-label start button
+  const startBtn = document.getElementById('startBtn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = '▶ Start Pipeline'; }
+}
 
 async function loadJobs() {
   try {
@@ -1220,6 +1262,115 @@ async function loadHistory() {
   } catch(e) { /* ignore */ }
 }
 
+// ── Live-refresh timer for History panel ─────────────────────────────────
+let _histLiveTimer = null;
+
+function _startHistLive() {
+  if (_histLiveTimer) return;
+  const _RUNNING = new Set(['pending','parsing','classifying','documenting','verifying',
+    'assigning_stack','converting','security_scanning','validating','reviewing','testing']);
+  _histLiveTimer = setInterval(async () => {
+    if (_mainView !== 'history') { _stopHistLive(); return; }
+    await loadHistory();
+    const hasLive = _histJobs.some(j => _RUNNING.has(j.status));
+    if (!hasLive) _stopHistLive();
+  }, 5000);
+}
+
+function _stopHistLive() {
+  if (_histLiveTimer) { clearInterval(_histLiveTimer); _histLiveTimer = null; }
+}
+
+// ── Single job row ────────────────────────────────────────────────────────
+function _histJobRow(j, indent) {
+  const [cls, lbl] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+  const dt = j.created_at ? new Date(j.created_at).toLocaleDateString('en-US',
+    {month:'short',day:'numeric',year:'numeric'}) : '—';
+  const tier = j.complexity_tier
+    ? `<span style="font-size:11px;padding:2px 7px;border-radius:99px;background:var(--surface2);border:1px solid var(--border)">${esc(j.complexity_tier)}</span>`
+    : '<span style="color:var(--muted)">—</span>';
+  const indentStyle = indent ? 'padding-left:28px;' : '';
+  const arrow = indent ? '<span style="color:var(--muted);margin-right:6px;font-size:11px">↳</span>' : '';
+  return `<tr style="border-top:1px solid var(--border);cursor:pointer"
+              onclick="openJobFromHistory('${j.job_id}')"
+              onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
+    <td style="padding:10px 14px;font-weight:${indent?'400':'500'};max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${indentStyle}">${arrow}${esc(j.filename)}</td>
+    <td style="padding:10px 14px;color:${j.submitter_name?'var(--text)':'var(--muted)'}">${esc(j.submitter_name||'—')}</td>
+    <td style="padding:10px 14px;color:${j.submitter_team?'var(--text)':'var(--muted)'};font-size:12px">${esc(j.submitter_team||'—')}</td>
+    <td style="padding:10px 14px;color:${j.submitter_notes?'var(--text)':'var(--muted)'};font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.submitter_notes||'—')}</td>
+    <td style="padding:10px 14px"><span class="badge ${cls}">${lbl}</span></td>
+    <td style="padding:10px 14px">${tier}</td>
+    <td style="padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap">${dt}</td>
+    <td style="padding:10px 14px">
+      <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px"
+              onclick="event.stopPropagation();openJobFromHistory('${j.job_id}')">View</button>
+    </td>
+  </tr>`;
+}
+
+// ── Batch group (collapsible header + child rows) ─────────────────────────
+function _histBatchGroup(batchId, jobs) {
+  const total   = jobs.length;
+  const done    = jobs.filter(j => j.status === 'complete').length;
+  const failed  = jobs.filter(j => j.status === 'failed').length;
+  const running = total - done - failed;
+  const overallCls = failed   ? 'badge-failed'
+                   : running  ? 'badge-running'
+                   : done === total ? 'badge-complete' : 'badge-pending';
+  const overallLbl = failed   ? `${failed} failed`
+                   : running  ? `${running} running`
+                   : 'Complete';
+  const dt = jobs[0]?.created_at ? new Date(jobs[0].created_at).toLocaleDateString('en-US',
+    {month:'short',day:'numeric',year:'numeric'}) : '—';
+  const batchKey = batchId.replace(/[^a-zA-Z0-9]/g, '_');
+  const childId  = `batchChildren_${batchKey}`;
+  const arrowId  = `batchArrow_${batchKey}`;
+  const childRows = jobs.map(j => _histJobRow(j, true)).join('');
+
+  return `
+  <tr style="background:rgba(108,99,255,.07);cursor:pointer;border-top:2px solid rgba(108,99,255,.3)"
+      onclick="toggleBatchGroup('${childId}','${arrowId}')"
+      onmouseenter="this.style.background='rgba(108,99,255,.13)'" onmouseleave="this.style.background='rgba(108,99,255,.07)'">
+    <td colspan="8" style="padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="${arrowId}" style="font-size:11px;color:var(--muted);transition:transform .2s;display:inline-block">▶</span>
+        <span style="font-size:12px;font-weight:700;letter-spacing:.3px">📦 Batch</span>
+        <span style="font-size:11px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(batchId)}</span>
+        <span style="font-size:11px;color:var(--muted)">${total} mapping${total!==1?'s':''}</span>
+        <span class="badge ${overallCls}">${overallLbl}</span>
+        <span style="font-size:11px;color:var(--muted)">${dt}</span>
+      </div>
+    </td>
+  </tr>
+  <tr id="${childId}" style="display:none"><td colspan="8" style="padding:0">
+    <table style="width:100%;border-collapse:collapse">${childRows}</table>
+  </td></tr>`;
+}
+
+function toggleBatchGroup(childId, arrowId) {
+  const child = document.getElementById(childId);
+  const arrow = document.getElementById(arrowId);
+  if (!child) return;
+  const open = child.style.display !== 'none';
+  child.style.display = open ? 'none' : '';
+  if (arrow) arrow.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+// ── Open job from History (adds Back button context) ──────────────────────
+function openJobFromHistory(jobId) {
+  setMainView('dashboard');
+  openJob(jobId);
+  // Insert Back button at the top of the rendered dashboard
+  const panel = document.getElementById('panelDashboard');
+  if (panel) {
+    const backBar = document.createElement('div');
+    backBar.id = 'histBackBar';
+    backBar.style.cssText = 'padding:10px 0 0 0;margin-bottom:-8px';
+    backBar.innerHTML = `<button class="btn btn-sm btn-ghost" onclick="setMainView('history');loadHistory()" style="font-size:12px">← Back to History</button>`;
+    panel.insertBefore(backBar, panel.firstChild);
+  }
+}
+
 function applyHistoryFilter() {
   const query  = (document.getElementById('histSearchInput')?.value  || '').trim().toLowerCase();
   const status = (document.getElementById('histStatusFilter')?.value || '').trim();
@@ -1250,32 +1401,29 @@ function applyHistoryFilter() {
   const tbody = document.getElementById('historyTableBody');
   if (!tbody) return;
 
+  // ── Separate batch vs standalone ──────────────────────────────────────
+  const batchMap = {};
+  const standalone = [];
+  for (const j of slice) {
+    if (j.batch_id) {
+      (batchMap[j.batch_id] = batchMap[j.batch_id] || []).push(j);
+    } else {
+      standalone.push(j);
+    }
+  }
+
   if (!slice.length) {
     tbody.innerHTML = `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--muted)">
       No jobs found${query || status ? ' matching your filters' : ''}.</td></tr>`;
   } else {
-    tbody.innerHTML = slice.map(j => {
-      const [cls, lbl] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
-      const dt = j.created_at ? new Date(j.created_at).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : '—';
-      const tier = j.complexity_tier
-        ? `<span style="font-size:11px;padding:2px 7px;border-radius:99px;background:var(--surface2);border:1px solid var(--border)">${esc(j.complexity_tier)}</span>`
-        : '<span style="color:var(--muted)">—</span>';
-      return `<tr style="border-top:1px solid var(--border);cursor:pointer" onclick="setMainView('dashboard'); openJob('${j.job_id}')"
-                  onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
-        <td style="padding:10px 14px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.filename)}</td>
-        <td style="padding:10px 14px;color:${j.submitter_name ? 'var(--text)' : 'var(--muted)'}">${esc(j.submitter_name || '—')}</td>
-        <td style="padding:10px 14px;color:${j.submitter_team ? 'var(--text)' : 'var(--muted)'};font-size:12px">${esc(j.submitter_team || '—')}</td>
-        <td style="padding:10px 14px;color:${j.submitter_notes ? 'var(--text)' : 'var(--muted)'};font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.submitter_notes || '—')}</td>
-        <td style="padding:10px 14px"><span class="badge ${cls}">${lbl}</span></td>
-        <td style="padding:10px 14px">${tier}</td>
-        <td style="padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap">${dt}</td>
-        <td style="padding:10px 14px">
-          <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px"
-                  onclick="event.stopPropagation(); setMainView('dashboard'); openJob('${j.job_id}')">View</button>
-        </td>
-      </tr>`;
-    }).join('');
+    const batchHtml = Object.entries(batchMap).map(([bid, bj]) => _histBatchGroup(bid, bj)).join('');
+    const soloHtml  = standalone.map(j => _histJobRow(j, false)).join('');
+    tbody.innerHTML  = batchHtml + soloHtml;
   }
+
+  // Start live-refresh if any visible jobs are running
+  const hasLive = filtered.some(j => _RUNNING.has(j.status));
+  if (hasLive) _startHistLive(); else _stopHistLive();
 
   // Pagination controls
   const info    = document.getElementById('histPageInfo');
