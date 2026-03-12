@@ -22,8 +22,25 @@
     .main { padding: 32px; overflow-y: auto; }
 
     /* ── Header ── */
-    .logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 4px; }
+    .logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
     .logo-sub { font-size: 11px; color: var(--muted); }
+    /* ── Notification bell ─────────────────────────────────────────────── */
+    .notif-bell { position: relative; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; transition: background .15s; }
+    .notif-bell:hover { background: var(--surface2); }
+    .notif-badge { position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; border-radius: 8px; display: flex; align-items: center; justify-content: center; padding: 0 3px; line-height: 1; pointer-events: none; }
+    /* ── Toast notifications ───────────────────────────────────────────── */
+    #toastContainer { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+    .toast { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px 16px; min-width: 280px; max-width: 380px; box-shadow: 0 4px 12px rgba(0,0,0,.25); pointer-events: all; display: flex; align-items: flex-start; gap: 10px; animation: toastIn .2s ease; }
+    .toast.toast-warn  { border-left-color: #f59e0b; }
+    .toast.toast-error { border-left-color: #ef4444; }
+    .toast.toast-ok    { border-left-color: #22c55e; }
+    .toast-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .toast-body { flex: 1; }
+    .toast-title { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+    .toast-msg   { font-size: 12px; color: var(--muted); line-height: 1.4; }
+    .toast-close { cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; flex-shrink: 0; margin-top: -1px; }
+    .toast-close:hover { color: var(--text); }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
     hr { border: none; border-top: 1px solid var(--border); }
 
     /* ── Upload zone ── */
@@ -271,12 +288,22 @@
   </style>
 </head>
 <body>
+<!-- ── Toast notification container ──────────────────────────────────── -->
+<div id="toastContainer"></div>
+
 <div class="app">
 
   <!-- ── Sidebar ─────────────────────────── -->
   <aside class="sidebar">
     <div>
-      <div class="logo">⚡ Informatica Converter</div>
+      <div class="logo">
+        <span>⚡ Informatica Converter</span>
+        <span class="notif-bell" id="notifBell" title="Pending gate reviews"
+              onclick="setUploadMode('review')" style="display:none">
+          🔔
+          <span class="notif-badge" id="notifBadge">0</span>
+        </span>
+      </div>
       <div class="logo-sub">PowerCenter → Python / PySpark / dbt</div>
     </div>
     <hr/>
@@ -2936,11 +2963,75 @@ function startReviewQueueAutoRefresh() {
 }
 startReviewQueueAutoRefresh();
 
+// ══════════════════════════════════════════════
+// UI Notifications — bell badge + toasts
+// ══════════════════════════════════════════════
+
+let _prevGatePending = 0;   // track count between polls to detect new arrivals
+
+// ── Toast helper ──────────────────────────────
+function showToast(title, msg, type = 'info', durationMs = 6000) {
+  const icons = { info: 'ℹ️', warn: '⚠️', error: '🔴', ok: '✅' };
+  const container = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `
+    <span class="toast-icon">${icons[type] || 'ℹ️'}</span>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      ${msg ? `<div class="toast-msg">${msg}</div>` : ''}
+    </div>
+    <span class="toast-close" onclick="this.closest('.toast').remove()">✕</span>`;
+  container.appendChild(t);
+  if (durationMs > 0) setTimeout(() => t.remove(), durationMs);
+}
+
+// ── Bell badge updater ────────────────────────
+async function updateNotifBell() {
+  try {
+    const res = await fetch('/api/gates/pending');
+    if (!res.ok) return;
+    const data = await res.json();
+    const total = data.total ?? 0;
+
+    const bell  = document.getElementById('notifBell');
+    const badge = document.getElementById('notifBadge');
+    if (!bell || !badge) return;
+
+    if (total > 0) {
+      badge.textContent = total > 99 ? '99+' : String(total);
+      bell.style.display = '';
+    } else {
+      bell.style.display = 'none';
+    }
+
+    // Update browser tab title
+    const base = 'Informatica Conversion Tool';
+    document.title = total > 0 ? `(${total}) ${base}` : base;
+
+    // Toast when the count rises (new jobs arrived at a gate)
+    if (total > _prevGatePending && _prevGatePending !== null) {
+      const newCount = total - _prevGatePending;
+      showToast(
+        `${newCount} job${newCount > 1 ? 's' : ''} waiting for review`,
+        `${total} total pending in the gate queue. Open Review Queue to sign off.`,
+        'warn',
+        8000
+      );
+    }
+    _prevGatePending = total;
+  } catch (e) { /* non-fatal */ }
+}
+
 // ─────────────────────────────────────────────
 // Init
 // ─────────────────────────────────────────────
 loadJobs();
 setInterval(loadJobs, 5000);
+
+// Notify bell: poll every 30 s, run immediately on load
+updateNotifBell();
+setInterval(updateNotifBell, 30000);
 
 // Load security KB badge once on startup
 (async () => {

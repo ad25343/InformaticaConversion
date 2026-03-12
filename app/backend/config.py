@@ -86,6 +86,33 @@ class Settings(BaseSettings):
     # Override for GitHub Enterprise Server (include /api/v3 path if required)
     github_api_url: str = "https://api.github.com"
 
+    # ── Email notifications (v2.17.2) ───────────────────────────────────────
+    # Set SMTP_HOST to enable email alerts on gate pauses and job failures.
+    # No dedicated mail server required — relay through an existing SMTP
+    # provider (Office 365, Exchange, Gmail, SendGrid, AWS SES, etc.).
+    #
+    # Triggers (when configured):
+    #   • Job reaches Gate 1 / 2 / 3 — email sent to NOTIFY_GATE_EMAILS list
+    #   • Job reaches FAILED or BLOCKED terminal state — same list
+    #
+    # Example .env:
+    #   SMTP_HOST=smtp.office365.com
+    #   SMTP_PORT=587
+    #   SMTP_USER=ict-noreply@myorg.com
+    #   SMTP_PASSWORD=<app-password>
+    #   SMTP_FROM=ict-noreply@myorg.com
+    #   SMTP_TLS=true                     # STARTTLS on port 587 (default)
+    #   SMTP_SSL=false                    # SSL on port 465; mutually exclusive with SMTP_TLS
+    #   NOTIFY_GATE_EMAILS=reviewer1@myorg.com,reviewer2@myorg.com
+    smtp_host:           str  = ""       # empty = email notifications disabled
+    smtp_port:           int  = 587
+    smtp_user:           str  = ""
+    smtp_password:       str  = ""
+    smtp_from:           str  = ""       # defaults to smtp_user if left empty
+    smtp_tls:            bool = True     # STARTTLS (port 587) — most common
+    smtp_ssl:            bool = False    # Direct SSL (port 465) — mutually exclusive
+    notify_gate_emails:  str  = ""       # comma-separated recipient list
+
     # ── Webhook notifications ────────────────────────────────────────────────
     # Set WEBHOOK_URL to receive a JSON POST at gate pauses, job completion,
     # and hard failures.  Works with Slack/Teams incoming webhooks, PagerDuty,
@@ -160,7 +187,7 @@ class Settings(BaseSettings):
     # ── Application version ─────────────────────────────────────────────────
     # Single source of truth — referenced by main.py, routes.py, and the health endpoint.
     # Bump this string on every release; do NOT hard-code versions elsewhere.
-    app_version: str = "2.15.0"
+    app_version: str = "2.17.2"
 
     # ── Agent tuning ────────────────────────────────────────────────────────
     # Override documentation token budget for testing truncation behaviour.

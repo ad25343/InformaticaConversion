@@ -10,6 +10,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.2] — 2026-03-12 — Email + UI Notifications
+
+Closes the "I didn't know jobs were waiting" gap.  Reviewers now receive an
+email when jobs hit any gate or reach a terminal failure state, and the UI
+shows a live bell badge without requiring the Review Queue tab to be open.
+
+### Added
+
+**Email notifications (`backend/notify.py`)**
+Async SMTP via `aiosmtplib`.  No dedicated mail server required — relay
+through any existing SMTP provider (Office 365, Exchange, Gmail, SendGrid,
+AWS SES).  Fires on the same events as the existing webhook channel:
+`gate_waiting` (Gate 1 / 2 / 3), `job_failed`, `job_complete`.
+Branded HTML + plain-text multipart emails; all send failures are non-fatal.
+
+New config keys (all optional — email is disabled if `SMTP_HOST` is unset):
+  - `SMTP_HOST` / `SMTP_PORT` (default 587) / `SMTP_USER` / `SMTP_PASSWORD`
+  - `SMTP_FROM` — defaults to `SMTP_USER` if empty
+  - `SMTP_TLS` (default `true`) — STARTTLS on port 587
+  - `SMTP_SSL` (default `false`) — direct SSL on port 465
+  - `NOTIFY_GATE_EMAILS` — comma-separated recipient list
+
+**UI notification bell**
+Bell icon (🔔) in the sidebar header showing a live count of pending gate
+jobs.  Hidden when the queue is empty; clicking it jumps to the Review Queue
+tab.  Browser tab title also prefixed with the count, e.g.
+`(3) Informatica Conversion Tool`.
+
+**Toast notifications**
+Non-blocking slide-in toasts (bottom-right) fire whenever the pending gate
+count increases — surfacing new arrivals without interrupting the current
+view.  Auto-dismiss after 8 seconds; manually dismissible.  Both bell and
+toasts poll `/api/gates/pending` every 30 seconds (piggy-backing the
+existing Review Queue refresh cycle).
+
+---
+
+---
+
 ## [2.17.1] — 2026-03-12 — Batch Gate Review + Migration Progress
 
 Addresses the review bottleneck at scale. At 500 mappings, up to 150 jobs can be waiting
