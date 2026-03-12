@@ -500,7 +500,7 @@
     </nav>
 
     <!-- ── Landing page ── -->
-    <div id="panelLanding" style="flex:1;overflow-y:auto">
+    <div id="panelLanding" style="display:none;flex:1;overflow-y:auto">
       <div class="landing-wrap">
         <div class="landing-greeting" id="landingGreeting">Welcome back</div>
         <div class="landing-sub">What would you like to do today?</div>
@@ -807,7 +807,10 @@ const PERSONA_META = {
 
 function getPersonaCookie() {
   const m = document.cookie.match(/(?:^|;\s*)persona=([^;]+)/);
-  return m ? decodeURIComponent(m[1]) : 'User';
+  if (!m) return 'User';
+  // HTTP Set-Cookie quotes values containing spaces (RFC 6265)
+  // strip surrounding double-quotes if present: "Asin D" → Asin D
+  return decodeURIComponent(m[1]).replace(/^"|"$/g, '');
 }
 
 function initPersonaUI() {
@@ -856,10 +859,12 @@ function setMainView(view) {
     const panel = document.getElementById('panel' + v.charAt(0).toUpperCase() + v.slice(1));
     if (panel) {
       if (v === view) {
-        panel.style.display = (v === 'review') ? 'flex' : 'flex';
-        panel.style.flexDirection = (v === 'review') ? 'column' : '';
-        if (v !== 'review') panel.style.flex = '1';
-        if (v !== 'review') panel.style.overflowY = 'auto';
+        panel.style.display = 'flex';
+        // Only explicitly override flex-direction for panels that need 'column'.
+        // Others keep whatever flex-direction their HTML inline style defines.
+        if (v === 'review' || v === 'tests') panel.style.flexDirection = 'column';
+        panel.style.flex = '1';
+        panel.style.overflowY = 'auto';
       } else {
         panel.style.display = 'none';
       }
