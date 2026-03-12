@@ -272,6 +272,7 @@ async def health_check():
 
 
 _VALID_PERSONAS = {
+    "Priya Nair",
     "Asin D",
     "Sarah Chen",
     "James Park",

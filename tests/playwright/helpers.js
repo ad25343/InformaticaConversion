@@ -10,8 +10,9 @@ const BASE_URL    = process.env.APP_URL      || 'http://localhost:8000';
 const APP_PASSWORD = process.env.APP_PASSWORD || 'test-password';
 
 const PERSONAS = [
-  { name: 'Asin D', role: 'Data Engineer',     initials: 'AD' },
-  { name: 'Sarah Chen',   role: 'Migration Lead',     initials: 'SC' },
+  { name: 'Asin D',     role: 'Data Engineer',     initials: 'AD' },
+  { name: 'Priya Nair',  role: 'Business Analyst',  initials: 'PN' },
+  { name: 'Sarah Chen',  role: 'Migration Lead',     initials: 'SC' },
   { name: 'James Park',   role: 'Security Architect', initials: 'JP' },
   { name: 'Maya Patel',   role: 'Platform Engineer',  initials: 'MP' },
 ];
