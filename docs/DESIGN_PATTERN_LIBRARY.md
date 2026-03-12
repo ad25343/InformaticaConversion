@@ -1025,6 +1025,30 @@ a better path for the majority of mappings.
 - `ComplexityReport` extended with `suggested_pattern`, `pattern_confidence`,
   `pattern_rationale` (optional, backward-compatible)
 
+### v2.17.0 — Pattern signal externalisation (G1)
+
+The keyword lists that drive pattern matching in `_classify_pattern()` are no longer
+hard-coded. As of v2.17.0 they are loaded from `app/config/org_config.yaml →
+pattern_signals` via `org_config_loader.get_pattern_signals()`. Organisations with
+non-standard naming conventions can extend the SCD2, upsert, and incremental-append
+signal lists without forking the classifier.
+
+```yaml
+# app/config/org_config.yaml
+pattern_signals:
+  scd2:
+    target_name_contains: ["_HIST", "_ARCHIVE"]
+  upsert:
+    target_name_contains: ["_MERGE", "_UPSERT"]
+  incremental_append:
+    target_name_contains: ["_DELTA", "_INC"]
+  expression_complexity:
+    additional_indicators: ["DECODE", "INSTR"]
+```
+
+Built-in signal lists remain unchanged and are used as defaults when no config is
+present — fully backwards-compatible with v2.16.0.
+
 ---
 
 ## 12. Future Roadmap (Out of Scope for v2.16.0)

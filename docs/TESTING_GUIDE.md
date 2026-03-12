@@ -1,6 +1,6 @@
 # Testing Guide — Informatica Conversion Tool
 
-> **Version:** 2.15.0
+> **Version:** 2.17.0
 > **Audience:** Data engineers and QA teams working with converted Informatica mappings
 
 ---
