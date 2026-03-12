@@ -246,6 +246,57 @@
     /* ── Info box ── */
     .info-box { background: rgba(108,99,255,.07); border: 1px solid rgba(108,99,255,.25); border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #a5b4fc; margin-bottom: 12px; }
 
+    /* ── Landing page cards ── */
+    .landing-wrap { max-width: 880px; margin: 0 auto; padding: 48px 32px; }
+    .landing-greeting { font-size: 26px; font-weight: 700; margin-bottom: 6px; }
+    .landing-sub { font-size: 14px; color: var(--muted); margin-bottom: 40px; }
+    .action-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 40px; }
+    .action-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 24px; cursor: pointer;
+      transition: border-color .2s, transform .15s, background .2s;
+      text-align: left;
+    }
+    .action-card:hover {
+      border-color: var(--accent); background: rgba(108,99,255,.05);
+      transform: translateY(-2px);
+    }
+    .action-card-icon { font-size: 32px; margin-bottom: 14px; display: block; }
+    .action-card-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .action-card-desc  { font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .action-card-cta   { display: inline-block; margin-top: 16px; font-size: 12px;
+                         font-weight: 700; color: var(--accent); letter-spacing: .2px; }
+    .landing-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .landing-stat {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 16px; text-align: center;
+    }
+    .landing-stat-val   { font-size: 28px; font-weight: 800; }
+    .landing-stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Persona chip in nav ── */
+    .persona-chip {
+      display: flex; align-items: center; gap: 8px; margin-left: auto;
+      padding: 6px 10px; border-radius: 8px; cursor: pointer;
+      transition: background .15s;
+    }
+    .persona-chip:hover { background: var(--surface2); }
+    .persona-avatar-sm {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; flex-shrink: 0;
+      background: rgba(108,99,255,.25); color: #a5b4fc;
+    }
+    .persona-chip-name { font-size: 12px; font-weight: 600; }
+    .persona-chip-role { font-size: 10px; color: var(--muted); }
+    .logout-btn {
+      padding: 6px 12px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: none; color: var(--muted); cursor: pointer;
+      transition: color .15s, border-color .15s; margin: 8px;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--text); }
+
     /* ── Responsive ── */
     @media (max-width: 768px) {
       .app { grid-template-columns: 1fr; }
@@ -399,9 +450,13 @@
 
     <!-- Top nav -->
     <nav style="display:flex;align-items:center;gap:0;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0">
+      <button id="navHome" onclick="setMainView('landing')"
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        ⚡ Home
+      </button>
       <button id="navDashboard" onclick="setMainView('dashboard')"
-              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid var(--accent);background:none;color:var(--accent);cursor:pointer">
-        🏠 Dashboard
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        🏠 Submit
       </button>
       <button id="navHistory" onclick="setMainView('history')"
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
@@ -411,14 +466,73 @@
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
         👁 Review Queue <span id="navReviewBadge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px">0</span>
       </button>
+      <!-- Persona chip (right side) -->
+      <div class="persona-chip" id="personaChip" style="margin-left:auto" title="Signed in as…">
+        <div class="persona-avatar-sm" id="personaAvatarNav">?</div>
+        <div>
+          <div class="persona-chip-name" id="personaNameNav">User</div>
+          <div class="persona-chip-role" id="personaRoleNav">–</div>
+        </div>
+      </div>
+      <a href="/logout"><button class="logout-btn">Sign out</button></a>
     </nav>
 
+    <!-- ── Landing page ── -->
+    <div id="panelLanding" style="flex:1;overflow-y:auto">
+      <div class="landing-wrap">
+        <div class="landing-greeting" id="landingGreeting">Welcome back</div>
+        <div class="landing-sub">What would you like to do today?</div>
+
+        <!-- Action cards -->
+        <div class="action-cards">
+          <div class="action-card" onclick="setMainView('dashboard')">
+            <span class="action-card-icon">📤</span>
+            <div class="action-card-title">Submit a Conversion</div>
+            <div class="action-card-desc">Upload an Informatica mapping XML and run the 12-step pipeline to generate production-ready code.</div>
+            <span class="action-card-cta">Upload &amp; start →</span>
+          </div>
+          <div class="action-card" onclick="setMainView('review')">
+            <span class="action-card-icon">👁</span>
+            <div class="action-card-title">Review Queue</div>
+            <div class="action-card-desc">Approve or reject jobs awaiting Gate 1, Gate 2, or Gate 3 review. Badge shows pending items.</div>
+            <span class="action-card-cta" id="landingReviewCta">Open queue →</span>
+          </div>
+          <div class="action-card" onclick="setMainView('history')">
+            <span class="action-card-icon">📋</span>
+            <div class="action-card-title">Job History</div>
+            <div class="action-card-desc">Browse all past conversion runs, filter by status, submitter, or team, and open any job to review its output.</div>
+            <span class="action-card-cta">View history →</span>
+          </div>
+        </div>
+
+        <!-- Quick stats -->
+        <div class="landing-stats" id="landingStats">
+          <div class="landing-stat">
+            <div class="landing-stat-val" id="lsTotal">–</div>
+            <div class="landing-stat-label">Total Jobs</div>
+          </div>
+          <div class="landing-stat">
+            <div class="landing-stat-val" id="lsRunning">–</div>
+            <div class="landing-stat-label">In Progress</div>
+          </div>
+          <div class="landing-stat">
+            <div class="landing-stat-val" id="lsComplete">–</div>
+            <div class="landing-stat-label">Complete</div>
+          </div>
+          <div class="landing-stat">
+            <div class="landing-stat-val" id="lsPending">–</div>
+            <div class="landing-stat-label">Awaiting Review</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Dashboard panel ── -->
-    <div id="panelDashboard" style="flex:1;overflow-y:auto;padding:32px">
+    <div id="panelDashboard" style="display:none;flex:1;overflow-y:auto;padding:32px">
       <div class="empty">
-        <div class="empty-icon">🔄</div>
-        <div class="empty-title">Informatica Conversion Tool</div>
-        <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
+        <div class="empty-icon">📤</div>
+        <div class="empty-title">Submit a Conversion</div>
+        <div class="empty-sub">Upload an Informatica XML export using the panel on the left.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
       </div>
     </div>
 
@@ -612,26 +726,101 @@ let selectedParamFile    = null;
 let selectedZipFile      = null;
 let selectedBatchFile    = null;          // v2.0
 let uploadMode = 'files';  // 'files' | 'zip' | 'batch'
-let _mainView  = 'dashboard';  // 'dashboard' | 'history' | 'review'
+let _mainView  = 'landing';  // 'landing' | 'dashboard' | 'history' | 'review'
+
+// ─────────────────────────────────────────────
+// Persona helpers
+// ─────────────────────────────────────────────
+const PERSONA_META = {
+  'Aravind Doma': { role: 'Data Engineer',        initials: 'AD', color: 'rgba(108,99,255,.25)',  fg: '#a5b4fc' },
+  'Sarah Chen':   { role: 'Migration Lead',        initials: 'SC', color: 'rgba(74,222,128,.2)',   fg: '#4ade80' },
+  'James Park':   { role: 'Security Architect',    initials: 'JP', color: 'rgba(251,146,60,.2)',   fg: '#fb923c' },
+  'Maya Patel':   { role: 'Platform Engineer',     initials: 'MP', color: 'rgba(251,191,36,.2)',   fg: '#fbbf24' },
+};
+
+function getPersonaCookie() {
+  const m = document.cookie.match(/(?:^|;\s*)persona=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : 'User';
+}
+
+function initPersonaUI() {
+  const name = getPersonaCookie();
+  const meta = PERSONA_META[name] || { role: '', initials: (name[0] || '?').toUpperCase(),
+                                        color: 'rgba(108,99,255,.25)', fg: '#a5b4fc' };
+  // Nav chip
+  const av = document.getElementById('personaAvatarNav');
+  const nm = document.getElementById('personaNameNav');
+  const rl = document.getElementById('personaRoleNav');
+  if (av) { av.textContent = meta.initials; av.style.background = meta.color; av.style.color = meta.fg; }
+  if (nm) nm.textContent = name;
+  if (rl) rl.textContent = meta.role;
+
+  // Landing greeting
+  const firstName = name.split(' ')[0];
+  const greet = document.getElementById('landingGreeting');
+  if (greet) {
+    const hour = new Date().getHours();
+    const tod = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    greet.textContent = `${tod}, ${firstName} 👋`;
+  }
+
+  // Pre-fill submitter name if empty
+  const sn = document.getElementById('submitterName');
+  if (sn && !sn.value) sn.value = name;
+}
 
 // ── Main view switcher (top nav tabs) ─────────
 function setMainView(view) {
   _mainView = view;
-  const views = ['dashboard', 'history', 'review'];
+  const views = ['landing', 'dashboard', 'history', 'review'];
   views.forEach(v => {
     const panel = document.getElementById('panel' + v.charAt(0).toUpperCase() + v.slice(1));
     if (panel) {
-      panel.style.display = (v === view) ? (v === 'review' ? 'flex' : 'block') : 'none';
-      panel.style.flexDirection = (v === view && v === 'review') ? 'column' : '';
+      if (v === view) {
+        panel.style.display = (v === 'review') ? 'flex' : 'flex';
+        panel.style.flexDirection = (v === 'review') ? 'column' : '';
+        if (v !== 'review') panel.style.flex = '1';
+        if (v !== 'review') panel.style.overflowY = 'auto';
+      } else {
+        panel.style.display = 'none';
+      }
     }
-    const btn = document.getElementById('nav' + v.charAt(0).toUpperCase() + v.slice(1));
+    // Nav buttons — map 'landing'→'Home', 'dashboard'→'Dashboard', etc.
+    const btnId = v === 'landing' ? 'navHome' : 'nav' + v.charAt(0).toUpperCase() + v.slice(1);
+    const btn = document.getElementById(btnId);
     if (btn) {
       btn.style.borderBottomColor = (v === view) ? 'var(--accent)' : 'transparent';
       btn.style.color = (v === view) ? 'var(--accent)' : 'var(--muted)';
     }
   });
-  if (view === 'review') loadReviewQueue();
+  if (view === 'review')  loadReviewQueue();
   if (view === 'history') loadHistory();
+  if (view === 'landing') loadLandingStats();
+}
+
+// ── Landing stats ──────────────────────────────
+async function loadLandingStats() {
+  try {
+    const r = await fetch('/jobs?limit=500');
+    if (!r.ok) return;
+    const data = await r.json();
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
+    const total    = jobs.length;
+    const running  = jobs.filter(j => ['parsing','classifying','documenting','verifying',
+                      'assigning_stack','converting','security_scanning','validating',
+                      'reviewing','testing'].includes(j.status)).length;
+    const complete = jobs.filter(j => j.status === 'complete').length;
+    const waiting  = jobs.filter(j => ['awaiting_review','awaiting_security_review',
+                      'awaiting_code_review'].includes(j.status)).length;
+    const s = v => v === 0 ? '0' : String(v);
+    document.getElementById('lsTotal').textContent    = s(total);
+    document.getElementById('lsRunning').textContent  = s(running);
+    document.getElementById('lsComplete').textContent = s(complete);
+    document.getElementById('lsPending').textContent  = s(waiting);
+    // Update review CTA with count
+    const cta = document.getElementById('landingReviewCta');
+    if (cta && waiting > 0) cta.textContent = `${waiting} awaiting review →`;
+  } catch(e) { /* silent */ }
 }
 
 // ── Upload mode toggle (sidebar only) ─────────
@@ -3393,6 +3582,10 @@ setInterval(loadJobs, 5000);
 // Notify bell: poll every 30 s, run immediately on load
 updateNotifBell();
 setInterval(updateNotifBell, 30000);
+
+// ── Persona + initial view ─────────────────────
+initPersonaUI();
+setMainView('landing');  // always start on the landing page
 
 // Load security KB badge once on startup
 (async () => {

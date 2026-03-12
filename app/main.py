@@ -271,10 +271,18 @@ async def health_check():
     }, status_code=200 if db_ok else 503)
 
 
+_VALID_PERSONAS = {
+    "Aravind Doma",
+    "Sarah Chen",
+    "James Park",
+    "Maya Patel",
+}
+
 @app.post("/login")
 async def login_submit(
     request: Request,
     password: str = Form(...),
+    persona:  str = Form(default=""),
     _rl: None = Depends(login_limiter),
 ):
     if check_password(password):
@@ -288,6 +296,17 @@ async def login_submit(
             max_age=SESSION_HOURS * 3600,
             secure=_cfg.https,
         )
+        # Store persona in a JS-readable cookie (not httponly) so the UI can
+        # display the current user's name without a round-trip.
+        safe_persona = persona.strip() if persona.strip() in _VALID_PERSONAS else "User"
+        response.set_cookie(
+            key="persona",
+            value=safe_persona,
+            httponly=False,      # readable by JS
+            samesite="lax",
+            max_age=SESSION_HOURS * 3600,
+            secure=_cfg.https,
+        )
         return response
     return RedirectResponse("/login?error=1", status_code=302)
 
@@ -296,6 +315,7 @@ async def login_submit(
 async def logout():
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(COOKIE_NAME)
+    response.delete_cookie("persona")
     return response
 
 
