@@ -15,9 +15,16 @@ import unittest
 from pathlib import Path
 
 # ── env before backend imports ─────────────────────────────────────────────────
+# IMPORTANT: DB_PATH must be set *before* importing backend modules so that
+# database.py picks up the isolated test path at module load time (DB_PATH is
+# computed once at import).  Do NOT write to the production jobs.db.
+import tempfile as _tempfile
+_TEST_DB_DIR  = _tempfile.mkdtemp(prefix="ict_test_")
+_TEST_DB_PATH = os.path.join(_TEST_DB_DIR, "test_routes.db")
+
 os.environ["SECRET_KEY"]   = "test-route-secret-key-32-chars!!"
 os.environ["APP_PASSWORD"] = "route-test-password"
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///test_routes_tmp.db"
+os.environ["DB_PATH"]      = _TEST_DB_PATH  # isolate from production jobs.db
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -971,4 +978,12 @@ class TestAuditTrail(unittest.TestCase):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    try:
+        unittest.main(verbosity=2, exit=False)
+    finally:
+        # Clean up the isolated test DB so it never accumulates in the repo.
+        import shutil as _shutil
+        try:
+            _shutil.rmtree(_TEST_DB_DIR, ignore_errors=True)
+        except Exception:
+            pass

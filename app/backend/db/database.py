@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     batch_id                TEXT,
+    deleted_at              TEXT,
     complexity_tier         TEXT
 );
 """

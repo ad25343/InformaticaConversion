@@ -312,16 +312,14 @@
     <div>
       <div class="section-title">New Conversion</div>
 
-      <!-- Upload mode toggle -->
-      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px;flex-wrap:wrap">
-        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+      <!-- Upload mode toggle — 3 input modes only -->
+      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px">
+        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
                 onclick="setUploadMode('files')">📄 Individual</button>
-        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                 onclick="setUploadMode('zip')">🗜 ZIP</button>
-        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                 onclick="setUploadMode('batch')">📦 Batch</button>
-        <button id="tabReview" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
-                onclick="setUploadMode('review')">👁 Review Queue</button>
       </div>
 
       <!-- ── Individual files panel ── -->
@@ -389,7 +387,7 @@
       </div>
 
       <!-- ── Review Queue panel (v2.17.1) ── -->
-      <div id="panelReview" style="display:none;display:flex;flex-direction:column;gap:12px">
+      <div id="panelReview" style="display:none;flex-direction:column;gap:12px">
         <!-- Summary bar -->
         <div style="padding:12px;background:var(--surface2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
           <div style="font-size:12px;color:var(--muted)">
@@ -451,26 +449,30 @@
       🛡 Security KB: <span id="secKbRules">–</span> rules &nbsp;·&nbsp; <span id="secKbPatterns">–</span> learned patterns
     </div>
 
-    <!-- Job list -->
+    <!-- Job list header: title + Review Queue button -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div class="section-title" style="margin-bottom:0">Jobs</div>
-      <span id="jobCountBadge" style="font-size:10px;color:var(--muted)"></span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="section-title" style="margin-bottom:0">Jobs</div>
+        <span id="jobCountBadge" style="font-size:10px;color:var(--muted)"></span>
+      </div>
+      <button id="tabReview" class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px;white-space:nowrap"
+              onclick="setUploadMode('review')" title="Open gate review queue">👁 Review Queue</button>
     </div>
-    <!-- Search + status filter -->
-    <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:8px">
-      <input id="jobSearchInput" type="search" placeholder="🔍 Search by filename…"
+    <!-- Search + status filter — single compact row -->
+    <div style="display:flex;gap:4px;margin-bottom:8px">
+      <input id="jobSearchInput" type="search" placeholder="🔍 filename…"
              oninput="applyJobFilter()"
-             style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;box-sizing:border-box"/>
+             style="flex:1;min-width:0;padding:4px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px"/>
       <select id="jobStatusFilter" onchange="applyJobFilter()"
-              style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
-        <option value="">All statuses</option>
+              style="flex:0 0 auto;padding:4px 4px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11px;max-width:90px">
+        <option value="">All</option>
         <option value="pending">Pending</option>
         <option value="running">Running</option>
-        <option value="awaiting_review">Awaiting Gate 1</option>
-        <option value="awaiting_sec_review">Awaiting Gate 2</option>
-        <option value="awaiting_code_review">Awaiting Gate 3</option>
+        <option value="awaiting_review">Gate 1</option>
+        <option value="awaiting_sec_review">Gate 2</option>
+        <option value="awaiting_code_review">Gate 3</option>
         <option value="complete">Complete</option>
-        <option value="blocked">Blocked / Rejected</option>
+        <option value="blocked">Blocked</option>
         <option value="failed">Failed</option>
       </select>
     </div>
@@ -590,7 +592,9 @@ function setUploadMode(mode) {
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabZip.className   = mode === 'zip'   ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  // tabReview is a standalone compact button — keep its custom inline sizing, only swap colour
   tabReview.className = mode === 'review' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  tabReview.style.cssText = 'font-size:11px;padding:3px 8px;white-space:nowrap';
   startBtn.style.display = mode === 'review' ? 'none' : 'block';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
