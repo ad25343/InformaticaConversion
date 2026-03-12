@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
+# Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
 patterns/pass_through.py — Trivial extract with no meaningful transformation
 =============================================================================

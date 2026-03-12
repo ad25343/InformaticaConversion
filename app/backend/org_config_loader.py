@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
+# Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
 org_config_loader.py
 Loads org_config.yaml and warehouse_registry.yaml once at startup.

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
+# Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
 patterns/truncate_and_load.py — Full-refresh (drop + reload) pattern
 =====================================================================

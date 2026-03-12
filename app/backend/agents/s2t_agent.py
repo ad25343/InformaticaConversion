@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
+# Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
 Source-to-Target Mapping Agent
 Runs after Step 1 (Parse). Fully deterministic — no Claude needed.

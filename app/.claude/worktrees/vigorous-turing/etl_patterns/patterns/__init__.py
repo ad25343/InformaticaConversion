@@ -1,0 +1,3 @@
+"""
+patterns — ETL pattern implementations.
+"""

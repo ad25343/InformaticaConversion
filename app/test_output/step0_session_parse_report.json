@@ -1,0 +1,21 @@
+{
+  "uploaded_files": [
+    {
+      "filename": "mapping.xml",
+      "file_type": "MAPPING",
+      "detected_at": "2026-02-24T11:48:55.015922+00:00"
+    }
+  ],
+  "cross_ref": {
+    "status": "VALID",
+    "mapping_name": "m_STG_ORDERS_to_FACT_ORDERS",
+    "session_name": null,
+    "referenced_mapping": null,
+    "issues": []
+  },
+  "session_config": null,
+  "parameters": [],
+  "unresolved_variables": [],
+  "parse_status": "MAPPING_ONLY",
+  "notes": []
+}

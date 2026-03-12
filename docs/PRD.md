@@ -830,14 +830,96 @@ back to built-in defaults and the pipeline behaves identically to v2.16.0.
 
 ---
 
+### v2.18 — Estate Analyser + Migration Wave Management (planned)
+
+Before the first mapping is converted, migration leads need to understand the full scope
+of the estate, prioritise the work, and plan waves. v2.18 introduces a pre-conversion
+analysis mode that operates at repository scale without triggering the full pipeline.
+
+#### Estate Analyser
+
+- **Bulk XML ingestion**: accept a ZIP of all Informatica mapping XMLs (no workflow or
+  parameter files required); runs Step 0 + Step 1 + Step 2 only — no Claude API calls,
+  no gates
+- **Estate summary report**: pattern distribution (how many SCD2, upsert, pass-through,
+  etc.), complexity tier breakdown, total source/target table count, $$VAR coverage rate,
+  unsupported transformation inventory
+- **Effort estimate**: maps complexity tier × average pipeline time to a per-mapping
+  estimate; aggregates to total hours and Claude API cost projection across the full estate
+- **`GET /api/estate/analyse`** — accepts a batch ZIP; returns `EstateReport` JSON +
+  downloadable Excel summary workbook
+- No jobs created, no state persisted — analysis is stateless and repeatable
+
+#### Migration Wave Planner
+
+- **Dependency graph**: parser detects cross-mapping dependencies (shared lookup tables,
+  sequential session targets used as sources in another mapping); renders as a DAG
+- **Wave sequencing**: topological sort of the dependency graph produces a recommended
+  wave sequence — upstream mappings convert first, downstream mappings block on their
+  dependencies completing
+- **Wave assignment**: leads can accept the suggested waves or drag-and-drop reassign;
+  assignments persisted as a `waves` table alongside jobs
+- **Quick-win identification**: LOW-tier, HIGH-confidence, no-dependency mappings
+  flagged as candidates for Wave 1 to build reviewer confidence early
+- **`POST /api/waves`** — create / update wave plan for a batch
+- **`GET /api/waves/{batch_id}`** — retrieve wave assignments and dependency graph
+
+---
+
+### v2.19 — Multi-User Access Control + SSO (planned)
+
+Enterprise IT will not deploy a shared-password tool. v2.19 replaces the single-credential
+auth model with named users, role-based permissions, and SSO.
+
+#### Named user model
+
+- **User table**: `users` — `user_id`, `email`, `display_name`, `role`, `created_at`,
+  `last_login`; bcrypt passwords retained for local accounts
+- **Roles**: `ADMIN` (manage users, view all jobs), `REVIEWER` (gate decisions only),
+  `ENGINEER` (upload + view own jobs), `READ_ONLY` (view + download, no decisions)
+- **Job ownership**: `created_by` + `reviewed_by` stamped on every job and gate decision;
+  audit log records named reviewer on every gate
+- **`POST /api/admin/users`** — ADMIN only; create, update, deactivate users
+- **`GET /api/admin/users`** — ADMIN only; user list with last-login and job counts
+
+#### SSO / OIDC
+
+- **OIDC provider support**: `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` in
+  `.env`; standard authorization-code flow; groups claim mapped to roles
+- **SAML 2.0**: optional `SAML_METADATA_URL` for organisations that require SAML over OIDC
+- **Just-in-time provisioning**: first SSO login creates a local user record with role
+  derived from the IdP group claim; no pre-provisioning required
+- **Local accounts**: retained for non-SSO deployments and service accounts (CI, watcher)
+- **Session management**: per-user session tokens; admin can invalidate all sessions for
+  a user; `SESSION_HOURS` applies per-user
+
+#### Review assignment
+
+- **Gate assignment**: batch upload or wave plan can designate a named reviewer per
+  mapping; webhook notifications addressed to the assigned reviewer
+- **Coverage view**: dashboard shows which jobs are awaiting review and who is assigned,
+  preventing jobs from sitting unreviewed
+
+---
+
 ### v3.0 — Vision
 
-- Continuous migration mode: monitor Informatica Designer exports and auto-convert on
-  change, with diff-level PR updates
-- Observability: track conversion success rate, time-to-review, and flag frequency across
-  the entire Informatica estate
-- Self-hosted model support: route to an on-premise LLM for air-gapped environments
-- Support for PowerCenter parameter sets, session configurations, and repository-level objects
+- **Continuous migration mode**: monitor Informatica Designer exports and auto-convert on
+  change; diff-level PR updates when a mapping re-exports with changes — only changed
+  rules re-verified, existing approved code preserved
+- **Migration velocity dashboard**: conversion success rate, time-to-review per gate,
+  rework rate (REQUEST_FIX frequency), security finding frequency by pattern type,
+  team throughput — all queryable by date range, team, and complexity tier; exportable
+  for steering committee reporting
+- **Re-export delta handling**: when a mapping changes mid-migration and is re-uploaded,
+  diff the new XML against the prior conversion; re-run only the affected pipeline steps;
+  preserve Gate 3-approved sections unchanged
+- **Self-hosted model support**: route conversion calls to an on-premise LLM endpoint for
+  air-gapped environments; configurable per-step model routing (e.g. local model for
+  documentation, Claude for code generation)
+- **Repository-level object handling**: PowerCenter parameter sets, session configurations,
+  shared containers, and repository-level reusable transformations handled natively —
+  not surfaced as flags
 
 ---
 

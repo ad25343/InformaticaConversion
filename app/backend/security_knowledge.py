@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
+# Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
 security_knowledge.py — Cross-job security learning for the Informatica Conversion Tool.
 
