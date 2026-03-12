@@ -10,6 +10,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.1] — 2026-03-12 — Batch Gate Review + Migration Progress
+
+Addresses the review bottleneck at scale. At 500 mappings, up to 150 jobs can be waiting
+at gates simultaneously — this release lets a reviewer clear them in bulk rather than
+opening each job card individually. Also adds a migration progress endpoint and CSV export
+for management reporting.
+
+### Added
+
+**`GET /api/gates/pending`** — all jobs currently waiting at Gate 1, 2, or 3
+Returns flag summaries and top flag types for each job so reviewers can triage without
+opening individual job cards. Filterable by `?gate=1|2|3` and `?batch_id`. Sorted by
+`waiting_since` ascending; includes `total` and `by_gate` summary counts.
+
+**`POST /api/gates/batch-signoff`** — apply one decision to many jobs at once
+Gate 1: `APPROVE` / `REJECT` · Gate 2: `APPROVED` / `ACKNOWLEDGED` / `FAILED`
+(REQUEST_FIX excluded — per-job only) · Gate 3: `APPROVED` / `REJECTED`.
+Validates gate membership per job; returns `succeeded` / `failed` / `errors`. Writes
+audit trail entries for all decisions.
+
+**`GET /api/progress`** — migration-level progress summary
+Counts by status (`not_started`, `in_pipeline`, `awaiting_gate.1/2/3`, `complete`,
+`blocked`, `failed`), complexity tier breakdown, `throughput_per_day` (completions
+in last 7 days ÷ 7), and `estimated_completion_date`. Excludes soft-deleted jobs.
+
+**`GET /api/progress/export`** — CSV download for management reporting
+Columns: `job_id`, `filename`, `batch_id`, `status`, `complexity_tier`, `created_at`,
+`updated_at`, `waiting_at_gate`, `complete_at`. Filename: `migration_progress_YYYYMMDD_HHMMSS.csv`.
+
+**Review Queue UI tab**
+New tab alongside Individual / ZIP / Batch. Summary bar with per-gate counts; job table
+with checkbox multi-select, gate filter buttons, flag severity badges, and waiting time.
+Reviewer name input + Approve / Reject / Acknowledge batch actions. Auto-refreshes every
+30 seconds.
+
+---
+
 ## [2.17.0] — 2026-03-11 — Config-Driven Genericity (all 8 gaps resolved)
 
 The pipeline is now fully configurable for any Informatica PowerCenter project without

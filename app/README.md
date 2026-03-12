@@ -283,6 +283,10 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | `GET` | `/api/logs/history` | Log Archive feed — soft-deleted + orphaned log entries |
 | `GET` | `/api/logs/history/{job_id}` | Read a historical log without a live DB record |
 | `GET` | `/api/security/knowledge` | Security KB summary: rule count, pattern count, top patterns |
+| `GET` | `/api/gates/pending` | All jobs awaiting a gate decision with flag summaries; filterable by `?gate=1\|2\|3` and `?batch_id` |
+| `POST` | `/api/gates/batch-signoff` | Apply one gate decision to multiple jobs — Gate 1/2/3; returns succeeded/failed per job |
+| `GET` | `/api/progress` | Migration progress summary: counts by status and tier, throughput per day, ETA |
+| `GET` | `/api/progress/export` | CSV of all job statuses for management reporting |
 
 > Enable interactive API docs at `http://localhost:8000/docs` by setting `SHOW_DOCS=true` in `.env`.
 
@@ -326,7 +330,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.4–v2.9** | Shipped | Mapping manifest + stability fixes; job artifact export; performance-at-scale prompts + SQLite WAL; dbt execution-ready output; validation framework (76 tests); webhook notifications |
 | **v2.10–v2.15** | Shipped | GitHub PR integration; mapplet detection + inline expansion; data-level equivalence tests; manifest-based file watcher; time-based cron scheduler; security hardening patch |
 | **v2.16.0** | Shipped | Config-driven pattern library — 10 ETL patterns (pass_through → scd2); pip-installable `etl_patterns` package; 199 tests; classifier decision tree + conversion agent integration |
-| **v2.17.0** | Current | Generic component architecture — org_config.yaml + warehouse_registry.yaml + Jinja2 prompt overrides; all hardcoded org signals externalised; backwards-compatible |
+| **v2.17.0** | Shipped | Generic component architecture — org_config.yaml + warehouse_registry.yaml + Jinja2 prompt overrides; all hardcoded org signals externalised; backwards-compatible |
+| **v2.17.1** | Current | Batch gate review queue (`GET /api/gates/pending`, `POST /api/gates/batch-signoff`); migration progress endpoint + CSV export; Review Queue UI tab |
 | **v2.18** | Planned | Estate analyser (bulk XML → pattern/complexity/cost report) + migration wave planner (dependency DAG, topological wave sequencing, quick-win identification) |
 | **v2.19** | Planned | Multi-user access control (ADMIN/REVIEWER/ENGINEER/READ_ONLY roles, job ownership, audit trail) + SSO/OIDC + SAML 2.0 + JIT provisioning |
 | **v3.0** | Vision | Continuous migration mode; migration velocity dashboard; re-export delta handling; self-hosted model support; repository-level object handling |
@@ -335,6 +340,18 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 
 ## Database
 
-SQLite by default (`app/data/jobs.db`). To switch to PostgreSQL, change `DATABASE_URL` in `backend/db/database.py`.
+SQLite by default (`app/data/jobs.db`). Sufficient for pilots and migrations up to ~200 mappings.
+
+**For migrations above 200 mappings, PostgreSQL is recommended.** At that scale, concurrent batch runs and large state blobs will start producing `SQLITE_BUSY` timeouts under write contention. Switch by setting `DATABASE_URL` in `backend/db/database.py`:
+
+```python
+DATABASE_URL = "postgresql+asyncpg://user:password@host:5432/informatica_conversion"
+```
+
+```bash
+pip install asyncpg
+```
+
+No schema migration is required — `init_db()` creates all tables on first connect.
 
 Job logs are written to `app/logs/jobs/` as newline-delimited JSON.

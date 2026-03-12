@@ -1337,6 +1337,8 @@ async def get_pending_gate_jobs(gate: _Opt[int] = None, batch_id: _Opt[str] = No
                 "jobs": jobs,
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching pending gate jobs: {e}")
         raise HTTPException(500, f"Error fetching pending gate jobs: {str(e)}")

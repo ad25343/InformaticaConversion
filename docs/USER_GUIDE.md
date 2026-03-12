@@ -119,6 +119,16 @@ After Gate 3 approval, the following are available from the job panel:
 
 ---
 
+## Reviewing jobs at scale (Review Queue)
+
+When running a large migration, many jobs can be waiting at gates simultaneously. The **Review Queue** tab (alongside Individual / ZIP / Batch in the upload section) shows all pending gate decisions in a single table so you can process them in bulk.
+
+The summary bar shows how many jobs are waiting at Gate 1, Gate 2, and Gate 3. Use the filter buttons to focus on one gate at a time. Check the boxes next to the jobs you want to act on, enter a reviewer name, then click **Approve Selected**, **Reject Selected**, or **Acknowledge Selected** (Gate 2 only).
+
+To track overall migration progress, use `GET /api/progress` or the **Export Progress CSV** option for a spreadsheet view of all job statuses — useful for weekly management reporting.
+
+---
+
 ## Scheduled ingestion (file watcher)
 
 The file watcher lets you automate conversions without using the UI — useful for overnight batch runs or when a scripted Informatica export drops files to a shared folder.
@@ -398,6 +408,20 @@ See **[docs/TESTING_GUIDE.md](TESTING_GUIDE.md)** for full instructions on:
 - Running the generated pytest suite
 - Filling in expression boundary test helpers
 - Running the golden CSV comparison script (`compare_golden.py`)
+
+---
+
+## Database scaling
+
+SQLite is the default and is sufficient for pilots and migrations up to approximately 200 mappings.
+
+**For migrations above 200 mappings, switch to PostgreSQL.** At that scale, concurrent batch runs with large state blobs will start producing lock contention errors. To switch, set `DATABASE_URL` in `backend/db/database.py`:
+
+```python
+DATABASE_URL = "postgresql+asyncpg://user:password@host:5432/informatica_conversion"
+```
+
+Install the async driver: `pip install asyncpg`. No schema migration needed — all tables are created automatically on first connect.
 
 ---
 

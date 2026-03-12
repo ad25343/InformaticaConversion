@@ -1062,6 +1062,10 @@ flows through `backend/security.py`.
 | `GET` | `/api/jobs/{id}/manifest.xlsx` | Download the pre-conversion mapping manifest (v2.4) |
 | `GET` | `/api/jobs/{id}/export` | Build and return completed job artifact ZIP (v2.5) |
 | `GET` | `/api/audit` | Audit trail of all Gate 1/2/3 decisions with reviewer metadata (v2.4.6) |
+| `GET` | `/api/gates/pending` | All jobs awaiting a gate decision with flag summaries; filterable by gate and batch (v2.17.1) |
+| `POST` | `/api/gates/batch-signoff` | Apply a single gate decision to multiple jobs at once (v2.17.1) |
+| `GET` | `/api/progress` | Migration-level progress summary: counts by status, tier breakdown, throughput, ETA (v2.17.1) |
+| `GET` | `/api/progress/export` | CSV download of all job statuses for management reporting (v2.17.1) |
 
 ---
 

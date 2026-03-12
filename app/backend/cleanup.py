@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -24,6 +25,7 @@ import aiosqlite
 from .db.database import DB_PATH, _connect
 from .logger import job_log_path
 from .agents.s2t_agent import s2t_excel_path
+from .job_exporter import job_output_dir
 
 log = logging.getLogger("conversion.cleanup")
 
@@ -32,10 +34,17 @@ JOB_RETENTION_DAYS     = _cfg.job_retention_days
 CLEANUP_INTERVAL_HOURS = _cfg.cleanup_interval_hours
 
 
+_TERMINAL_STATUSES = ("complete", "blocked", "failed")
+
+
 async def cleanup_old_jobs() -> dict[str, int]:
     """
-    Delete jobs created more than JOB_RETENTION_DAYS ago together with
-    their associated log files and S2T Excel workbooks.
+    Delete terminal jobs (complete / blocked / failed) created more than
+    JOB_RETENTION_DAYS ago together with their log files, S2T Excel workbooks,
+    and OUTPUT_DIR artifact directories.
+
+    Only terminal-status jobs are deleted; jobs still in the pipeline are
+    left untouched regardless of age.
 
     Returns a dict: {"deleted_jobs": N, "deleted_files": N}
     """
@@ -43,22 +52,29 @@ async def cleanup_old_jobs() -> dict[str, int]:
         datetime.now(timezone.utc) - timedelta(days=JOB_RETENTION_DAYS)
     ).isoformat()
 
-    # ── Collect job IDs to delete ───────────────────────────────────────────
+    # ── Collect terminal job IDs to delete ──────────────────────────────────
+    placeholders = ",".join("?" * len(_TERMINAL_STATUSES))
     async with _connect() as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            "SELECT job_id FROM jobs WHERE created_at < ?", (cutoff,)
+            f"SELECT job_id, state_json FROM jobs "
+            f"WHERE created_at < ? AND status IN ({placeholders})",
+            (cutoff, *_TERMINAL_STATUSES),
         )
         rows = await cursor.fetchall()
 
-    job_ids: list[str] = [row["job_id"] for row in rows]
-    if not job_ids:
-        log.debug("Cleanup: no jobs older than %d days", JOB_RETENTION_DAYS)
+    if not rows:
+        log.debug("Cleanup: no terminal jobs older than %d days", JOB_RETENTION_DAYS)
         return {"deleted_jobs": 0, "deleted_files": 0}
 
-    # ── Delete associated files ─────────────────────────────────────────────
+    # ── Delete associated files and output directories ──────────────────────
     deleted_files = 0
-    for job_id in job_ids:
+    job_ids: list[str] = []
+    for row in rows:
+        job_id = row["job_id"]
+        job_ids.append(job_id)
+
+        # Single-file artefacts: log + S2T Excel
         for path_fn in (job_log_path, s2t_excel_path):
             path = path_fn(job_id)
             if path and path.exists():
@@ -67,6 +83,21 @@ async def cleanup_old_jobs() -> dict[str, int]:
                     deleted_files += 1
                 except OSError as exc:
                     log.warning("Could not delete file for job %s: %s", job_id, exc)
+
+        # Output artifact directory (OUTPUT_DIR/<job_id>/ or watcher sub-path)
+        from .db.database import _decode_state as _ds
+        state = _ds(row["state_json"]) if row["state_json"] else {}
+        out_dir = job_output_dir(job_id, state)
+        if out_dir and out_dir.exists() and out_dir.is_dir():
+            try:
+                shutil.rmtree(out_dir)
+                log.debug("Cleanup: removed output dir %s", out_dir)
+                deleted_files += 1
+            except OSError as exc:
+                log.warning(
+                    "Could not remove output dir for job %s (%s): %s",
+                    job_id, out_dir, exc,
+                )
 
     # ── Delete rows from DB ─────────────────────────────────────────────────
     # Defensive: job_ids is already checked above, but guard again to prevent
@@ -81,7 +112,8 @@ async def cleanup_old_jobs() -> dict[str, int]:
         await conn.commit()
 
     log.info(
-        "Cleanup: removed %d job(s) older than %d days; %d file(s) deleted",
+        "Cleanup: removed %d terminal job(s) older than %d days; "
+        "%d file(s)/dir(s) deleted",
         len(job_ids), JOB_RETENTION_DAYS, deleted_files,
     )
     return {"deleted_jobs": len(job_ids), "deleted_files": deleted_files}
