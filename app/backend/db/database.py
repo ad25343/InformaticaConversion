@@ -92,7 +92,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at              TEXT NOT NULL,
     batch_id                TEXT,
     deleted_at              TEXT,
-    complexity_tier         TEXT
+    complexity_tier         TEXT,
+    submitter_name          TEXT,
+    submitter_team          TEXT,
+    submitter_notes         TEXT
 );
 """
 
@@ -214,6 +217,16 @@ async def init_db():
             except Exception:
                 pass  # column already present
         await db.execute(CREATE_COMPLEXITY_INDEX)
+        # v2.18.0 — submitter fields
+        for sql in [
+            "ALTER TABLE jobs ADD COLUMN submitter_name  TEXT",
+            "ALTER TABLE jobs ADD COLUMN submitter_team  TEXT",
+            "ALTER TABLE jobs ADD COLUMN submitter_notes TEXT",
+        ]:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # column already present
         await db.commit()
 
 
@@ -223,6 +236,9 @@ async def create_job(
     workflow_xml_content: Optional[str] = None,
     parameter_file_content: Optional[str] = None,
     batch_id: Optional[str] = None,
+    submitter_name: Optional[str] = None,
+    submitter_team: Optional[str] = None,
+    submitter_notes: Optional[str] = None,
 ) -> str:
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -230,9 +246,11 @@ async def create_job(
         await db.execute(
             "INSERT INTO jobs "
             "(job_id, filename, xml_content, workflow_xml_content, parameter_file_content, "
-            " status, current_step, state_json, created_at, updated_at, batch_id) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?)",
-            (job_id, filename, xml_content, workflow_xml_content, parameter_file_content, now, now, batch_id),
+            " status, current_step, state_json, created_at, updated_at, batch_id, "
+            " submitter_name, submitter_team, submitter_notes) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', 0, '{}', ?, ?, ?, ?, ?, ?)",
+            (job_id, filename, xml_content, workflow_xml_content, parameter_file_content,
+             now, now, batch_id, submitter_name, submitter_team, submitter_notes),
         )
         await db.commit()
     return job_id
@@ -522,17 +540,19 @@ async def count_jobs() -> int:
             return row[0] if row else 0
 
 
-async def list_jobs(limit: int = 20, offset: int = 0) -> List[dict]:
+async def list_jobs(limit: int = 200, offset: int = 0) -> List[dict]:
     """Return jobs newest-first with pagination.
 
     v2.6.0: reads complexity_tier from its dedicated column — no state
     decompression needed on the listing path.
+    v2.18.0: includes submitter fields.
     """
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT job_id, filename, status, current_step, created_at, updated_at, "
-            "       complexity_tier, batch_id "
+            "       complexity_tier, batch_id, "
+            "       submitter_name, submitter_team, submitter_notes "
             "FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC "
             "LIMIT ? OFFSET ?",
             (limit, offset),

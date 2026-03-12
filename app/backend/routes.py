@@ -148,10 +148,13 @@ async def health_check():
 
 @router.post("/jobs")
 async def create_job(
-    file:           UploadFile = File(...),
-    workflow_file:  _Opt[UploadFile] = File(default=None),
-    parameter_file: _Opt[UploadFile] = File(default=None),
-    _rl:            None = Depends(jobs_limiter),
+    file:             UploadFile = File(...),
+    workflow_file:    _Opt[UploadFile] = File(default=None),
+    parameter_file:   _Opt[UploadFile] = File(default=None),
+    submitter_name:   _Opt[str] = Form(default=None),
+    submitter_team:   _Opt[str] = Form(default=None),
+    submitter_notes:  _Opt[str] = Form(default=None),
+    _rl:              None = Depends(jobs_limiter),
 ):
     """Upload files and start the conversion pipeline.
 
@@ -202,11 +205,15 @@ async def create_job(
         xml_str,
         workflow_xml_content=workflow_str,
         parameter_file_content=param_str,
+        submitter_name=submitter_name or None,
+        submitter_team=submitter_team or None,
+        submitter_notes=submitter_notes or None,
     )
 
-    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s",
+    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s submitter=%s",
                 job_id, file.filename, len(mapping_content),
-                workflow_str is not None, param_str is not None)
+                workflow_str is not None, param_str is not None,
+                submitter_name or "(anonymous)")
 
     queue: asyncio.Queue = asyncio.Queue()
     _progress_queues[job_id] = queue
@@ -1030,8 +1037,11 @@ async def download_output_zip(job_id: str):
 
 @router.post("/jobs/zip")
 async def create_job_from_zip(
-    file: UploadFile = File(...),
-    _rl:  None = Depends(jobs_limiter),
+    file:            UploadFile = File(...),
+    submitter_name:  _Opt[str] = Form(default=None),
+    submitter_team:  _Opt[str] = Form(default=None),
+    submitter_notes: _Opt[str] = Form(default=None),
+    _rl:             None = Depends(jobs_limiter),
 ):
     """
     Upload a single ZIP archive containing Informatica export files and start
@@ -1075,6 +1085,9 @@ async def create_job_from_zip(
         extracted.mapping_xml,
         workflow_xml_content=extracted.workflow_xml,
         parameter_file_content=extracted.parameter_file,
+        submitter_name=submitter_name or None,
+        submitter_team=submitter_team or None,
+        submitter_notes=submitter_notes or None,
     )
 
     logger.info(

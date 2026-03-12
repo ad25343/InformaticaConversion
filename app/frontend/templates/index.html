@@ -293,13 +293,13 @@
 
 <div class="app">
 
-  <!-- ── Sidebar ─────────────────────────── -->
+  <!-- ── Sidebar: upload only ─────────────── -->
   <aside class="sidebar">
     <div>
       <div class="logo">
         <span>⚡ Informatica Converter</span>
         <span class="notif-bell" id="notifBell" title="Pending gate reviews"
-              onclick="setUploadMode('review')" style="display:none">
+              onclick="setMainView('review')" style="display:none">
           🔔
           <span class="notif-badge" id="notifBadge">0</span>
         </span>
@@ -308,12 +308,12 @@
     </div>
     <hr/>
 
-    <!-- Upload (v1.1 multi-file + ZIP) -->
-    <div>
-      <div class="section-title">New Conversion</div>
+    <!-- Upload -->
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="section-title" style="margin-bottom:0">New Conversion</div>
 
-      <!-- Upload mode toggle — 3 input modes only -->
-      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px">
+      <!-- Upload mode toggle -->
+      <div style="display:flex;gap:4px;background:var(--surface);border-radius:8px;padding:3px">
         <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
                 onclick="setUploadMode('files')">📄 Individual</button>
         <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
@@ -324,32 +324,23 @@
 
       <!-- ── Individual files panel ── -->
       <div id="panelFiles">
-        <!-- Mapping XML (required) -->
         <div class="upload-zone" id="dropzone">
           <input type="file" id="fileInput" accept=".xml"/>
           <div class="upload-icon">📂</div>
           <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
         </div>
-
-        <!-- Workflow XML (optional, v1.1) -->
         <div style="margin-top:8px">
-          <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
-            Workflow XML <span style="font-weight:400;color:var(--muted)">(optional — session config)</span>
-          </label>
-          <div class="upload-zone" id="dropzoneWF" style="padding:12px 10px">
+          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Workflow XML <span style="font-weight:400">(optional)</span></label>
+          <div class="upload-zone" id="dropzoneWF" style="padding:10px">
             <input type="file" id="workflowInput" accept=".xml"/>
-            <div class="upload-label" id="workflowLabel" style="font-size:12px">Drop Workflow .xml here or click to add</div>
+            <div class="upload-label" id="workflowLabel" style="font-size:11px">Drop Workflow .xml or click</div>
           </div>
         </div>
-
-        <!-- Parameter file (optional, v1.1) -->
         <div style="margin-top:8px">
-          <label style="font-size:12px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">
-            Parameter File <span style="font-weight:400;color:var(--muted)">(optional — $$VAR resolution)</span>
-          </label>
-          <div class="upload-zone" id="dropzonePF" style="padding:12px 10px">
+          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
+          <div class="upload-zone" id="dropzonePF" style="padding:10px">
             <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
-            <div class="upload-label" id="paramLabel" style="font-size:12px">Drop parameter file here or click to add</div>
+            <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
           </div>
         </div>
       </div>
@@ -360,20 +351,20 @@
           <input type="file" id="zipInput" accept=".zip"/>
           <div class="upload-icon">🗜</div>
           <div class="upload-label" id="zipLabel">
-            Drop .zip archive here or click to browse<br/>
-            <span style="font-size:11px;color:var(--muted)">Must contain a Mapping XML — Workflow &amp; params auto-detected</span>
+            Drop .zip archive here or click<br/>
+            <span style="font-size:11px;color:var(--muted)">Mapping XML required — Workflow &amp; params auto-detected</span>
           </div>
         </div>
         <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
       </div>
 
-      <!-- ── Batch ZIP panel (v2.0) ── -->
+      <!-- ── Batch ZIP panel ── -->
       <div id="panelBatch" style="display:none">
         <div class="upload-zone" id="dropzoneBatch">
           <input type="file" id="batchInput" accept=".zip"/>
           <div class="upload-icon">📦</div>
           <div class="upload-label" id="batchLabel">
-            Drop batch .zip here or click to browse<br/>
+            Drop batch .zip here or click<br/>
             <span style="font-size:11px;color:var(--muted)">One subfolder per mapping — up to 3 run concurrently</span>
           </div>
         </div>
@@ -381,122 +372,166 @@
           <strong style="color:var(--text)">ZIP structure:</strong><br/>
           batch.zip / mapping_a / mapping.xml<br/>
           batch.zip / mapping_a / workflow.xml <em>(optional)</em><br/>
-          batch.zip / mapping_b / mapping.xml &nbsp;…
+          batch.zip / mapping_b / mapping.xml …
         </div>
         <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
       </div>
 
-      <!-- ── Review Queue panel (v2.17.1) ── -->
-      <div id="panelReview" style="display:none;flex-direction:column;gap:12px">
-        <!-- Summary bar -->
-        <div style="padding:12px;background:var(--surface2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-          <div style="font-size:12px;color:var(--muted)">
-            <span>Gate 1: <strong id="reviewGate1Count">–</strong></span> &nbsp;|&nbsp;
-            <span>Gate 2: <strong id="reviewGate2Count">–</strong></span> &nbsp;|&nbsp;
-            <span>Gate 3: <strong id="reviewGate3Count">–</strong></span> &nbsp;|&nbsp;
-            <span>Total: <strong id="reviewTotalCount">–</strong></span>
-          </div>
-          <button class="btn btn-sm btn-ghost" onclick="loadReviewQueue()">🔄 Refresh</button>
-        </div>
-
-        <!-- Gate filter buttons -->
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn" onclick="setReviewGateFilter(null)">All</button>
-          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Gate 1</button>
-          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Gate 2</button>
-          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Gate 3</button>
-        </div>
-
-        <!-- Reviewer name input -->
-        <div>
-          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:6px">Reviewer Name</label>
-          <input type="text" id="reviewerNameInput" placeholder="Your name" style="width:100%;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
-        </div>
-
-        <!-- Action buttons -->
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-success" style="flex:1;min-width:120px" onclick="submitReviewDecision('APPROVE')">✓ Approve Selected</button>
-          <button class="btn btn-danger" style="flex:1;min-width:120px" onclick="submitReviewDecision('REJECT')">✕ Reject Selected</button>
-          <button class="btn btn-warn" style="flex:1;min-width:120px" id="acknowledgeBtn" style="display:none" onclick="submitReviewDecision('ACKNOWLEDGE')">✓ Acknowledge</button>
-        </div>
-
-        <!-- Jobs table -->
-        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;flex:1;display:flex;flex-direction:column">
-          <div style="background:var(--surface2);padding:12px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;font-size:12px;font-weight:600">
-            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAllReview(this.checked)" style="width:16px;height:16px;cursor:pointer"/>
-            <span style="width:200px">Filename</span>
-            <span style="width:120px">Batch</span>
-            <span style="width:60px">Gate</span>
-            <span style="width:80px">Tier</span>
-            <span style="width:100px">Flags</span>
-            <span style="width:80px">Waiting</span>
-          </div>
-          <div id="reviewQueueTable" style="overflow-y:auto;flex:1">
-            <div style="padding:20px;text-align:center;color:var(--muted)">
-              <div style="font-size:24px">📋</div>
-              <div style="font-size:12px;margin-top:8px">No jobs currently awaiting review</div>
-            </div>
-          </div>
+      <!-- ── Submitter details ── -->
+      <div style="border-top:1px solid var(--border);padding-top:10px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Submitter</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <input id="submitterName" type="text" placeholder="Your name" autocomplete="name"
+                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
+          <input id="submitterTeam" type="text" placeholder="Team / department"
+                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
+          <input id="submitterNotes" type="text" placeholder="Ticket # or notes (optional)"
+                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
         </div>
       </div>
 
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
     </div>
-    <hr/>
-
-    <!-- Security KB pill -->
-    <div id="secKbBadge" style="display:none;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--muted)">
-      🛡 Security KB: <span id="secKbRules">–</span> rules &nbsp;·&nbsp; <span id="secKbPatterns">–</span> learned patterns
-    </div>
-
-    <!-- Job list header: title + Review Queue button -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <div class="section-title" style="margin-bottom:0">Jobs</div>
-        <span id="jobCountBadge" style="font-size:10px;color:var(--muted)"></span>
-      </div>
-      <button id="tabReview" class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px;white-space:nowrap"
-              onclick="setUploadMode('review')" title="Open gate review queue">👁 Review Queue</button>
-    </div>
-    <!-- Search + status filter — single compact row -->
-    <div style="display:flex;gap:4px;margin-bottom:8px">
-      <input id="jobSearchInput" type="search" placeholder="🔍 filename…"
-             oninput="applyJobFilter()"
-             style="flex:1;min-width:0;padding:4px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px"/>
-      <select id="jobStatusFilter" onchange="applyJobFilter()"
-              style="flex:0 0 auto;padding:4px 4px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11px;max-width:90px">
-        <option value="">All</option>
-        <option value="pending">Pending</option>
-        <option value="running">Running</option>
-        <option value="awaiting_review">Gate 1</option>
-        <option value="awaiting_sec_review">Gate 2</option>
-        <option value="awaiting_code_review">Gate 3</option>
-        <option value="complete">Complete</option>
-        <option value="blocked">Blocked</option>
-        <option value="failed">Failed</option>
-      </select>
-    </div>
-    <div class="job-list" id="jobList">
-      <div class="empty" style="padding:20px 0">
-        <div style="font-size:24px">📋</div>
-        <div style="font-size:12px;margin-top:8px">No jobs yet</div>
-      </div>
-    </div>
-    <!-- Pagination -->
-    <div id="jobPagination" style="display:none;display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:4px;flex-shrink:0">
-      <button id="jobPagePrev" class="btn btn-sm btn-ghost" style="flex:1" onclick="jobPageChange(-1)">‹ Prev</button>
-      <span id="jobPageLabel" style="font-size:11px;color:var(--muted);white-space:nowrap"></span>
-      <button id="jobPageNext" class="btn btn-sm btn-ghost" style="flex:1" onclick="jobPageChange(1)">Next ›</button>
-    </div>
   </aside>
 
   <!-- ── Main Panel ───────────────────────── -->
-  <main class="main" id="mainPanel">
-    <div class="empty">
-      <div class="empty-icon">🔄</div>
-      <div class="empty-title">Informatica Conversion Tool</div>
-      <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
+  <main class="main" id="mainPanel" style="display:flex;flex-direction:column;padding:0;overflow:hidden">
+
+    <!-- Top nav -->
+    <nav style="display:flex;align-items:center;gap:0;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0">
+      <button id="navDashboard" onclick="setMainView('dashboard')"
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid var(--accent);background:none;color:var(--accent);cursor:pointer">
+        🏠 Dashboard
+      </button>
+      <button id="navHistory" onclick="setMainView('history')"
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        📋 Job History
+      </button>
+      <button id="navReview" onclick="setMainView('review')"
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        👁 Review Queue <span id="navReviewBadge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px">0</span>
+      </button>
+    </nav>
+
+    <!-- ── Dashboard panel ── -->
+    <div id="panelDashboard" style="flex:1;overflow-y:auto;padding:32px">
+      <div class="empty">
+        <div class="empty-icon">🔄</div>
+        <div class="empty-title">Informatica Conversion Tool</div>
+        <div class="empty-sub">Upload an Informatica XML export to begin.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
+      </div>
     </div>
+
+    <!-- ── History panel ── -->
+    <div id="panelHistory" style="display:none;flex:1;overflow-y:auto;padding:24px 32px">
+      <!-- History header + controls -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:20px;font-weight:700">Job History</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">All conversion runs · <span id="historyCount">–</span> jobs</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="histSearchInput" type="search" placeholder="🔍 Search filename, submitter, team, ticket…"
+                 oninput="applyHistoryFilter()"
+                 style="padding:7px 11px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:260px"/>
+          <select id="histStatusFilter" onchange="applyHistoryFilter()"
+                  style="padding:7px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="running">Running</option>
+            <option value="awaiting_review">Gate 1</option>
+            <option value="awaiting_sec_review">Gate 2</option>
+            <option value="awaiting_code_review">Gate 3</option>
+            <option value="complete">Complete ✓</option>
+            <option value="blocked">Blocked</option>
+            <option value="failed">Failed</option>
+          </select>
+          <button class="btn btn-sm btn-ghost" onclick="loadHistory()">🔄</button>
+        </div>
+      </div>
+
+      <!-- History table -->
+      <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);text-align:left">
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;white-space:nowrap">Filename</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Submitter</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Team</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Ticket / Notes</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Status</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Tier</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Submitted</th>
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase"></th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody">
+            <tr><td colspan="8" style="padding:40px;text-align:center;color:var(--muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <div id="histPagination" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
+        <div style="font-size:12px;color:var(--muted)" id="histPageInfo"></div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-ghost" id="histPrevBtn" onclick="histPageChange(-1)">‹ Prev</button>
+          <button class="btn btn-sm btn-ghost" id="histNextBtn" onclick="histPageChange(1)">Next ›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Review Queue panel ── -->
+    <div id="panelReview" style="display:none;flex:1;overflow-y:auto;padding:24px 32px;flex-direction:column;gap:16px">
+      <!-- Summary bar -->
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:20px;font-weight:700">Review Queue</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">
+            Gate 1: <strong id="reviewGate1Count">–</strong> &nbsp;·&nbsp;
+            Gate 2: <strong id="reviewGate2Count">–</strong> &nbsp;·&nbsp;
+            Gate 3: <strong id="reviewGate3Count">–</strong> &nbsp;·&nbsp;
+            Total: <strong id="reviewTotalCount">–</strong>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-ghost" onclick="loadReviewQueue()">🔄 Refresh</button>
+      </div>
+
+      <!-- Gate filter + reviewer row -->
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn" onclick="setReviewGateFilter(null)">All</button>
+          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Gate 1</button>
+          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Gate 2</button>
+          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Gate 3</button>
+        </div>
+        <input type="text" id="reviewerNameInput" placeholder="Your reviewer name"
+               style="flex:1;min-width:160px;max-width:260px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
+        <button class="btn btn-success" onclick="submitReviewDecision('APPROVE')">✓ Approve Selected</button>
+        <button class="btn btn-danger"  onclick="submitReviewDecision('REJECT')">✕ Reject Selected</button>
+        <button class="btn btn-warn" id="acknowledgeBtn" style="display:none" onclick="submitReviewDecision('ACKNOWLEDGE')">✓ Acknowledge</button>
+      </div>
+
+      <!-- Jobs table -->
+      <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
+        <div style="background:var(--surface2);padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:16px 1fr 140px 80px 60px 70px 90px 90px;gap:10px;align-items:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+          <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAllReview(this.checked)" style="width:16px;height:16px;cursor:pointer"/>
+          <span>Filename</span><span>Submitter</span><span>Batch</span><span>Gate</span><span>Tier</span><span>Flags</span><span>Waiting</span>
+        </div>
+        <div id="reviewQueueTable">
+          <div style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:28px">📋</div>
+            <div style="font-size:13px;margin-top:8px">No jobs currently awaiting review</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Security KB pill -->
+      <div id="secKbBadge" style="display:none;font-size:11px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--muted);align-self:flex-start">
+        🛡 Security KB: <span id="secKbRules">–</span> rules &nbsp;·&nbsp; <span id="secKbPatterns">–</span> learned patterns
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -576,30 +611,44 @@ let selectedWorkflowFile = null;
 let selectedParamFile    = null;
 let selectedZipFile      = null;
 let selectedBatchFile    = null;          // v2.0
-let uploadMode           = 'files';       // 'files' | 'zip' | 'batch'
+let uploadMode = 'files';  // 'files' | 'zip' | 'batch'
+let _mainView  = 'dashboard';  // 'dashboard' | 'history' | 'review'
 
-// ── Upload mode toggle ────────────────────────
+// ── Main view switcher (top nav tabs) ─────────
+function setMainView(view) {
+  _mainView = view;
+  const views = ['dashboard', 'history', 'review'];
+  views.forEach(v => {
+    const panel = document.getElementById('panel' + v.charAt(0).toUpperCase() + v.slice(1));
+    if (panel) {
+      panel.style.display = (v === view) ? (v === 'review' ? 'flex' : 'block') : 'none';
+      panel.style.flexDirection = (v === view && v === 'review') ? 'column' : '';
+    }
+    const btn = document.getElementById('nav' + v.charAt(0).toUpperCase() + v.slice(1));
+    if (btn) {
+      btn.style.borderBottomColor = (v === view) ? 'var(--accent)' : 'transparent';
+      btn.style.color = (v === view) ? 'var(--accent)' : 'var(--muted)';
+    }
+  });
+  if (view === 'review') loadReviewQueue();
+  if (view === 'history') loadHistory();
+}
+
+// ── Upload mode toggle (sidebar only) ─────────
 function setUploadMode(mode) {
   uploadMode = mode;
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
   document.getElementById('panelZip').style.display   = mode === 'zip'   ? '' : 'none';
   document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
-  document.getElementById('panelReview').style.display = mode === 'review' ? 'flex' : 'none';
   const tabFiles = document.getElementById('tabFiles');
   const tabZip   = document.getElementById('tabZip');
   const tabBatch = document.getElementById('tabBatch');
-  const tabReview = document.getElementById('tabReview');
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabZip.className   = mode === 'zip'   ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-  // tabReview is a standalone compact button — keep its custom inline sizing, only swap colour
-  tabReview.className = mode === 'review' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-  tabReview.style.cssText = 'font-size:11px;padding:3px 8px;white-space:nowrap';
-  startBtn.style.display = mode === 'review' ? 'none' : 'block';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
-  if (mode === 'review') loadReviewQueue();
 }
 
 // Workflow XML dropzone wiring
@@ -695,11 +744,17 @@ function setBatchFile(f) {
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
 
+  // Collect submitter fields (shared across all upload modes)
+  const _sName  = (document.getElementById('submitterName')?.value  || '').trim();
+  const _sTeam  = (document.getElementById('submitterTeam')?.value  || '').trim();
+  const _sNotes = (document.getElementById('submitterNotes')?.value || '').trim();
+
   if (uploadMode === 'batch') {
     // ── Batch upload path (v2.0) ─────────────
     if (!selectedBatchFile) { startBtn.disabled = false; return; }
     const fd = new FormData();
     fd.append('file', selectedBatchFile);
+    // Batch endpoint doesn't support submitter fields yet — no-op
     try {
       const res  = await fetch('/api/jobs/batch', { method: 'POST', body: fd });
       const data = await res.json();
@@ -708,8 +763,8 @@ startBtn.addEventListener('click', async () => {
           batchWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
           batchWarnings.style.display = 'block';
         }
+        setMainView('dashboard');
         await loadJobs();
-        // Open first job in the batch to give immediate feedback
         if (data.jobs && data.jobs.length) openJob(data.jobs[0].job_id);
       } else {
         alert('Batch upload failed: ' + JSON.stringify(data));
@@ -724,6 +779,9 @@ startBtn.addEventListener('click', async () => {
     if (!selectedZipFile) { startBtn.disabled = false; return; }
     const fd = new FormData();
     fd.append('file', selectedZipFile);
+    if (_sName)  fd.append('submitter_name',  _sName);
+    if (_sTeam)  fd.append('submitter_team',  _sTeam);
+    if (_sNotes) fd.append('submitter_notes', _sNotes);
     try {
       const res  = await fetch('/api/jobs/zip', { method: 'POST', body: fd });
       const data = await res.json();
@@ -732,6 +790,7 @@ startBtn.addEventListener('click', async () => {
           zipWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
           zipWarnings.style.display = 'block';
         }
+        setMainView('dashboard');
         await loadJobs();
         openJob(data.job_id);
       } else {
@@ -749,15 +808,18 @@ startBtn.addEventListener('click', async () => {
     fd.append('file', selectedFile);
     if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
     if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
+    if (_sName)  fd.append('submitter_name',  _sName);
+    if (_sTeam)  fd.append('submitter_team',  _sTeam);
+    if (_sNotes) fd.append('submitter_notes', _sNotes);
     try {
       const res  = await fetch('/api/jobs', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.job_id) {
-        // Reset optional file selections for next upload
         selectedWorkflowFile = null; selectedParamFile = null;
-        workflowLabel.textContent = 'Drop Workflow .xml here or click to add';
-        paramLabel.textContent    = 'Drop parameter file here or click to add';
+        workflowLabel.textContent = 'Drop Workflow .xml or click';
+        paramLabel.textContent    = 'Drop parameter file or click';
         dropzoneWF.style.borderColor = ''; dropzonePF.style.borderColor = '';
+        setMainView('dashboard');
         await loadJobs();
         openJob(data.job_id);
       } else {
@@ -865,6 +927,96 @@ function _updatePagination(total, pages) {
 function jobPageChange(delta) {
   _jobPage = Math.max(0, _jobPage + delta);
   applyJobFilter();
+}
+
+// ─────────────────────────────────────────────
+// History page
+// ─────────────────────────────────────────────
+let _histJobs    = [];
+let _histPage    = 0;
+const _HIST_PAGE = 25;
+
+async function loadHistory() {
+  try {
+    const res  = await fetch('/api/jobs');
+    const data = await res.json();
+    _histJobs = data.jobs || [];
+    _histPage = 0;
+    applyHistoryFilter();
+  } catch(e) { /* ignore */ }
+}
+
+function applyHistoryFilter() {
+  const query  = (document.getElementById('histSearchInput')?.value  || '').trim().toLowerCase();
+  const status = (document.getElementById('histStatusFilter')?.value || '').trim();
+  const _RUNNING = new Set(['pending','parsing','classifying','documenting','verifying',
+    'assigning_stack','converting','security_scanning','validating','reviewing','testing']);
+
+  let filtered = _histJobs.filter(j => {
+    if (query) {
+      const haystack = [j.filename, j.submitter_name, j.submitter_team, j.submitter_notes]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    if (status) {
+      if (status === 'running' && !_RUNNING.has(j.status)) return false;
+      if (status !== 'running' && j.status !== status) return false;
+    }
+    return true;
+  });
+
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / _HIST_PAGE));
+  _histPage   = Math.min(_histPage, pages - 1);
+  const slice = filtered.slice(_histPage * _HIST_PAGE, (_histPage + 1) * _HIST_PAGE);
+
+  const countEl = document.getElementById('historyCount');
+  if (countEl) countEl.textContent = total;
+
+  const tbody = document.getElementById('historyTableBody');
+  if (!tbody) return;
+
+  if (!slice.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--muted)">
+      No jobs found${query || status ? ' matching your filters' : ''}.</td></tr>`;
+  } else {
+    tbody.innerHTML = slice.map(j => {
+      const [cls, lbl] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+      const dt = j.created_at ? new Date(j.created_at).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : '—';
+      const tier = j.complexity_tier
+        ? `<span style="font-size:11px;padding:2px 7px;border-radius:99px;background:var(--surface2);border:1px solid var(--border)">${esc(j.complexity_tier)}</span>`
+        : '<span style="color:var(--muted)">—</span>';
+      return `<tr style="border-top:1px solid var(--border);cursor:pointer" onclick="setMainView('dashboard'); openJob('${j.job_id}')"
+                  onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
+        <td style="padding:10px 14px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.filename)}</td>
+        <td style="padding:10px 14px;color:${j.submitter_name ? 'var(--text)' : 'var(--muted)'}">${esc(j.submitter_name || '—')}</td>
+        <td style="padding:10px 14px;color:${j.submitter_team ? 'var(--text)' : 'var(--muted)'};font-size:12px">${esc(j.submitter_team || '—')}</td>
+        <td style="padding:10px 14px;color:${j.submitter_notes ? 'var(--text)' : 'var(--muted)'};font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.submitter_notes || '—')}</td>
+        <td style="padding:10px 14px"><span class="badge ${cls}">${lbl}</span></td>
+        <td style="padding:10px 14px">${tier}</td>
+        <td style="padding:10px 14px;font-size:12px;color:var(--muted);white-space:nowrap">${dt}</td>
+        <td style="padding:10px 14px">
+          <button class="btn btn-sm btn-ghost" style="font-size:11px;padding:3px 8px"
+                  onclick="event.stopPropagation(); setMainView('dashboard'); openJob('${j.job_id}')">View</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Pagination controls
+  const info    = document.getElementById('histPageInfo');
+  const prevBtn = document.getElementById('histPrevBtn');
+  const nextBtn = document.getElementById('histNextBtn');
+  if (info) info.textContent = total > _HIST_PAGE
+    ? `Showing ${_histPage * _HIST_PAGE + 1}–${Math.min((_histPage + 1) * _HIST_PAGE, total)} of ${total}`
+    : `${total} job${total !== 1 ? 's' : ''}`;
+  if (prevBtn) prevBtn.disabled = _histPage === 0;
+  if (nextBtn) nextBtn.disabled = _histPage >= pages - 1;
+}
+
+function histPageChange(delta) {
+  _histPage = Math.max(0, _histPage + delta);
+  applyHistoryFilter();
 }
 
 // Statuses that mean a job is still running / waiting for action
@@ -1055,8 +1207,9 @@ async function openHistoryJob(jobId, name) {
   currentJobId = jobId;
   await loadJobs();
 
-  const panel = document.getElementById('jobPanel');
+  const panel = document.getElementById('panelDashboard');
   if (!panel) return;
+  setMainView('dashboard');
 
   // Show a loading state
   panel.innerHTML = `<div style="padding:32px;color:var(--muted);font-size:13px">Loading log archive…</div>`;
@@ -2081,7 +2234,8 @@ function renderJobPanel(job) {
     </div>
   </div>`;
 
-  document.getElementById('mainPanel').innerHTML = html;
+  document.getElementById('panelDashboard').innerHTML = html;
+  setMainView('dashboard');  // ensure dashboard tab is active
 
   // After render: auto-scroll the log to bottom
   const ls = document.getElementById('logScroll');
@@ -3158,7 +3312,7 @@ let _reviewQueueRefreshInterval = null;
 function startReviewQueueAutoRefresh() {
   if (_reviewQueueRefreshInterval) clearInterval(_reviewQueueRefreshInterval);
   _reviewQueueRefreshInterval = setInterval(() => {
-    if (uploadMode === 'review') loadReviewQueue();
+    if (_mainView === 'review') loadReviewQueue();
   }, 30000);
 }
 startReviewQueueAutoRefresh();
@@ -3197,6 +3351,13 @@ async function updateNotifBell() {
     const bell  = document.getElementById('notifBell');
     const badge = document.getElementById('notifBadge');
     if (!bell || !badge) return;
+
+    // Update nav badge
+    const navBadge = document.getElementById('navReviewBadge');
+    if (navBadge) {
+      navBadge.textContent = total > 99 ? '99+' : String(total);
+      navBadge.style.display = total > 0 ? '' : 'none';
+    }
 
     if (total > 0) {
       badge.textContent = total > 99 ? '99+' : String(total);
