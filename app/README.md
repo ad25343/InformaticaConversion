@@ -322,9 +322,14 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.3.3** | Shipped | 5 new security rules (Oracle TCPS, log injection, macro SQL injection, hardcoded business constants) — 17→21 standing rules; Best Practices Guide security section added |
 | **v2.3.4** | Shipped | Security KB auto-promotion: patterns seen in ≥3 Gate 2 decisions auto-promoted to standing rules; `_DEFAULT_RULES` now synced from YAML (single source of truth) |
 | **v2.3.5** | Shipped | Verification false positive fixes: abbreviated SQ names (SQ_APPRAISALS for CORELOGIC_APPRAISALS), Lookup reference sources (REF_COUNTY_LIMITS via LKP), and RANKINDEX orphaned port on Rank transformations now correctly handled |
-| **v2.3.6** | Current | Rank/Sorter accuracy: parser captures sort keys; graph summary shows Rank config + Sorter sort order to Claude; RANKINDEX DEAD_LOGIC suppressed; accuracy check semantics fixed so HIGH_RISK findings no longer cause misleading REQUIRES_REMEDIATION |
-| **v2.3** | Planned | Git integration (open PR from UI); scheduler; team review mode with comment threads; Slack/Teams webhook notifications |
-| **v3.0** | Vision | Continuous migration mode; observability dashboard; self-hosted model support; repository-level object handling |
+| **v2.3.6** | Shipped | Rank/Sorter accuracy: parser captures sort keys; graph summary shows Rank config + Sorter sort order to Claude; RANKINDEX DEAD_LOGIC suppressed; accuracy check semantics fixed so HIGH_RISK findings no longer cause misleading REQUIRES_REMEDIATION |
+| **v2.4–v2.9** | Shipped | Mapping manifest + stability fixes; job artifact export; performance-at-scale prompts + SQLite WAL; dbt execution-ready output; validation framework (76 tests); webhook notifications |
+| **v2.10–v2.15** | Shipped | GitHub PR integration; mapplet detection + inline expansion; data-level equivalence tests; manifest-based file watcher; time-based cron scheduler; security hardening patch |
+| **v2.16.0** | Shipped | Config-driven pattern library — 10 ETL patterns (pass_through → scd2); pip-installable `etl_patterns` package; 199 tests; classifier decision tree + conversion agent integration |
+| **v2.17.0** | Current | Generic component architecture — org_config.yaml + warehouse_registry.yaml + Jinja2 prompt overrides; all hardcoded org signals externalised; backwards-compatible |
+| **v2.18** | Planned | Estate analyser (bulk XML → pattern/complexity/cost report) + migration wave planner (dependency DAG, topological wave sequencing, quick-win identification) |
+| **v2.19** | Planned | Multi-user access control (ADMIN/REVIEWER/ENGINEER/READ_ONLY roles, job ownership, audit trail) + SSO/OIDC + SAML 2.0 + JIT provisioning |
+| **v3.0** | Vision | Continuous migration mode; migration velocity dashboard; re-export delta handling; self-hosted model support; repository-level object handling |
 
 ---
 
