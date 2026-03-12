@@ -44,3 +44,7 @@ htmlcov/
 
 # ── Project-specific ignores ─────────────────────────────────────────────────
 informatica_conversion_tool_prompt_v4.md
+
+# ── Claude worktree artifacts ──────────────────────────────────────────────────
+.claude/
+**/.claude/
