@@ -25,11 +25,11 @@ test.beforeAll(async () => {
 test.describe('File Submission', () => {
   // ─── SUB-01: Submitter name prefilled from persona cookie ──────────────────
   test('SUB-01: submitter name field prefilled from persona cookie', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     const nameField = page.locator('#submitterName');
-    await expect(nameField).toHaveValue('Aravind Doma');
+    await expect(nameField).toHaveValue('Asin D');
   });
 
   test('SUB-01b: different persona prefills correct name', async ({ browser }) => {
@@ -44,7 +44,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-02: Start button disabled before file selection ──────────────────
   test('SUB-02: Start Pipeline button is disabled until a file is selected', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     // Individual tab (default)
@@ -62,7 +62,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-02b: Button enables after file selection ─────────────────────────
   test('SUB-02b: Start Pipeline button enables after XML selected', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     await page.click('#tabFiles');
@@ -74,7 +74,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-03: Individual XML upload — job created ───────────────────────────
   test('SUB-03: individual XML upload creates a job and starts pipeline', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     await page.click('#tabFiles');
@@ -95,7 +95,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-04: Individual XML + Workflow XML ────────────────────────────────
   test('SUB-04: individual XML + workflow XML both accepted', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     await page.click('#tabFiles');
@@ -112,7 +112,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-05: ZIP upload mode ───────────────────────────────────────────────
   test('SUB-05: ZIP upload mode tab visible and file input accepts .zip', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     await page.click('#tabZip');
@@ -127,7 +127,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-06: Batch ZIP mode ────────────────────────────────────────────────
   test('SUB-06: batch upload mode tab visible and file input accepts .zip', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     await page.click('#tabBatch');
@@ -141,7 +141,7 @@ test.describe('File Submission', () => {
 
   // ─── SUB-07: Upload mode toggle switches panels ────────────────────────────
   test('SUB-07: upload mode toggle shows correct panel for each tab', async ({ page }) => {
-    await login(page, 'Aravind Doma');
+    await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
     const modes = [

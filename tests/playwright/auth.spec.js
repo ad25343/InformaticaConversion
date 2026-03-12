@@ -44,14 +44,14 @@ test('AUTH-02: selecting a persona card highlights it', async ({ page }) => {
 
 // ─── AUTH-03: Correct password → landing page ─────────────────────────────────
 test('AUTH-03: correct password logs in and shows landing page', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   // Should be on the main app, not /login
   expect(page.url()).not.toContain('/login');
 
   // Landing page greeting visible
   await expect(page.locator('#landingGreeting')).toBeVisible();
-  await expect(page.locator('#landingGreeting')).toContainText('Aravind');
+  await expect(page.locator('#landingGreeting')).toContainText('Asin');
 
   // Session cookie present
   const cookies = await page.context().cookies();
@@ -61,13 +61,13 @@ test('AUTH-03: correct password logs in and shows landing page', async ({ page }
   // Persona cookie present and readable
   const personaCookie = cookies.find(c => c.name === 'persona');
   expect(personaCookie).toBeTruthy();
-  expect(personaCookie.value).toBe('Aravind Doma');
+  expect(personaCookie.value).toBe('Asin D');
 });
 
 // ─── AUTH-04: Wrong password → error banner ──────────────────────────────────
 test('AUTH-04: wrong password shows error, stays on login page', async ({ page }) => {
   await page.goto('/login');
-  const card = page.locator('.persona-option').filter({ hasText: 'Aravind Doma' });
+  const card = page.locator('.persona-option').filter({ hasText: 'Asin D' });
   await card.click();
   await page.fill('input[name="password"]', 'definitely-wrong-password-xyz');
   await page.click('button[type="submit"]');

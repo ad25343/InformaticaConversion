@@ -101,13 +101,13 @@ test('REV-05: Approve Selected and Reject Selected buttons present', async ({ pa
 
 // ─── REV-06: Nav badge hidden with no pending reviews ────────────────────────
 test('REV-06: nav review badge hidden when no jobs pending review', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await expect(page.locator('#navReviewBadge')).not.toBeVisible();
 });
 
 // ─── REV-06b: Notification bell hidden with no pending reviews ───────────────
 test('REV-06b: notification bell hidden when no jobs pending review', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await expect(page.locator('#notifBell')).not.toBeVisible();
 });
 

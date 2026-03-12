@@ -33,7 +33,7 @@ async function seedJob(page, overrides = {}) {
 
 // ─── HIST-01: History table loads ─────────────────────────────────────────────
 test('HIST-01: job history table shows submitted jobs', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   // Seed a job so history is non-empty
   await seedJob(page, { name: 'HIST Tester', team: 'QA', notes: 'HIST-01' });
@@ -51,7 +51,7 @@ test('HIST-01: job history table shows submitted jobs', async ({ page }) => {
 
 // ─── HIST-01b: Column headers present ────────────────────────────────────────
 test('HIST-01b: history table has all required column headers', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await goToView(page, 'history');
 
   const headers = page.locator('#panelHistory thead th');
@@ -67,7 +67,7 @@ test('HIST-01b: history table has all required column headers', async ({ page })
 
 // ─── HIST-02: Search filters rows ─────────────────────────────────────────────
 test('HIST-02: search input filters history rows', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   // Seed two jobs with distinct submitter names
   await seedJob(page, { name: 'AlphaUser', team: 'TeamA', notes: 'alpha-note' });
@@ -94,7 +94,7 @@ test('HIST-02: search input filters history rows', async ({ page }) => {
 
 // ─── HIST-03: Status dropdown filters ─────────────────────────────────────────
 test('HIST-03: status filter dropdown narrows results', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await goToView(page, 'history');
 
   // Select "Complete" — with clean DB and no completed jobs, table should be empty
@@ -118,7 +118,7 @@ test('HIST-03: status filter dropdown narrows results', async ({ page }) => {
 
 // ─── HIST-03b: Clearing filter restores all rows ──────────────────────────────
 test('HIST-03b: clearing status filter restores all rows', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await seedJob(page);
 
   await goToView(page, 'history');
@@ -138,7 +138,7 @@ test('HIST-03b: clearing status filter restores all rows', async ({ page }) => {
 
 // ─── HIST-04: Refresh button reloads data ─────────────────────────────────────
 test('HIST-04: refresh button triggers a reload', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await goToView(page, 'history');
 
   const refreshBtn = page.locator('#panelHistory button', { hasText: '🔄' });
@@ -154,7 +154,7 @@ test('HIST-04: refresh button triggers a reload', async ({ page }) => {
 
 // ─── HIST-05: Clicking a row opens the job in Dashboard panel ────────────────
 test('HIST-05: clicking a history row opens job in dashboard panel', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await seedJob(page, { name: 'ClickTester', notes: 'HIST-05' });
 
   await goToView(page, 'history');
@@ -172,7 +172,7 @@ test('HIST-05: clicking a history row opens job in dashboard panel', async ({ pa
 
 // ─── HIST-06: "View" button also opens job ───────────────────────────────────
 test('HIST-06: View button in Actions column opens job in dashboard', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await seedJob(page, { notes: 'HIST-06' });
 
   await goToView(page, 'history');
@@ -187,7 +187,7 @@ test('HIST-06: View button in Actions column opens job in dashboard', async ({ p
 
 // ─── HIST-07: Pagination controls exist ──────────────────────────────────────
 test('HIST-07: pagination controls are rendered', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await goToView(page, 'history');
 
   await expect(page.locator('#histPrevBtn')).toBeVisible();

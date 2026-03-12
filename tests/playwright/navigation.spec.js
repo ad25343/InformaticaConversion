@@ -9,13 +9,13 @@ const { test, expect } = require('@playwright/test');
 const { login, goToView, PERSONAS } = require('./helpers');
 
 // Re-use a single logged-in page for most nav tests (faster)
-test.describe('Navigation (logged in as Aravind Doma)', () => {
+test.describe('Navigation (logged in as Asin D)', () => {
   let sharedPage;
 
   test.beforeAll(async ({ browser }) => {
     const ctx = await browser.newContext();
     sharedPage = await ctx.newPage();
-    await login(sharedPage, 'Aravind Doma');
+    await login(sharedPage, 'Asin D');
   });
 
   // ─── NAV-01: Top nav has 4 buttons ─────────────────────────────────────────
@@ -56,10 +56,10 @@ test.describe('Navigation (logged in as Aravind Doma)', () => {
     }
   });
 
-  // ─── NAV-03: Persona chip — Aravind Doma ────────────────────────────────────
+  // ─── NAV-03: Persona chip — Asin D ────────────────────────────────────
   test('NAV-03: persona chip shows correct name and role', async () => {
     const page = sharedPage;
-    await expect(page.locator('#personaNameNav')).toHaveText('Aravind Doma');
+    await expect(page.locator('#personaNameNav')).toHaveText('Asin D');
     await expect(page.locator('#personaRoleNav')).toHaveText('Data Engineer');
     await expect(page.locator('#personaAvatarNav')).toContainText('AD');
   });
@@ -67,7 +67,7 @@ test.describe('Navigation (logged in as Aravind Doma)', () => {
   // ─── NAV-04: Sidebar persona footer ─────────────────────────────────────────
   test('NAV-04: sidebar footer shows persona name, role and sign-out', async () => {
     const page = sharedPage;
-    await expect(page.locator('#sidebarName')).toHaveText('Aravind Doma');
+    await expect(page.locator('#sidebarName')).toHaveText('Asin D');
     await expect(page.locator('#sidebarRole')).toHaveText('Data Engineer');
     await expect(page.locator('#sidebarAvatar')).toContainText('AD');
     await expect(page.locator('aside a[href="/logout"]')).toBeVisible();
@@ -132,7 +132,7 @@ for (const persona of PERSONAS) {
 
 // ─── NAV-06: Notification bell appears when review items exist ───────────────
 test('NAV-06: notification bell is hidden initially (clean DB)', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   // With a clean database there should be no pending reviews
   await expect(page.locator('#notifBell')).not.toBeVisible();
   await expect(page.locator('#navReviewBadge')).not.toBeVisible();

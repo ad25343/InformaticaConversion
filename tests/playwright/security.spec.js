@@ -50,7 +50,7 @@ test('SEC-05: security headers present on login page response', async ({ request
 test('SEC-05b: security headers present on authenticated main page', async ({ browser }) => {
   const ctx  = await browser.newContext();
   const page = await ctx.newPage();
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   const res = await ctx.request.get(`${BASE_URL}/`);
   const headers = res.headers();
@@ -64,7 +64,7 @@ test('SEC-05b: security headers present on authenticated main page', async ({ br
 
 // ─── SEC-02: Non-XML file input restricted ────────────────────────────────────
 test('SEC-02: mapping file input only accepts .xml', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await page.click('#navDashboard');
   await page.waitForSelector('#panelDashboard:visible');
 
@@ -77,7 +77,7 @@ test('SEC-02: mapping file input only accepts .xml', async ({ page }) => {
 
 // ─── SEC-02b: ZIP and batch inputs also restricted ────────────────────────────
 test('SEC-02b: ZIP and batch inputs only accept .zip', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
   await page.click('#navDashboard');
   await page.waitForSelector('#panelDashboard:visible');
 
@@ -93,7 +93,7 @@ test('SEC-02b: ZIP and batch inputs only accept .zip', async ({ page }) => {
 test('SEC-06: duplicate filename submissions produce separate job IDs', async ({ page }) => {
   const { uploadFile, SAMPLE_XML, goToView } = require('./helpers');
 
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   // Submit once
   await goToView(page, 'dashboard');

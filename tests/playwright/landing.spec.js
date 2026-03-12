@@ -24,7 +24,7 @@ test('LAND-01b: greeting includes time-of-day salutation', async ({ page }) => {
 
 // ─── LAND-02: Three action cards ─────────────────────────────────────────────
 test('LAND-02: landing page shows three action cards', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   await expect(page.locator('.action-card')).toHaveCount(3);
   await expect(page.locator('.action-card').filter({ hasText: 'Submit a Conversion' })).toBeVisible();
@@ -34,7 +34,7 @@ test('LAND-02: landing page shows three action cards', async ({ page }) => {
 
 // ─── LAND-03: Submit card navigates to dashboard ──────────────────────────────
 test('LAND-03: Submit card navigates to Submit panel', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   await page.locator('.action-card').filter({ hasText: 'Submit a Conversion' }).click();
   await page.waitForSelector('#panelDashboard:visible', { timeout: 6_000 });
@@ -72,7 +72,7 @@ test('LAND-05: Job History card navigates to Job History panel', async ({ page }
 
 // ─── LAND-06: Live stats tiles render ─────────────────────────────────────────
 test('LAND-06: stats tiles show numeric values after load', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   // Stats fire an async fetch; wait for them to populate (leave "–")
   await page.waitForFunction(() => {
@@ -89,7 +89,7 @@ test('LAND-06: stats tiles show numeric values after load', async ({ page }) => 
 
 // ─── LAND-07: Home nav button always returns to landing ───────────────────────
 test('LAND-07: Home nav button returns to landing from any view', async ({ page }) => {
-  await login(page, 'Aravind Doma');
+  await login(page, 'Asin D');
 
   const views = [
     { nav: '#navDashboard', panel: '#panelDashboard' },
