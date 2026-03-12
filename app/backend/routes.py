@@ -1203,3 +1203,542 @@ async def get_batch(batch_id: str):
     batch["status"] = _compute_batch_status([j["status"] for j in jobs])
     batch["jobs"] = jobs
     return batch
+
+
+# ─────────────────────────────────────────────
+# Gate Review Queue (v2.17.1)
+# ─────────────────────────────────────────────
+
+def _get_gate_from_status(status: str) -> _Opt[int]:
+    """Map job status to gate number: 1 (review), 2 (security), 3 (code)."""
+    if status == JobStatus.AWAITING_REVIEW.value:
+        return 1
+    elif status == JobStatus.AWAITING_SEC_REVIEW.value:
+        return 2
+    elif status == JobStatus.AWAITING_CODE_REVIEW.value:
+        return 3
+    return None
+
+
+def _extract_flags_for_gate(state: dict, gate: int) -> dict:
+    """Extract flag summary and top flags from state based on gate."""
+    flag_summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    top_flags = []
+
+    if gate == 1:
+        # Gate 1: Extract from verification.flags
+        verification = state.get("verification", {})
+        flags = verification.get("flags", [])
+        for flag in flags:
+            severity = flag.get("severity", "MEDIUM").upper()
+            if severity in flag_summary:
+                flag_summary[severity] += 1
+            flag_type = flag.get("flag_type", "UNKNOWN")
+            if flag_type not in top_flags:
+                top_flags.append(flag_type)
+                if len(top_flags) >= 2:
+                    break
+    # For gates 2 and 3, leave empty (as per spec: "don't fail if parsing state is expensive, just return empty dict")
+
+    return {"flag_summary": flag_summary, "top_flags": top_flags}
+
+
+@router.get("/gates/pending")
+async def get_pending_gate_jobs(gate: _Opt[int] = None, batch_id: _Opt[str] = None):
+    """
+    Return all jobs currently waiting at human gates with enough context for batch review.
+
+    Query params:
+      - gate: 1, 2, or 3 to filter to specific gate
+      - batch_id: filter to specific batch
+
+    Returns jobs sorted by waiting_since ascending (longest waiting first).
+    """
+    try:
+        async with db._connect() as conn:
+            conn.row_factory = __import__("aiosqlite").Row
+
+            # Build WHERE clause
+            where_clauses = [
+                "deleted_at IS NULL",
+                f"status IN ('{JobStatus.AWAITING_REVIEW.value}', "
+                f"'{JobStatus.AWAITING_SEC_REVIEW.value}', "
+                f"'{JobStatus.AWAITING_CODE_REVIEW.value}')",
+            ]
+            params = []
+
+            if gate:
+                status_map = {
+                    1: JobStatus.AWAITING_REVIEW.value,
+                    2: JobStatus.AWAITING_SEC_REVIEW.value,
+                    3: JobStatus.AWAITING_CODE_REVIEW.value,
+                }
+                if gate not in status_map:
+                    raise HTTPException(400, "Gate must be 1, 2, or 3")
+                where_clauses.append(f"status = ?")
+                params.append(status_map[gate])
+
+            if batch_id:
+                where_clauses.append("batch_id = ?")
+                params.append(batch_id)
+
+            where_sql = " AND ".join(where_clauses)
+
+            # Fetch all pending jobs
+            async with conn.execute(
+                f"SELECT job_id, filename, batch_id, status, complexity_tier, "
+                f"       created_at, updated_at, state_json FROM jobs "
+                f"WHERE {where_sql} ORDER BY updated_at ASC",
+                params,
+            ) as cur:
+                rows = await cur.fetchall()
+
+            # Process rows
+            jobs = []
+            by_gate = {1: 0, 2: 0, 3: 0}
+
+            for row in rows:
+                job_dict = dict(row)
+                status = job_dict["status"]
+                gate_num = _get_gate_from_status(status)
+                if gate_num is None:
+                    continue
+
+                by_gate[gate_num] += 1
+
+                state = db._decode_state(job_dict["state_json"])
+                complexity = state.get("complexity", {})
+
+                # Calculate waiting time
+                now = _datetime.utcnow().isoformat() + "Z"
+                created_dt = _datetime.fromisoformat(job_dict["updated_at"].replace("Z", "+00:00"))
+                now_dt = _datetime.utcnow()
+                waiting_seconds = (now_dt - created_dt.replace(tzinfo=None)).total_seconds()
+                waiting_minutes = int(waiting_seconds / 60)
+
+                flag_data = _extract_flags_for_gate(state, gate_num)
+
+                jobs.append({
+                    "job_id": job_dict["job_id"],
+                    "filename": job_dict["filename"],
+                    "batch_id": job_dict["batch_id"],
+                    "gate": gate_num,
+                    "complexity_tier": complexity.get("tier", "unknown"),
+                    "suggested_pattern": complexity.get("suggested_pattern", ""),
+                    "pattern_confidence": complexity.get("pattern_confidence", ""),
+                    "waiting_since": job_dict["updated_at"],
+                    "waiting_minutes": waiting_minutes,
+                    **flag_data,
+                })
+
+            return {
+                "total": len(jobs),
+                "by_gate": by_gate,
+                "jobs": jobs,
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching pending gate jobs: {e}")
+        raise HTTPException(500, f"Error fetching pending gate jobs: {str(e)}")
+
+
+from pydantic import BaseModel as _PydanticBaseModel
+
+
+class BatchSignOffRequest(_PydanticBaseModel):
+    """Request body for batch gate sign-off."""
+    job_ids: list[str]
+    gate: int
+    decision: str
+    reviewer_name: str
+    reviewer_role: str
+    notes: _Opt[str] = None
+
+
+@router.post("/gates/batch-signoff")
+async def batch_signoff(payload: BatchSignOffRequest):
+    """
+    Apply a gate decision to multiple jobs at once.
+
+    Supported decisions by gate:
+      - Gate 1: APPROVE, REJECT
+      - Gate 2: APPROVED, ACKNOWLEDGED, FAILED
+      - Gate 3: APPROVED, REJECTED
+
+    Returns {succeeded: [...], failed: [...], errors: {...}}
+    """
+    try:
+        if payload.gate not in (1, 2, 3):
+            raise HTTPException(400, "Gate must be 1, 2, or 3")
+
+        # Validate decision for gate
+        valid_decisions = {
+            1: ["APPROVE", "REJECT"],
+            2: ["APPROVED", "ACKNOWLEDGED", "FAILED"],
+            3: ["APPROVED", "REJECTED"],
+        }
+        if payload.decision not in valid_decisions[payload.gate]:
+            raise HTTPException(400, f"Invalid decision '{payload.decision}' for gate {payload.gate}")
+
+        succeeded = []
+        failed = []
+        errors = {}
+
+        # Process each job sequentially to avoid DB locking
+        for job_id in payload.job_ids:
+            try:
+                job = await db.get_job(job_id)
+                if not job:
+                    errors[job_id] = "Job not found"
+                    failed.append(job_id)
+                    continue
+
+                # Verify job is at the correct gate
+                expected_status = {
+                    1: JobStatus.AWAITING_REVIEW.value,
+                    2: JobStatus.AWAITING_SEC_REVIEW.value,
+                    3: JobStatus.AWAITING_CODE_REVIEW.value,
+                }[payload.gate]
+
+                if job["status"] != expected_status:
+                    errors[job_id] = f"Job not at gate {payload.gate} (status: {job['status']})"
+                    failed.append(job_id)
+                    continue
+
+                # Apply decision based on gate and payload decision
+                if payload.gate == 1:
+                    # Gate 1: APPROVE or REJECT
+                    review_decision = ReviewDecision.APPROVED if payload.decision == "APPROVE" else ReviewDecision.REJECTED
+                    sign_off = SignOffRecord(
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        review_date=_datetime.utcnow().isoformat(),
+                        blocking_resolved=[],
+                        flags_accepted=[],
+                        flags_resolved=[],
+                        decision=review_decision,
+                        notes=payload.notes,
+                    )
+                    await db.update_job(job_id, JobStatus.AWAITING_REVIEW.value, 5,
+                                      {"sign_off": sign_off.model_dump()})
+
+                    await db.add_audit_entry(
+                        job_id=job_id,
+                        gate="gate1",
+                        event_type=payload.decision.lower(),
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        decision=payload.decision,
+                        notes=payload.notes,
+                    )
+
+                    if payload.decision == "REJECT":
+                        await db.update_job(job_id, JobStatus.BLOCKED.value, 5, {})
+                    else:
+                        # Resume pipeline for APPROVE
+                        queue: asyncio.Queue = asyncio.Queue()
+                        _progress_queues[job_id] = queue
+                        state = job["state"]
+                        filename = job["filename"]
+
+                        async def _resume_gate1():
+                            async for progress in orchestrator.resume_after_signoff(job_id, state, filename):
+                                await queue.put(progress)
+                            await queue.put(None)
+
+                        task = asyncio.create_task(_resume_gate1())
+                        _active_tasks[job_id] = task
+
+                elif payload.gate == 2:
+                    # Gate 2: APPROVED, ACKNOWLEDGED, or FAILED
+                    sec_decision_map = {
+                        "APPROVED": SecurityReviewDecision.APPROVED,
+                        "ACKNOWLEDGED": SecurityReviewDecision.ACKNOWLEDGED,
+                        "FAILED": SecurityReviewDecision.FAILED,
+                    }
+                    sec_decision = sec_decision_map[payload.decision]
+
+                    state = job["state"]
+                    prev_round = state.get("remediation_round", 0)
+
+                    sec_signoff = SecuritySignOffRecord(
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        review_date=_datetime.utcnow().isoformat() + "Z",
+                        decision=sec_decision,
+                        notes=payload.notes,
+                        remediation_round=prev_round,
+                    )
+
+                    await db.update_job(job_id, JobStatus.AWAITING_SEC_REVIEW.value, 9,
+                                      {"security_sign_off": sec_signoff.model_dump()})
+
+                    await db.add_audit_entry(
+                        job_id=job_id,
+                        gate="gate2",
+                        event_type=payload.decision.lower(),
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        decision=payload.decision,
+                        notes=payload.notes,
+                        extra={"remediation_round": prev_round},
+                    )
+
+                    if payload.decision == "FAILED":
+                        await db.update_job(job_id, JobStatus.BLOCKED.value, 9, {})
+                    elif payload.decision in ("APPROVED", "ACKNOWLEDGED"):
+                        # Resume pipeline for APPROVED or ACKNOWLEDGED
+                        queue: asyncio.Queue = asyncio.Queue()
+                        _progress_queues[job_id] = queue
+                        filename = job["filename"]
+
+                        async def _resume_gate2():
+                            async for progress in orchestrator.resume_after_security_review(
+                                job_id, state, filename
+                            ):
+                                await queue.put(progress)
+                            await queue.put(None)
+
+                        task = asyncio.create_task(_resume_gate2())
+                        _active_tasks[job_id] = task
+
+                elif payload.gate == 3:
+                    # Gate 3: APPROVED or REJECTED
+                    code_decision = CodeReviewDecision.APPROVED if payload.decision == "APPROVED" else CodeReviewDecision.REJECTED
+
+                    code_signoff = CodeSignOffRecord(
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        review_date=_datetime.utcnow().isoformat(),
+                        decision=code_decision,
+                        notes=payload.notes,
+                    )
+
+                    await db.update_job(job_id, JobStatus.AWAITING_CODE_REVIEW.value, 12,
+                                      {"code_sign_off": code_signoff.model_dump()})
+
+                    await db.add_audit_entry(
+                        job_id=job_id,
+                        gate="gate3",
+                        event_type=payload.decision.lower(),
+                        reviewer_name=payload.reviewer_name,
+                        reviewer_role=payload.reviewer_role,
+                        decision=payload.decision,
+                        notes=payload.notes,
+                    )
+
+                    if payload.decision == "APPROVED":
+                        await db.update_job(job_id, JobStatus.COMPLETE.value, 13, {})
+                    else:
+                        # REJECTED
+                        await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
+
+                succeeded.append(job_id)
+                logger.info(f"Batch sign-off succeeded: job_id={job_id} gate={payload.gate} decision={payload.decision}")
+
+            except Exception as e:
+                logger.error(f"Error processing batch sign-off for job {job_id}: {e}")
+                errors[job_id] = str(e)
+                failed.append(job_id)
+
+        return {
+            "succeeded": succeeded,
+            "failed": failed,
+            "errors": errors,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in batch_signoff: {e}")
+        raise HTTPException(500, f"Batch sign-off failed: {str(e)}")
+
+
+@router.get("/progress")
+async def get_migration_progress():
+    """
+    Return migration-level progress summary across all non-deleted jobs.
+
+    Includes:
+      - Status counts (not_started, in_pipeline, awaiting_gate, complete, blocked, failed)
+      - Complexity tier breakdown
+      - Throughput metrics and ETA
+    """
+    try:
+        async with db._connect() as conn:
+            conn.row_factory = __import__("aiosqlite").Row
+
+            # Fetch all non-deleted jobs with minimal fields
+            async with conn.execute(
+                "SELECT status, complexity_tier, created_at, updated_at "
+                "FROM jobs WHERE deleted_at IS NULL"
+            ) as cur:
+                rows = await cur.fetchall()
+
+        # Count statuses and tiers
+        status_counts = {
+            "not_started": 0,
+            "in_pipeline": 0,
+            "awaiting_gate_1": 0,
+            "awaiting_gate_2": 0,
+            "awaiting_gate_3": 0,
+            "complete": 0,
+            "blocked": 0,
+            "failed": 0,
+        }
+        tier_counts = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "unknown": 0}
+
+        # Pipeline statuses (active, not gate, not terminal)
+        pipeline_statuses = {
+            "parsing", "classifying", "documenting", "verifying",
+            "assigning_stack", "converting", "validating", "security_scanning",
+            "reviewing", "testing",
+        }
+
+        for row in rows:
+            status = row["status"]
+            tier = row["complexity_tier"] or "unknown"
+
+            # Map tier names
+            tier_map = {"Low": "LOW", "Medium": "MEDIUM", "High": "HIGH", "Very High": "VERY_HIGH"}
+            tier = tier_map.get(tier, "unknown")
+            if tier in tier_counts:
+                tier_counts[tier] += 1
+
+            if status == "pending":
+                status_counts["not_started"] += 1
+            elif status in pipeline_statuses:
+                status_counts["in_pipeline"] += 1
+            elif status == JobStatus.AWAITING_REVIEW.value:
+                status_counts["awaiting_gate_1"] += 1
+            elif status == JobStatus.AWAITING_SEC_REVIEW.value:
+                status_counts["awaiting_gate_2"] += 1
+            elif status == JobStatus.AWAITING_CODE_REVIEW.value:
+                status_counts["awaiting_gate_3"] += 1
+            elif status == JobStatus.COMPLETE.value:
+                status_counts["complete"] += 1
+            elif status == JobStatus.BLOCKED.value:
+                status_counts["blocked"] += 1
+            elif status == JobStatus.FAILED.value:
+                status_counts["failed"] += 1
+
+        # Calculate throughput (jobs completed in last 7 days)
+        seven_days_ago = (_datetime.utcnow() - __import__("datetime").timedelta(days=7)).isoformat()
+        async with db._connect() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status = ? AND updated_at >= ? AND deleted_at IS NULL",
+                (JobStatus.COMPLETE.value, seven_days_ago),
+            ) as cur:
+                result = await cur.fetchone()
+                completed_7d = result[0] if result else 0
+
+        throughput_per_day = round(completed_7d / 7.0, 1)
+
+        # Calculate ETA
+        total = len(rows)
+        not_started = status_counts["not_started"]
+        in_pipeline = status_counts["in_pipeline"]
+        awaiting_gate = (status_counts["awaiting_gate_1"] +
+                        status_counts["awaiting_gate_2"] +
+                        status_counts["awaiting_gate_3"])
+
+        remaining = not_started + in_pipeline + awaiting_gate
+        estimated_days = None
+        estimated_date = None
+
+        if throughput_per_day > 0:
+            estimated_days = round(remaining / throughput_per_day, 1)
+            completion_date = _datetime.utcnow() + __import__("datetime").timedelta(days=estimated_days)
+            estimated_date = completion_date.date().isoformat()
+
+        now = _datetime.utcnow().isoformat() + "Z"
+
+        return {
+            "total": total,
+            "not_started": not_started,
+            "in_pipeline": in_pipeline,
+            "awaiting_gate": {
+                "1": status_counts["awaiting_gate_1"],
+                "2": status_counts["awaiting_gate_2"],
+                "3": status_counts["awaiting_gate_3"],
+            },
+            "complete": status_counts["complete"],
+            "blocked": status_counts["blocked"],
+            "failed": status_counts["failed"],
+            "by_tier": tier_counts,
+            "throughput_per_day": throughput_per_day,
+            "estimated_completion_days": estimated_days,
+            "estimated_completion_date": estimated_date,
+            "as_of": now,
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching migration progress: {e}")
+        raise HTTPException(500, f"Error fetching migration progress: {str(e)}")
+
+
+@router.get("/progress/export")
+async def export_progress_csv():
+    """
+    Return a CSV download of all job statuses for management reporting.
+
+    Columns: job_id, filename, batch_id, status, complexity_tier, created_at, updated_at, waiting_at_gate, complete_at
+    """
+    try:
+        async with db._connect() as conn:
+            conn.row_factory = __import__("aiosqlite").Row
+            async with conn.execute(
+                "SELECT job_id, filename, batch_id, status, complexity_tier, "
+                "       created_at, updated_at FROM jobs WHERE deleted_at IS NULL "
+                "ORDER BY created_at DESC"
+            ) as cur:
+                rows = await cur.fetchall()
+
+        # Build CSV
+        csv_lines = ["job_id,filename,batch_id,status,complexity_tier,created_at,updated_at,waiting_at_gate,complete_at"]
+
+        for row in rows:
+            job_id = row["job_id"]
+            filename = row["filename"]
+            batch_id = row["batch_id"] or ""
+            status = row["status"]
+            tier = row["complexity_tier"] or ""
+            created = row["created_at"]
+            updated = row["updated_at"]
+
+            # Determine waiting_at_gate
+            waiting_gate = ""
+            if status == JobStatus.AWAITING_REVIEW.value:
+                waiting_gate = "1"
+            elif status == JobStatus.AWAITING_SEC_REVIEW.value:
+                waiting_gate = "2"
+            elif status == JobStatus.AWAITING_CODE_REVIEW.value:
+                waiting_gate = "3"
+
+            # Use updated_at as proxy for complete_at
+            complete_at = updated if status == JobStatus.COMPLETE.value else ""
+
+            # Escape CSV values
+            def escape_csv(val):
+                if val is None:
+                    return ""
+                val_str = str(val)
+                if "," in val_str or '"' in val_str or "\n" in val_str:
+                    return '"' + val_str.replace('"', '""') + '"'
+                return val_str
+
+            line = f"{escape_csv(job_id)},{escape_csv(filename)},{escape_csv(batch_id)},{escape_csv(status)},{escape_csv(tier)},{escape_csv(created)},{escape_csv(updated)},{escape_csv(waiting_gate)},{escape_csv(complete_at)}"
+            csv_lines.append(line)
+
+        csv_content = "\n".join(csv_lines)
+        now = _datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="migration_progress_{now}.csv"'},
+        )
+
+    except Exception as e:
+        logger.error(f"Error exporting progress CSV: {e}")
+        raise HTTPException(500, f"Error exporting progress CSV: {str(e)}")

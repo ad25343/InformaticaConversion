@@ -286,13 +286,15 @@
       <div class="section-title">New Conversion</div>
 
       <!-- Upload mode toggle -->
-      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px">
-        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
-                onclick="setUploadMode('files')">📄 Individual Files</button>
-        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
-                onclick="setUploadMode('zip')">🗜 ZIP Archive</button>
-        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+      <div style="display:flex;gap:4px;margin-bottom:10px;background:var(--surface);border-radius:8px;padding:3px;flex-wrap:wrap">
+        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+                onclick="setUploadMode('files')">📄 Individual</button>
+        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+                onclick="setUploadMode('zip')">🗜 ZIP</button>
+        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
                 onclick="setUploadMode('batch')">📦 Batch</button>
+        <button id="tabReview" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0;min-width:80px"
+                onclick="setUploadMode('review')">👁 Review Queue</button>
       </div>
 
       <!-- ── Individual files panel ── -->
@@ -357,6 +359,60 @@
           batch.zip / mapping_b / mapping.xml &nbsp;…
         </div>
         <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
+      </div>
+
+      <!-- ── Review Queue panel (v2.17.1) ── -->
+      <div id="panelReview" style="display:none;display:flex;flex-direction:column;gap:12px">
+        <!-- Summary bar -->
+        <div style="padding:12px;background:var(--surface2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+          <div style="font-size:12px;color:var(--muted)">
+            <span>Gate 1: <strong id="reviewGate1Count">–</strong></span> &nbsp;|&nbsp;
+            <span>Gate 2: <strong id="reviewGate2Count">–</strong></span> &nbsp;|&nbsp;
+            <span>Gate 3: <strong id="reviewGate3Count">–</strong></span> &nbsp;|&nbsp;
+            <span>Total: <strong id="reviewTotalCount">–</strong></span>
+          </div>
+          <button class="btn btn-sm btn-ghost" onclick="loadReviewQueue()">🔄 Refresh</button>
+        </div>
+
+        <!-- Gate filter buttons -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn" onclick="setReviewGateFilter(null)">All</button>
+          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Gate 1</button>
+          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Gate 2</button>
+          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Gate 3</button>
+        </div>
+
+        <!-- Reviewer name input -->
+        <div>
+          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:6px">Reviewer Name</label>
+          <input type="text" id="reviewerNameInput" placeholder="Your name" style="width:100%;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
+        </div>
+
+        <!-- Action buttons -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-success" style="flex:1;min-width:120px" onclick="submitReviewDecision('APPROVE')">✓ Approve Selected</button>
+          <button class="btn btn-danger" style="flex:1;min-width:120px" onclick="submitReviewDecision('REJECT')">✕ Reject Selected</button>
+          <button class="btn btn-warn" style="flex:1;min-width:120px" id="acknowledgeBtn" style="display:none" onclick="submitReviewDecision('ACKNOWLEDGE')">✓ Acknowledge</button>
+        </div>
+
+        <!-- Jobs table -->
+        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;flex:1;display:flex;flex-direction:column">
+          <div style="background:var(--surface2);padding:12px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;font-size:12px;font-weight:600">
+            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAllReview(this.checked)" style="width:16px;height:16px;cursor:pointer"/>
+            <span style="width:200px">Filename</span>
+            <span style="width:120px">Batch</span>
+            <span style="width:60px">Gate</span>
+            <span style="width:80px">Tier</span>
+            <span style="width:100px">Flags</span>
+            <span style="width:80px">Waiting</span>
+          </div>
+          <div id="reviewQueueTable" style="overflow-y:auto;flex:1">
+            <div style="padding:20px;text-align:center;color:var(--muted)">
+              <div style="font-size:24px">📋</div>
+              <div style="font-size:12px;margin-top:8px">No jobs currently awaiting review</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
@@ -472,15 +528,20 @@ function setUploadMode(mode) {
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
   document.getElementById('panelZip').style.display   = mode === 'zip'   ? '' : 'none';
   document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
+  document.getElementById('panelReview').style.display = mode === 'review' ? 'flex' : 'none';
   const tabFiles = document.getElementById('tabFiles');
   const tabZip   = document.getElementById('tabZip');
   const tabBatch = document.getElementById('tabBatch');
+  const tabReview = document.getElementById('tabReview');
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabZip.className   = mode === 'zip'   ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  tabReview.className = mode === 'review' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  startBtn.style.display = mode === 'review' ? 'none' : 'block';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
+  if (mode === 'review') loadReviewQueue();
 }
 
 // Workflow XML dropzone wiring
@@ -2698,6 +2759,182 @@ function markdownToHtml(md) {
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/\n\n/g, '<br/><br/>');
 }
+
+// ─────────────────────────────────────────────
+// Review Queue (v2.17.1)
+// ─────────────────────────────────────────────
+let _reviewQueue = [];
+let _reviewGateFilter = null;
+let _reviewSelectedJobIds = new Set();
+
+async function loadReviewQueue() {
+  try {
+    const url = new URL('/api/gates/pending', window.location.origin);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    _reviewQueue = data.jobs || [];
+
+    // Update summary counts
+    document.getElementById('reviewGate1Count').textContent = data.by_gate?.['1'] || 0;
+    document.getElementById('reviewGate2Count').textContent = data.by_gate?.['2'] || 0;
+    document.getElementById('reviewGate3Count').textContent = data.by_gate?.['3'] || 0;
+    document.getElementById('reviewTotalCount').textContent = data.total || 0;
+
+    renderReviewQueueTable();
+  } catch (e) {
+    console.error('Error loading review queue:', e);
+    document.getElementById('reviewQueueTable').innerHTML = `<div style="padding:20px;color:var(--danger)">Error loading review queue: ${e.message}</div>`;
+  }
+}
+
+function setReviewGateFilter(gate) {
+  _reviewGateFilter = gate;
+  // Update button styles
+  document.getElementById('filterAllBtn').className = gate === null ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
+  document.getElementById('filter1Btn').className = gate === 1 ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
+  document.getElementById('filter2Btn').className = gate === 2 ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
+  document.getElementById('filter3Btn').className = gate === 3 ? 'btn btn-sm' : 'btn btn-sm btn-ghost';
+  document.getElementById('filterAllBtn').style.background = gate === null ? 'var(--accent)' : '';
+  document.getElementById('filter1Btn').style.background = gate === 1 ? 'var(--accent)' : '';
+  document.getElementById('filter2Btn').style.background = gate === 2 ? 'var(--accent)' : '';
+  document.getElementById('filter3Btn').style.background = gate === 3 ? 'var(--accent)' : '';
+  _reviewSelectedJobIds.clear();
+  renderReviewQueueTable();
+}
+
+function renderReviewQueueTable() {
+  const filtered = _reviewQueue.filter(j => _reviewGateFilter === null || j.gate === _reviewGateFilter);
+
+  if (!filtered.length) {
+    document.getElementById('reviewQueueTable').innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted)"><div style="font-size:24px">📋</div><div style="font-size:12px;margin-top:8px">No jobs currently awaiting review</div></div>`;
+    document.getElementById('selectAllCheckbox').checked = false;
+    return;
+  }
+
+  const rows = filtered.map(j => {
+    const isSelected = _reviewSelectedJobIds.has(j.job_id);
+    const severityBadges = [];
+    if (j.flag_summary) {
+      if (j.flag_summary.CRITICAL > 0) severityBadges.push(`<span style="background:rgba(248,113,113,.2);color:#f87171;padding:2px 6px;border-radius:4px;font-size:10px;margin-right:2px">C${j.flag_summary.CRITICAL}</span>`);
+      if (j.flag_summary.HIGH > 0) severityBadges.push(`<span style="background:rgba(251,146,60,.2);color:#fb923c;padding:2px 6px;border-radius:4px;font-size:10px;margin-right:2px">H${j.flag_summary.HIGH}</span>`);
+      if (j.flag_summary.MEDIUM > 0) severityBadges.push(`<span style="background:rgba(251,191,36,.2);color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:10px;margin-right:2px">M${j.flag_summary.MEDIUM}</span>`);
+    }
+    const flagsHtml = severityBadges.length ? severityBadges.join('') : '—';
+
+    return `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border);background:${isSelected?'rgba(108,99,255,.06)':''}">
+      <input type="checkbox" ${isSelected?'checked':''} onchange="toggleReviewJobSelection('${j.job_id}', this.checked)" style="width:16px;height:16px;cursor:pointer"/>
+      <span style="width:200px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.filename)}">${esc(j.filename)}</span>
+      <span style="width:120px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.batch_id||'–')}</span>
+      <span style="width:60px;font-size:12px;font-weight:600">Gate ${j.gate}</span>
+      <span style="width:80px;font-size:11px">${esc(j.complexity_tier||'unknown')}</span>
+      <span style="width:100px;font-size:11px">${flagsHtml}</span>
+      <span style="width:80px;font-size:11px;color:var(--muted)">${j.waiting_minutes}m ago</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('reviewQueueTable').innerHTML = `<div>${rows}</div>`;
+  document.getElementById('selectAllCheckbox').checked = _reviewSelectedJobIds.size > 0 && _reviewSelectedJobIds.size === filtered.length;
+}
+
+function toggleReviewJobSelection(jobId, checked) {
+  if (checked) {
+    _reviewSelectedJobIds.add(jobId);
+  } else {
+    _reviewSelectedJobIds.delete(jobId);
+  }
+  const allCheckbox = document.getElementById('selectAllCheckbox');
+  const filtered = _reviewQueue.filter(j => _reviewGateFilter === null || j.gate === _reviewGateFilter);
+  allCheckbox.checked = _reviewSelectedJobIds.size > 0 && _reviewSelectedJobIds.size === filtered.length;
+}
+
+function toggleSelectAllReview(checked) {
+  const filtered = _reviewQueue.filter(j => _reviewGateFilter === null || j.gate === _reviewGateFilter);
+  _reviewSelectedJobIds.clear();
+  if (checked) {
+    filtered.forEach(j => _reviewSelectedJobIds.add(j.job_id));
+  }
+  renderReviewQueueTable();
+}
+
+async function submitReviewDecision(decision) {
+  if (_reviewSelectedJobIds.size === 0) {
+    alert('Please select at least one job');
+    return;
+  }
+
+  const reviewerName = document.getElementById('reviewerNameInput')?.value?.trim();
+  if (!reviewerName) {
+    alert('Please enter your name');
+    return;
+  }
+
+  // Determine gate and map decision
+  const selectedJobs = _reviewQueue.filter(j => _reviewSelectedJobIds.has(j.job_id));
+  if (!selectedJobs.length) return;
+
+  const gates = new Set(selectedJobs.map(j => j.gate));
+  if (gates.size > 1) {
+    alert('Please select jobs from only one gate at a time');
+    return;
+  }
+
+  const gate = selectedJobs[0].gate;
+  let apiDecision = decision;
+
+  // Map UI decisions to API decisions based on gate
+  if (gate === 1) {
+    apiDecision = decision === 'APPROVE' ? 'APPROVE' : 'REJECT';
+  } else if (gate === 2) {
+    if (decision === 'APPROVE') apiDecision = 'APPROVED';
+    else if (decision === 'ACKNOWLEDGE') apiDecision = 'ACKNOWLEDGED';
+    else apiDecision = 'FAILED';
+  } else if (gate === 3) {
+    apiDecision = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  }
+
+  const body = {
+    job_ids: Array.from(_reviewSelectedJobIds),
+    gate: gate,
+    decision: apiDecision,
+    reviewer_name: reviewerName,
+    reviewer_role: 'Reviewer',
+    notes: '',
+  };
+
+  try {
+    const res = await fetch('/api/gates/batch-signoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`HTTP ${res.status}: ${err}`);
+    }
+
+    const result = await res.json();
+    const msg = `${result.succeeded?.length || 0} approved, ${result.failed?.length || 0} failed`;
+    alert(`Batch sign-off complete: ${msg}`);
+
+    _reviewSelectedJobIds.clear();
+    loadReviewQueue();
+  } catch (e) {
+    console.error('Error submitting batch decision:', e);
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// Auto-refresh review queue every 30 seconds when tab is active
+let _reviewQueueRefreshInterval = null;
+function startReviewQueueAutoRefresh() {
+  if (_reviewQueueRefreshInterval) clearInterval(_reviewQueueRefreshInterval);
+  _reviewQueueRefreshInterval = setInterval(() => {
+    if (uploadMode === 'review') loadReviewQueue();
+  }, 30000);
+}
+startReviewQueueAutoRefresh();
 
 // ─────────────────────────────────────────────
 // Init
