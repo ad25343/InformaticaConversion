@@ -10,6 +10,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.0] — 2026-03-11 — Config-Driven Genericity (all 8 gaps resolved)
+
+The pipeline is now fully configurable for any Informatica PowerCenter project without
+touching Python source code. All hardcoded naming conventions, DW audit field names,
+system prompts, warehouse definitions, verification policies, and unsupported type lists
+have been moved to YAML config files with sensible defaults.
+
+### Added
+
+**`app/backend/org_config_loader.py`** — Central config loader (`lru_cache` singleton)
+Single import point for all agents. Loads `app/config/org_config.yaml` and
+`app/config/warehouse_registry.yaml` at startup. All helper functions return built-in
+defaults when the config files are absent — fully backwards-compatible.
+
+**`app/config/org_config.yaml`** — Organisation-level overrides
+Fully-documented YAML with all customisation sections. Ships with all defaults commented
+in so teams can uncomment and adjust rather than write from scratch:
+- `pattern_signals` — extend SCD2 / upsert / incremental / expression keyword lists (G1)
+- `audit_fields` — rename or disable DW audit columns (DW_INSERT_DT, ETL_BATCH_ID…) (G2)
+- `verification_policy` — override flag severity or suppress flag types per org (G4)
+- `warehouse_credential_overrides` — remap dbt credential env var names per warehouse (G5)
+- `pipeline_options.skip_steps` — skip steps conditionally by pattern, tier, or always (G6)
+- `pipeline_options.auto_approve_gates` — auto-approve gates under defined conditions (G6)
+- `parser_options.additional_unsupported_types` — add org-specific plugin types (G7)
+
+**`app/config/warehouse_registry.yaml`** — Extensible warehouse definitions (G5)
+Replaces the Python `_PROFILES_TEMPLATES` dict. Now includes 8 warehouses:
+postgres, snowflake, redshift, bigquery, databricks, sqlserver, **synapse** (new),
+**fabric** (new). Add a new warehouse with a YAML entry only — no Python change needed.
+
+**`app/prompts/README.md`** — System prompt template authoring guide (G3/G8)
+Drop a `<stack>_system.j2` file into `app/prompts/` to override the built-in PySpark,
+dbt, or Python conversion prompt. Template variables (e.g. `surrogate_key_macro`,
+`dataframe_lib`) are injected from `org_config.yaml → conversion_prompts.<stack>.vars`.
+No Python change needed to add a new stack or change framework conventions.
+
+### Changed
+
+**`app/backend/agents/classifier_agent.py`** — Pattern signals now config-driven (G1)
+`_SCD2_SIGNALS`, `_UPSERT_SIGNALS`, `_INC_SIGNALS` and `_is_complex_expression()`
+indicators now loaded from `org_config_loader.get_pattern_signals()` at call time.
+`UNSUPPORTED_TYPES` loaded from `get_unsupported_types()` — merges defaults with
+`parser_options.additional_unsupported_types` from org config.
+
+**`app/backend/agents/conversion_agent.py`** — Audit fields + prompts + warehouses (G2/G3/G5)
+- `_DW_AUDIT_RULES` built at module load from `build_dw_audit_rules()`. Set
+  `audit_fields: []` in org_config to disable injection entirely.
+- `_load_prompt_template(stack, default)` added — checks `app/prompts/<stack>_system.j2`
+  before falling back to the built-in default. Template vars substituted from config.
+- `_get_profiles_yml_from_registry()` added — generates `profiles.yml` from
+  `warehouse_registry.yaml` with org credential-var remapping applied. Falls back to
+  `_PROFILES_TEMPLATES` for unlisted warehouses.
+
+**`app/backend/agents/verification_agent.py`** — Policy overrides (G4)
+`_get_effective_flag_meta()` merges `FLAG_META` with `verification_policy` from org config.
+All flag lookups use the merged metadata so org overrides take effect transparently.
+`UNSUPPORTED_TYPES` now also loaded from the shared `get_unsupported_types()`.
+
+**`app/backend/agents/parser_agent.py`** — Configurable unsupported types (G7)
+Imports `get_unsupported_types` from `org_config_loader` so custom transformation types
+declared in `parser_options.additional_unsupported_types` are flagged identically to the
+built-in Java/ExternalProc types.
+
+**`app/backend/orchestrator.py`** — Step skip + gate auto-approve (G6)
+`should_skip_step()` and `should_auto_approve_gate()` from `org_config_loader` called
+before Steps 4 (documentation) and 11 (test generation). Condition expressions support:
+`"always"`, `"pattern==<name>"`, and `"tier in [LOW,MEDIUM]"`.
+
+### Migration
+
+No breaking changes. Existing deployments without `app/config/org_config.yaml` behave
+identically to v2.16.0. To customise for a new org: copy `app/config/org_config.yaml`
+to the deployment, uncomment the relevant sections, and restart the server.
+
+---
+
 ## [2.16.0] — 2026-03-10 — Config-Driven Pattern Library Complete (v2.16.0-phase5)
 
 All 10 etl_patterns patterns implemented. Phases 1–4 laid the pattern library

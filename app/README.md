@@ -98,6 +98,28 @@ batch.zip/
 
 ---
 
+## Organisation Configuration
+
+Two optional YAML files allow you to tailor the pipeline to your organisation without modifying any code. Both are read at startup via `backend/org_config_loader.py` (LRU-cached) and fall back gracefully to built-in defaults if absent.
+
+**`app/config/org_config.yaml`** — org-level overrides:
+
+| Section | What it controls |
+|---|---|
+| `pattern_signals` | Extra `target_name_contains` / `source_name_contains` substrings that trigger a specific pattern (e.g. mark tables ending in `_HIST` as SCD2) |
+| `audit_fields` | Override the DW audit columns injected into every generated target (`DW_INSERT_DT`, `DW_UPDATE_DT`, `DW_SOURCE_SYS`) — rename columns, change expressions, or disable entirely |
+| `verification_policy` | Override any `FLAG_META` entry — promote LOW → HIGH, suppress a flag to INFO, or change blocking status |
+| `warehouse_credential_overrides` | Add extra env-var names the profiles.yml generator should reference for non-standard warehouses |
+| `pipeline_options.skip_steps` | Conditionally skip Step 4 (documentation) or Step 11 (test generation) based on pattern, tier, and confidence |
+| `pipeline_options.auto_approve_gates` | Auto-approve Gate 1 / 2 / 3 under specified conditions (CI environments) |
+| `parser_options.additional_unsupported_types` | Extend the list of Informatica transformation types that raise an UNSUPPORTED flag |
+
+**`app/config/warehouse_registry.yaml`** — extensible warehouse profiles. Eight warehouses are pre-registered (PostgreSQL, Snowflake, Redshift, BigQuery, Databricks, SQL Server, Azure Synapse, Microsoft Fabric). Add a new entry to support any SQLAlchemy-compatible target — no code changes required.
+
+**`app/prompts/<stack>_system.j2`** — Jinja2 template overrides for the PySpark, dbt, or Python system prompts. Drop a file here to replace the built-in prompt entirely. See `app/prompts/README.md` for authoring guidance.
+
+---
+
 ## Architecture
 
 ```
@@ -107,8 +129,20 @@ app/
 ├── requirements.txt
 ├── .env.example                   Copy to .env and fill in secrets
 │
+├── config/                        Organisation configuration (optional — all files have safe defaults)
+│   ├── org_config.yaml            Org overrides: pattern signals, audit fields, verification policy,
+│   │                              warehouse creds, pipeline skip/auto-approve rules, unsupported types
+│   └── warehouse_registry.yaml    8 pre-registered warehouse profiles; add entries for new targets
+│
+├── prompts/                       Jinja2 system prompt overrides (optional)
+│   ├── README.md                  Template authoring guide
+│   ├── pyspark_system.j2          Override PySpark conversion prompt (optional)
+│   ├── dbt_system.j2              Override dbt conversion prompt (optional)
+│   └── python_system.j2           Override Python/Pandas conversion prompt (optional)
+│
 ├── backend/
 │   ├── orchestrator.py            Pipeline state machine (12 steps + 3 gates)
+│   ├── org_config_loader.py       Central config loader — lru_cache; used by all agents (v2.17)
 │   ├── routes.py                  REST API endpoints (single-file + ZIP + batch upload)
 │   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
 │   │                              credential scan, YAML secrets scan, bandit wrapper)
@@ -121,11 +155,12 @@ app/
 │   ├── agents/
 │   │   ├── session_parser_agent.py Step 0  — Session & parameter parse
 │   │   ├── parser_agent.py        Step 1  — XML parser (lxml, XXE-hardened)
-│   │   ├── classifier_agent.py    Step 2  — Complexity classifier
+│   │   ├── classifier_agent.py    Step 2  — Complexity classifier (pattern signals from org_config)
 │   │   ├── s2t_agent.py           Step S2T — Source-to-Target Excel
 │   │   ├── documentation_agent.py Step 3  — Documentation (Claude)
-│   │   ├── verification_agent.py  Step 4  — Verification
+│   │   ├── verification_agent.py  Step 4  — Verification (policy overrides from org_config)
 │   │   ├── conversion_agent.py    Steps 6–7 — Stack assignment + code generation
+│   │   │                          (audit fields + warehouse registry + Jinja2 prompt templates)
 │   │   ├── security_agent.py      Step 8  — Security scan (bandit + YAML + Claude)
 │   │   ├── review_agent.py        Step 10 — Logic equivalence + code quality review (v1.3)
 │   │   └── test_agent.py          Step 11 — Test generation

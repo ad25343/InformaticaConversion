@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.16.0 (complete) / App 2.16.0
+**Version:** 2.17.0 (complete) / App 2.17.0
 **Author:** ad25343
-**Last Updated:** 2026-03-10
+**Last Updated:** 2026-03-11
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -741,6 +741,94 @@ All 10 patterns registered in `config_loader`. 199/199 tests passing.
   — not naming conventions, not AI heuristics
 - **Future roadmap (out of scope for v2.16.0)**: message queues (Kafka, SQS),
   REST API sources, FTP/SFTP, cloud storage (S3/ADLS/GCS), streaming targets
+
+### v2.17.0 — Generic Component Architecture (✅ complete — 2026-03-11)
+
+Eliminates hardcoded org-specific values from all pipeline agents and introduces a
+config-first architecture. Every constant that previously required a code edit
+(audit column names, pattern classification keywords, warehouse profiles, verification
+flag severities, system prompts) is now externalisable via two optional YAML files and
+a prompts folder. Backwards-compatible — all defaults are preserved; absent config files
+produce identical output to v2.16.0.
+
+#### G1 — Configurable pattern classification signals
+
+`classifier_agent.py` previously hard-coded the keyword lists that identify SCD2, upsert,
+and incremental-append patterns (e.g. `["_SCD2", "_HIST"]`). These are now loaded from
+`app/config/org_config.yaml → pattern_signals` via `org_config_loader.get_pattern_signals()`.
+Expression-complexity indicators are likewise externalised. Deployments with non-standard
+naming conventions no longer require forking the classifier.
+
+#### G2 — Configurable DW audit columns
+
+`conversion_agent.py` previously had three audit columns (`DW_INSERT_DT`, `DW_UPDATE_DT`,
+`DW_SOURCE_SYS`) hard-coded in the PySpark/dbt/Python system prompts. These are now read
+from `org_config.yaml → audit_fields` and injected as a dynamic rule block via
+`org_config_loader.build_dw_audit_rules()`. Any field can be renamed, have its expression
+changed, or be suppressed entirely.
+
+#### G3 — Jinja2 system prompt overrides
+
+`conversion_agent.py` loads `app/prompts/<stack>_system.j2` at startup. If the file exists
+it replaces the built-in system prompt for that stack entirely; otherwise the built-in
+string is used unchanged. Template authoring guide at `app/prompts/README.md`.
+
+#### G4 — Configurable verification flag policy
+
+`verification_agent.py` previously had all flag severities and blocking statuses baked into
+the `FLAG_META` constant. These are now merged with `org_config.yaml → verification_policy`
+at call time via `org_config_loader.get_verification_policy()`. Operators can promote LOW
+flags to HIGH, suppress noisy false positives to INFO, or change blocking status — all
+without touching Python.
+
+#### G5 — Extensible warehouse registry
+
+`app/config/warehouse_registry.yaml` registers 8 warehouse profiles (PostgreSQL, Snowflake,
+Redshift, BigQuery, Databricks, SQL Server, Azure Synapse, Microsoft Fabric). New targets
+are added with a YAML entry — no Python changes required. `conversion_agent.py` consults
+the registry before falling back to its built-in profiles.yml generator.
+
+#### G6 — Conditional step skip + gate auto-approve
+
+`orchestrator.py` evaluates `org_config.yaml → pipeline_options.skip_steps` and
+`auto_approve_gates` before each skippable step (Step 4 — documentation; Step 11 — test
+generation) and gate. Conditions are expressed as `{tier, pattern, pattern_confidence}`
+predicates. Useful for CI pipelines and HIGH-confidence LOW-complexity bulk runs.
+
+#### G7 — Configurable unsupported transformation types
+
+All three agents that maintain `UNSUPPORTED_TYPES` (`classifier_agent.py`,
+`verification_agent.py`, `parser_agent.py`) now call
+`org_config_loader.get_unsupported_types()`, which merges the built-in set with
+`org_config.yaml → parser_options.additional_unsupported_types`.
+
+#### New files
+
+| File | Purpose |
+|---|---|
+| `app/backend/org_config_loader.py` | Central config loader — single `lru_cache(1)` per YAML file; all agents import from here |
+| `app/config/org_config.yaml` | Org overrides (all sections commented-out by default — safe to ship) |
+| `app/config/warehouse_registry.yaml` | 8 pre-registered warehouse profiles |
+| `app/config/__init__.py` | Package marker |
+| `app/prompts/README.md` | Jinja2 template authoring guide |
+
+#### Changed files
+
+| File | Change |
+|---|---|
+| `app/backend/agents/classifier_agent.py` | G1: pattern signals + expression indicators from config; G7: unsupported types from config |
+| `app/backend/agents/conversion_agent.py` | G2: dynamic audit rules; G3: Jinja2 prompt loader; G5: warehouse registry lookup |
+| `app/backend/agents/verification_agent.py` | G4: verification policy override merge; G7: unsupported types from config |
+| `app/backend/agents/parser_agent.py` | G7: unsupported types from config |
+| `app/backend/orchestrator.py` | G6: skip_steps + auto_approve_gates evaluation |
+
+#### Migration note
+
+No database migration required. No `.env` changes required. Deploy v2.17.0 over any
+v2.16.0 installation — if `app/config/org_config.yaml` does not exist all agents fall
+back to built-in defaults and the pipeline behaves identically to v2.16.0.
+
+---
 
 ### v3.0 — Vision
 

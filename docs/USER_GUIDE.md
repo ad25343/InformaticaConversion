@@ -1,6 +1,6 @@
 # User Guide — Informatica Conversion Tool
 
-> **Version:** 2.14.0
+> **Version:** 2.17.0
 > **Audience:** Data engineers, migration leads, and operations teams
 
 ---
@@ -473,6 +473,123 @@ All settings are controlled via `.env`. Copy `.env.example` to `.env` as your st
 | `SCHEDULER_POLL_INTERVAL_SECS` | `60` | Seconds between cron evaluation polls |
 
 The scheduler requires `WATCHER_ENABLED=true` and `WATCHER_DIR` to also be configured.
+
+---
+
+## Customising for your organisation
+
+All customisation is done through two optional YAML files and an optional prompts folder. No Python code changes are required. If the files are absent the tool runs exactly as it did in v2.16.0 — all defaults are backwards-compatible.
+
+### Pattern classification signals (`org_config.yaml`)
+
+The classifier uses keyword lists to identify patterns such as SCD2, upsert, or incremental append. You can extend these lists to match your naming conventions:
+
+```yaml
+# app/config/org_config.yaml
+pattern_signals:
+  scd2:
+    target_name_contains: ["_HIST", "_ARCHIVE"]   # add your SCD2 table suffixes
+  upsert:
+    target_name_contains: ["_MERGE", "_UPSERT"]
+  incremental_append:
+    target_name_contains: ["_DELTA", "_INC"]
+  expression_complexity:
+    additional_indicators: ["DECODE", "INSTR"]    # extra complexity indicators
+```
+
+### Audit / DW columns (`org_config.yaml`)
+
+Override the column names and SQL expressions injected into every generated target table:
+
+```yaml
+audit_fields:
+  insert_timestamp:
+    column: LOAD_DT            # was DW_INSERT_DT
+    expression: current_date()
+  update_timestamp:
+    column: REFRESH_DT         # was DW_UPDATE_DT
+    expression: current_timestamp()
+  source_system:
+    column: SRC_SYS            # was DW_SOURCE_SYS
+    expression: "'INFORMATICA'"
+  # Set to null to omit a field entirely:
+  # insert_timestamp: null
+```
+
+### Verification flag severity (`org_config.yaml`)
+
+Promote, demote, or suppress any verification flag without touching Python code:
+
+```yaml
+verification_policy:
+  HARDCODED_VALUE:
+    severity: HIGH       # was MEDIUM — promote for stricter enforcement
+    blocking: true
+  SOURCE_SQ_CONNECTIVITY:
+    severity: INFO       # suppress noisy false positives in your environment
+    blocking: false
+```
+
+### Warehouse profiles (`warehouse_registry.yaml`)
+
+Eight warehouses are pre-registered. Add any SQLAlchemy-compatible target by appending an entry — the `profiles.yml` generator will pick it up automatically:
+
+```yaml
+# app/config/warehouse_registry.yaml
+my_custom_dw:
+  adapter: sqlalchemy
+  credential_vars:
+    host: MY_DW_HOST
+    port: MY_DW_PORT
+    database: MY_DW_DATABASE
+    username: MY_DW_USER
+    password: MY_DW_PASSWORD
+  defaults:
+    port: 5439
+```
+
+### Skipping pipeline steps (`org_config.yaml`)
+
+Skip documentation generation (Step 4) or test generation (Step 11) under conditions you define — useful for CI pipelines where speed matters more than full output:
+
+```yaml
+pipeline_options:
+  skip_steps:
+    - step: 4          # skip documentation for LOW-complexity mappings
+      when:
+        tier: LOW
+    - step: 11         # skip test generation when pattern confidence is HIGH
+      when:
+        pattern_confidence: HIGH
+  auto_approve_gates:
+    - gate: 1
+      when:
+        tier: LOW
+        pattern_confidence: HIGH   # auto-approve Gate 1 for well-understood patterns
+```
+
+### Unsupported transformation types (`org_config.yaml`)
+
+Add extra Informatica transformation types that should raise an UNSUPPORTED flag at parse time:
+
+```yaml
+parser_options:
+  additional_unsupported_types:
+    - "Custom Transformation"
+    - "Java Transformation"
+```
+
+### System prompt overrides (`app/prompts/`)
+
+Drop a Jinja2 template file into `app/prompts/` to replace the built-in conversion system prompt for a specific stack. The file is loaded at startup so you can edit it without restarting the server if you use `--reload`.
+
+| File | Replaces |
+|---|---|
+| `pyspark_system.j2` | PySpark conversion system prompt |
+| `dbt_system.j2` | dbt conversion system prompt |
+| `python_system.j2` | Python/Pandas conversion system prompt |
+
+See `app/prompts/README.md` for variable reference and examples.
 
 ---
 
