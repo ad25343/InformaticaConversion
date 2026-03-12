@@ -10,6 +10,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.3] — 2026-03-12 — Retry, Audit Trail, Search & Pagination
+
+Closes the four remaining end-user gaps identified post-v2.17.2.
+
+### Added
+
+**`POST /api/jobs/{job_id}/retry`**
+Resets a `failed` or `blocked` job to `pending` (step 0, state cleared) and
+re-launches the full pipeline using the original XML content.  Returns 409 if
+the XML has been purged by the retention cleanup.  A `retry` audit entry is
+written for traceability.
+
+**Retry button in job error card**
+🔄 Retry button alongside "Re-upload Fixed File" on all failed/blocked job
+cards.  Confirms before proceeding; reloads the job view on success.
+
+**Audit trail panel in job card**
+Collapsible "📋 Decision Audit Trail" section at the bottom of every job card.
+Loads on demand from `GET /api/jobs/{id}/audit`.  Colour-coded timeline of
+every gate decision and retry event: reviewer name, role, decision, notes,
+timestamp.
+
+**Job list search + status filter**
+Filename search input and status dropdown above the job list sidebar.
+Filters the loaded dataset client-side.  Empty inputs restore the normal
+active / history / archive sectioned view.
+
+**Job list pagination**
+When a filter is active, results page at 30 per page with Prev / Next controls
+and a "1–30 of N" label.  Unfiltered views keep the existing sectioned layout.
+
+**Total job count badge**
+Faint "N total" label next to the "Jobs" section header.
+
+### Tests
+13 new tests across `TestJobRetry` and `TestAuditTrail` — 77 total, all passing.
+
+---
+
 ## [2.17.2] — 2026-03-12 — Email + UI Notifications
 
 Closes the "I didn't know jobs were waiting" gap.  Reviewers now receive an

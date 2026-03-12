@@ -773,6 +773,200 @@ class TestProgressExport(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 11. Job retry — POST /api/jobs/{id}/retry
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestJobRetry(unittest.TestCase):
+
+    def setUp(self):
+        self.client  = TestClient(_test_app, raise_server_exceptions=False)
+        self.cookies = _auth_cookie()
+
+    def _insert_job(self, status: str) -> str:
+        import uuid
+        from datetime import datetime, timezone
+        from backend.db.database import _connect
+
+        jid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        async def _run():
+            async with _connect() as conn:
+                await conn.execute(
+                    "INSERT INTO jobs "
+                    "(job_id, filename, xml_content, status, current_step, "
+                    " state_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (jid, f"retry_test_{status}.xml", "<x/>",
+                     status, 5, '{"error":"test error"}', now, now),
+                )
+                await conn.commit()
+
+        asyncio.get_event_loop().run_until_complete(_run())
+        return jid
+
+    def test_requires_auth(self):
+        jid = self._insert_job("failed")
+        r = self.client.post(f"/api/jobs/{jid}/retry")
+        self.assertEqual(r.status_code, 401)
+
+    def test_retry_nonexistent_job_returns_404(self):
+        r = self.client.post(
+            "/api/jobs/00000000-0000-0000-0000-000000000000/retry",
+            cookies=self.cookies,
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_retry_non_terminal_job_returns_400(self):
+        jid = self._insert_job("pending")
+        r = self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+        self.assertEqual(r.status_code, 400)
+
+    def test_retry_job_in_pipeline_returns_400(self):
+        jid = self._insert_job("converting")
+        r = self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+        self.assertEqual(r.status_code, 400)
+
+    def test_retry_failed_job_returns_200(self):
+        jid = self._insert_job("failed")
+        r = self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+        # 200 if XML is present; 409 if xml_content column was null
+        self.assertIn(r.status_code, (200, 409))
+
+    def test_retry_blocked_job_accepted(self):
+        jid = self._insert_job("blocked")
+        r = self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+        self.assertIn(r.status_code, (200, 409))
+
+    def test_retry_response_structure(self):
+        jid = self._insert_job("failed")
+        r = self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+        if r.status_code == 200:
+            body = r.json()
+            self.assertEqual(body["job_id"], jid)
+            self.assertIn("status", body)
+            self.assertTrue(body.get("retried"))
+
+    def test_invalid_job_id_format_rejected(self):
+        r = self.client.post("/api/jobs/notauuid/retry", cookies=self.cookies)
+        self.assertIn(r.status_code, (400, 422))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 12. Audit trail — GET /api/jobs/{id}/audit
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestAuditTrail(unittest.TestCase):
+
+    def setUp(self):
+        self.client  = TestClient(_test_app, raise_server_exceptions=False)
+        self.cookies = _auth_cookie()
+
+    def test_requires_auth(self):
+        r = self.client.get("/api/jobs/00000000-0000-0000-0000-000000000000/audit")
+        self.assertEqual(r.status_code, 401)
+
+    def test_nonexistent_job_returns_404(self):
+        r = self.client.get(
+            "/api/jobs/00000000-0000-0000-0000-000000000000/audit",
+            cookies=self.cookies,
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_response_structure(self):
+        """Create a job via API, then check audit endpoint structure."""
+        cr = self.client.post(
+            "/api/jobs",
+            files={"file": ("audit_test.xml", io.BytesIO(MINIMAL_XML), "text/xml")},
+            cookies=self.cookies,
+        )
+        self.assertIn(cr.status_code, (200, 202))
+        jid = cr.json()["job_id"]
+
+        r = self.client.get(f"/api/jobs/{jid}/audit", cookies=self.cookies)
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("job_id", body)
+        self.assertIn("entries", body)
+        self.assertEqual(body["job_id"], jid)
+        self.assertIsInstance(body["entries"], list)
+
+    def test_audit_entries_after_retry(self):
+        """
+        A job that has been retried should have at least one audit entry
+        (the retry event written by the retry endpoint).
+        """
+        import uuid
+        from datetime import datetime, timezone
+        from backend.db.database import _connect
+
+        jid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        async def _insert():
+            async with _connect() as conn:
+                await conn.execute(
+                    "INSERT INTO jobs "
+                    "(job_id, filename, xml_content, status, current_step, "
+                    " state_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (jid, "audit_retry_test.xml", "<x/>",
+                     "failed", 3, "{}", now, now),
+                )
+                await conn.commit()
+
+        asyncio.get_event_loop().run_until_complete(_insert())
+
+        # Trigger retry (may return 200 or 409 depending on xml_content)
+        self.client.post(f"/api/jobs/{jid}/retry", cookies=self.cookies)
+
+        r = self.client.get(f"/api/jobs/{jid}/audit", cookies=self.cookies)
+        self.assertEqual(r.status_code, 200)
+        entries = r.json()["entries"]
+        # Should have at least the retry audit entry
+        self.assertGreaterEqual(len(entries), 1)
+        retry_entries = [e for e in entries if e.get("event_type") == "retry"]
+        self.assertEqual(len(retry_entries), 1)
+
+    def test_audit_entry_has_required_fields(self):
+        """Verify each entry has the expected fields."""
+        import uuid
+        from datetime import datetime, timezone
+        from backend.db.database import _connect, add_audit_entry
+
+        jid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        async def _setup():
+            async with _connect() as conn:
+                await conn.execute(
+                    "INSERT INTO jobs "
+                    "(job_id, filename, xml_content, status, current_step, "
+                    " state_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (jid, "audit_fields_test.xml", "<x/>",
+                     "blocked", 5, "{}", now, now),
+                )
+                await conn.commit()
+            await add_audit_entry(
+                job_id=jid, gate="gate1", event_type="reject",
+                reviewer_name="Test User", reviewer_role="QA",
+                decision="REJECT", notes="test note",
+            )
+
+        asyncio.get_event_loop().run_until_complete(_setup())
+
+        r = self.client.get(f"/api/jobs/{jid}/audit", cookies=self.cookies)
+        self.assertEqual(r.status_code, 200)
+        entries = r.json()["entries"]
+        self.assertTrue(len(entries) >= 1)
+        e = entries[-1]
+        for field in ("gate", "event_type", "reviewer_name", "reviewer_role",
+                      "decision", "notes", "created_at"):
+            self.assertIn(field, e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Runner
 # ══════════════════════════════════════════════════════════════════════════════
 

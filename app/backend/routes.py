@@ -739,6 +739,89 @@ async def get_job_audit(job_id: str):
 
 
 # ─────────────────────────────────────────────
+# Retry failed / blocked job  (v2.17.3)
+# ─────────────────────────────────────────────
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str):
+    """
+    Reset a failed or blocked job back to pending and re-run the full pipeline.
+
+    Only jobs in status 'failed' or 'blocked' can be retried.
+    The original XML content is preserved; state is cleared so the pipeline
+    starts fresh from Step 1.  Audit entries are preserved for traceability.
+
+    Returns the same structure as POST /api/jobs on success.
+    """
+    _validate_job_id(job_id)
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    retryable = {JobStatus.FAILED.value, JobStatus.BLOCKED.value}
+    if job["status"] not in retryable:
+        raise HTTPException(
+            400,
+            f"Job cannot be retried (status: {job['status']}). "
+            "Only failed or blocked jobs are retryable.",
+        )
+
+    # Verify the original XML is still available
+    xml_row = await db.get_xml(job_id)
+    if not xml_row:
+        raise HTTPException(
+            409,
+            "Cannot retry — original XML content has been purged. "
+            "Please re-upload the file.",
+        )
+
+    # Reset job state: back to pending, step 0, clear pipeline state
+    async with db._connect() as conn:
+        now = _datetime.utcnow().isoformat()
+        await conn.execute(
+            "UPDATE jobs SET status='pending', current_step=0, state_json='{}', "
+            "updated_at=? WHERE job_id=?",
+            (now, job_id),
+        )
+        await conn.commit()
+
+    # Write an audit entry so the retry is traceable
+    await db.add_audit_entry(
+        job_id=job_id,
+        gate="retry",
+        event_type="retry",
+        reviewer_name="system",
+        reviewer_role="system",
+        decision="RETRY",
+        notes=f"Job retried from status '{job['status']}' at {now}",
+    )
+
+    # Re-launch the pipeline
+    queue: asyncio.Queue = asyncio.Queue()
+    _progress_queues[job_id] = queue
+
+    filename = job["filename"]
+
+    async def _rerun():
+        async for progress in orchestrator.run_pipeline(job_id, filename):
+            await queue.put(progress)
+        await queue.put(None)
+
+    task = asyncio.create_task(_rerun())
+    _active_tasks[job_id] = task
+
+    logger.info("Job retried: job_id=%s filename=%s prev_status=%s",
+                job_id, filename, job["status"])
+
+    return {
+        "job_id":   job_id,
+        "filename": filename,
+        "status":   "started",
+        "retried":  True,
+    }
+
+
+# ─────────────────────────────────────────────
 # Download converted code
 # ─────────────────────────────────────────────
 

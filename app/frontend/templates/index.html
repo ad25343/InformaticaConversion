@@ -452,12 +452,39 @@
     </div>
 
     <!-- Job list -->
-    <div class="section-title">Jobs</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="section-title" style="margin-bottom:0">Jobs</div>
+      <span id="jobCountBadge" style="font-size:10px;color:var(--muted)"></span>
+    </div>
+    <!-- Search + status filter -->
+    <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:8px">
+      <input id="jobSearchInput" type="search" placeholder="🔍 Search by filename…"
+             oninput="applyJobFilter()"
+             style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;box-sizing:border-box"/>
+      <select id="jobStatusFilter" onchange="applyJobFilter()"
+              style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
+        <option value="">All statuses</option>
+        <option value="pending">Pending</option>
+        <option value="running">Running</option>
+        <option value="awaiting_review">Awaiting Gate 1</option>
+        <option value="awaiting_sec_review">Awaiting Gate 2</option>
+        <option value="awaiting_code_review">Awaiting Gate 3</option>
+        <option value="complete">Complete</option>
+        <option value="blocked">Blocked / Rejected</option>
+        <option value="failed">Failed</option>
+      </select>
+    </div>
     <div class="job-list" id="jobList">
       <div class="empty" style="padding:20px 0">
         <div style="font-size:24px">📋</div>
         <div style="font-size:12px;margin-top:8px">No jobs yet</div>
       </div>
+    </div>
+    <!-- Pagination -->
+    <div id="jobPagination" style="display:none;display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:4px;flex-shrink:0">
+      <button id="jobPagePrev" class="btn btn-sm btn-ghost" style="flex:1" onclick="jobPageChange(-1)">‹ Prev</button>
+      <span id="jobPageLabel" style="font-size:11px;color:var(--muted);white-space:nowrap"></span>
+      <button id="jobPageNext" class="btn btn-sm btn-ghost" style="flex:1" onclick="jobPageChange(1)">Next ›</button>
     </div>
   </aside>
 
@@ -743,6 +770,13 @@ startBtn.addEventListener('click', async () => {
 // ─────────────────────────────────────────────
 // Job List
 // ─────────────────────────────────────────────
+
+// Global job store — updated on every poll, read by filter/pagination
+let _allJobs    = [];
+let _allHistory = [];
+let _jobPage    = 0;
+const _JOB_PAGE_SIZE = 30;
+
 async function loadJobs() {
   try {
     const res  = await fetch('/api/jobs');
@@ -753,8 +787,80 @@ async function loadJobs() {
       const histData = await histRes.json();
       history = histData.history || [];
     } catch(he) { /* history is supplemental — never break the main list */ }
-    renderJobList(data.jobs || [], history);
+    _allJobs    = data.jobs || [];
+    _allHistory = history;
+    applyJobFilter();
   } catch(e) { /* ignore poll errors */ }
+}
+
+function applyJobFilter() {
+  const query      = (document.getElementById('jobSearchInput')?.value  || '').trim().toLowerCase();
+  const statusFilt = (document.getElementById('jobStatusFilter')?.value || '').trim();
+
+  // Update total count badge
+  const badge = document.getElementById('jobCountBadge');
+  if (badge) badge.textContent = _allJobs.length ? `${_allJobs.length} total` : '';
+
+  // No filter active — use normal sectioned render (active / history / archive)
+  if (!query && !statusFilt) {
+    _jobPage = 0;
+    renderJobList(_allJobs, _allHistory);
+    _updatePagination(0, 0);
+    return;
+  }
+
+  // Filter
+  const _RUNNING = new Set(['pending','parsing','classifying','documenting','verifying',
+    'assigning_stack','converting','security_scanning','validating',
+    'reviewing','testing']);
+
+  let filtered = _allJobs.filter(j => {
+    if (query && !(j.filename || '').toLowerCase().includes(query)) return false;
+    if (statusFilt) {
+      if (statusFilt === 'running' && !_RUNNING.has(j.status)) return false;
+      if (statusFilt !== 'running' && j.status !== statusFilt) return false;
+    }
+    return true;
+  });
+
+  // Paginate
+  const total  = filtered.length;
+  const pages  = Math.max(1, Math.ceil(total / _JOB_PAGE_SIZE));
+  _jobPage     = Math.min(_jobPage, pages - 1);
+  const slice  = filtered.slice(_jobPage * _JOB_PAGE_SIZE, (_jobPage + 1) * _JOB_PAGE_SIZE);
+
+  // Render flat filtered list
+  const el = document.getElementById('jobList');
+  if (!el) return;
+  if (!slice.length) {
+    el.innerHTML = '<div class="empty" style="padding:16px 0"><div style="font-size:12px;color:var(--muted)">No jobs match your filter.</div></div>';
+  } else {
+    el.innerHTML = slice.map(j => renderJobItem(j)).join('');
+  }
+
+  _updatePagination(total, pages);
+}
+
+function _updatePagination(total, pages) {
+  const pag   = document.getElementById('jobPagination');
+  const label = document.getElementById('jobPageLabel');
+  const prev  = document.getElementById('jobPagePrev');
+  const next  = document.getElementById('jobPageNext');
+  if (!pag) return;
+
+  if (pages <= 1) { pag.style.display = 'none'; return; }
+
+  pag.style.display = 'flex';
+  const start = _jobPage * _JOB_PAGE_SIZE + 1;
+  const end   = Math.min((_jobPage + 1) * _JOB_PAGE_SIZE, total);
+  if (label) label.textContent = `${start}–${end} of ${total}`;
+  if (prev)  prev.disabled  = _jobPage === 0;
+  if (next)  next.disabled  = _jobPage >= pages - 1;
+}
+
+function jobPageChange(delta) {
+  _jobPage = Math.max(0, _jobPage + delta);
+  applyJobFilter();
 }
 
 // Statuses that mean a job is still running / waiting for action
@@ -1084,6 +1190,7 @@ function renderJobPanel(job) {
         <div class="info-box" style="margin-bottom:0;flex:1">
           <strong>What to do:</strong> <span>${hint}</span>
         </div>
+        <button class="btn btn-ghost btn-sm" onclick="retryJob('${job.job_id}')" title="Re-run the pipeline with the same XML file">🔄 Retry</button>
         <button class="btn btn-ghost btn-sm" onclick="reuploadForJob()">↩ Re-upload Fixed File</button>
       </div>
     </div>`;
@@ -1959,6 +2066,17 @@ function renderJobPanel(job) {
   const pipelineLog = state.pipeline_log || [];
   html += renderLogPanel(pipelineLog, job.job_id);
 
+  // ── AUDIT TRAIL ────────────────────────────────────────────
+  html += `<div class="card" id="auditTrailCard" style="margin-top:12px">
+    <div class="card-title" onclick="toggleAuditTrail('${job.job_id}')">
+      <span class="icon">📋</span> Decision Audit Trail
+      <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:auto" id="auditTrailToggle">▶ Show</span>
+    </div>
+    <div id="auditTrailBody" style="display:none;margin-top:8px">
+      <div style="color:var(--muted);font-size:12px">Loading…</div>
+    </div>
+  </div>`;
+
   document.getElementById('mainPanel').innerHTML = html;
 
   // After render: auto-scroll the log to bottom
@@ -2071,6 +2189,84 @@ async function deleteJob(jobId, filename) {
     }
     await loadJobs();
   } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
+// ─────────────────────────────────────────────
+// Retry job
+// ─────────────────────────────────────────────
+async function retryJob(jobId) {
+  if (!confirm('Retry this job?\n\nThe pipeline will restart from Step 1 using the original XML file.')) return;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/retry`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('Retry failed: ' + (err.detail || res.statusText));
+      return;
+    }
+    showToast('Job queued for retry', 'Pipeline restarting from Step 1.', 'info', 5000);
+    await loadJobs();
+    openJob(jobId);
+  } catch(e) { alert('Retry failed: ' + e.message); }
+}
+
+// ─────────────────────────────────────────────
+// Audit trail
+// ─────────────────────────────────────────────
+async function toggleAuditTrail(jobId) {
+  const body   = document.getElementById('auditTrailBody');
+  const toggle = document.getElementById('auditTrailToggle');
+  if (!body || !toggle) return;
+
+  const isOpen = body.style.display !== 'none';
+  if (isOpen) {
+    body.style.display = 'none';
+    toggle.textContent = '▶ Show';
+    return;
+  }
+
+  body.style.display = '';
+  toggle.textContent = '▼ Hide';
+  body.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading…</div>';
+
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/audit`);
+    if (!res.ok) { body.innerHTML = '<div style="color:var(--danger);font-size:12px">Failed to load audit trail.</div>'; return; }
+    const data = await res.json();
+    const entries = data.entries || [];
+
+    if (!entries.length) {
+      body.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No gate decisions recorded yet.</div>';
+      return;
+    }
+
+    const gateIcon = { gate1:'🔵', gate2:'🟡', gate3:'🟢', retry:'🔄' };
+    const decColor = { APPROVED:'var(--accent2)', APPROVE:'var(--accent2)', ACKNOWLEDGED:'var(--warn)',
+                       REJECTED:'var(--danger)', REJECT:'var(--danger)', FAILED:'var(--danger)',
+                       RETRY:'var(--muted)' };
+
+    body.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">
+      ${entries.map(e => {
+        const icon  = gateIcon[e.gate] || '⚪';
+        const color = decColor[e.decision] || 'var(--text)';
+        const ts    = e.created_at ? new Date(e.created_at).toLocaleString() : '';
+        const extra = e.extra && Object.keys(e.extra).length
+          ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${Object.entries(e.extra).map(([k,v])=>`${k}: ${v}`).join(' · ')}</div>`
+          : '';
+        return `<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;border-left:3px solid ${color}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-size:13px">${icon}</span>
+            <strong style="font-size:12px;color:${color}">${esc(e.decision || e.event_type || '')}</strong>
+            <span style="font-size:11px;color:var(--muted);margin-left:auto">${esc(ts)}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted)">${esc(e.gate)} · ${esc(e.reviewer_name || '')}${e.reviewer_role ? ' ('+esc(e.reviewer_role)+')' : ''}</div>
+          ${e.notes ? `<div style="font-size:12px;margin-top:4px;color:var(--text)">${esc(e.notes)}</div>` : ''}
+          ${extra}
+        </div>`;
+      }).join('')}
+    </div>`;
+  } catch(ex) {
+    body.innerHTML = `<div style="color:var(--danger);font-size:12px">Error: ${esc(String(ex))}</div>`;
+  }
 }
 
 async function downloadS2T(jobId) {
