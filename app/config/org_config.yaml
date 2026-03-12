@@ -1,0 +1,81 @@
+# org_config.yaml — Organisation-level overrides for the conversion pipeline.
+# All sections are optional. Missing keys fall back to built-in defaults.
+# Copy this file to app/config/org_config.yaml and customise for your org.
+
+# ── G1: Classifier pattern-signal overrides ──────────────────────────────────
+# Extend the built-in keyword lists used to detect ETL patterns from target names.
+# Values are MERGED with defaults (not replaced).
+pattern_signals:
+  scd2:
+    target_name_contains: []
+    # Example: ["HIST_", "SNAP_", "VERSIONED"]
+  upsert:
+    target_name_contains: []
+    # Example: ["MASTER_", "REFERENCE_"]
+  incremental_append:
+    target_name_contains: []
+    # Example: ["STAGING_NEW", "NEXT_BATCH"]
+  expression_complexity:
+    additional_indicators: []
+    # Example: ["MY_CUSTOM_FUNC(", "CALC_TAX("]
+
+# ── G2: DW audit field configuration ─────────────────────────────────────────
+# Rename or disable the standard DW audit columns injected into every target.
+# Set to empty list [] to disable all audit field injection.
+audit_fields:
+  insert_timestamp:
+    column: DW_INSERT_DT          # rename if your org uses e.g. LOAD_TIMESTAMP
+    expression: current_timestamp()
+  update_timestamp:
+    column: DW_UPDATE_DT
+    expression: current_timestamp()
+  batch_id:
+    column: ETL_BATCH_ID
+    expression: "%(job_parameter)s"   # substituted at runtime
+  source_system:
+    column: ETL_SOURCE
+    expression: "%(source_system_name)s"
+
+# ── G4: Verification flag policy overrides ───────────────────────────────────
+# Override severity or recommendation text for any flag type.
+# Valid severities: CRITICAL | HIGH | MEDIUM | LOW | INFO
+# Set enabled: false to suppress a flag type entirely.
+verification_policy: {}
+  # Example:
+  # UNRESOLVED_PARAMETER:
+  #   severity: LOW
+  #   recommendation: "Review with DBA team before promoting to prod."
+  # ENVIRONMENT_SPECIFIC_VALUE:
+  #   enabled: false
+
+# ── G5: Warehouse credential env-var overrides ───────────────────────────────
+# Override the environment variable names used in generated dbt profiles.yml.
+warehouse_credential_overrides: {}
+  # Example (remap Snowflake vars):
+  # snowflake:
+  #   account: MY_SF_ACCOUNT
+  #   user: MY_SF_USER
+  #   password: MY_SF_PASSWORD
+
+# ── G6: Pipeline step options ────────────────────────────────────────────────
+# skip_steps: list of step numbers to skip, with an optional condition.
+#   condition values: "always" | "pattern==<name>" | "tier in [LOW,MEDIUM]"
+# auto_approve_gates: automatically approve a gate without human review.
+#   condition values: same as above
+pipeline_options:
+  skip_steps: []
+  # Example:
+  # - step: 4      # skip documentation for simple truncate-and-load
+  #   condition: "pattern==truncate_and_load"
+  # - step: 11     # always skip test generation
+  #   condition: "always"
+  auto_approve_gates: []
+  # Example:
+  # - gate: 1
+  #   condition: "tier in [LOW,MEDIUM] and confidence==HIGH"
+
+# ── G7: Parser options ────────────────────────────────────────────────────────
+# Additional transformation types to mark as unsupported (auto VERY_HIGH + flag).
+parser_options:
+  additional_unsupported_types: []
+  # Example: ["Custom Transformation", "SAP Extractor"]

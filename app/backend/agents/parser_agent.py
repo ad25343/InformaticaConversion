@@ -14,6 +14,7 @@ from lxml import etree
 
 from ..models.schemas import ParseReport, ParseFlag
 from ..security import safe_parse_xml
+from ..org_config_loader import get_unsupported_types as _get_cfg_unsupported_types
 
 
 # ─────────────────────────────────────────────

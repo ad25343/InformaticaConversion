@@ -20,6 +20,7 @@ from .job_exporter import export_job
 from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
     session_parser_agent, security_agent, manifest_agent
+from .org_config_loader import should_skip_step, should_auto_approve_gate
 from .agents.documentation_agent import DOC_TRUNCATION_SENTINEL, DOC_COMPLETE_SENTINEL
 from .agents.reconciliation_agent import generate_reconciliation_report
 from .smoke_execute import smoke_execute_files, format_smoke_results
@@ -300,78 +301,90 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     log.step_start(3, "Generate Documentation")
     log.state_change("classifying", "documenting", step=3)
     log.claude_call(3, "documentation generation")
-    yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
 
-    # Run documentation as a background task so we can emit heartbeat SSE events
-    # every 30 s while both passes run — prevents the client from seeing a frozen
-    # spinner and keeps the SSE connection alive during long Claude calls.
-    _doc_task = asyncio.create_task(
-        documentation_agent.document(
-            parse_report, complexity, graph, session_parse_report=session_parse_report
-        )
-    )
-    _HEARTBEAT = 30  # seconds between progress SSE events
-    _elapsed   = 0
-    while not _doc_task.done():
-        try:
-            await asyncio.wait_for(asyncio.shield(_doc_task), timeout=_HEARTBEAT)
-        except asyncio.TimeoutError:
-            _elapsed += _HEARTBEAT
-            _mins, _secs = divmod(_elapsed, 60)
-            _elapsed_str = f"{_mins}m {_secs}s" if _mins else f"{_secs}s"
-            _pass_hint = "Pass 2 (lineage)…" if _elapsed > 120 else "Pass 1 (transformations)…"
-            yield await emit(
-                3, JobStatus.DOCUMENTING,
-                f"Generating documentation — {_pass_hint} ({_elapsed_str} elapsed)",
+    # G6: Check if this step should be skipped per org_config pipeline_options
+    _pattern = state.get("pattern_classification", {}).get("pattern")
+    _tier = state.get("complexity", {}).get("tier")
+    if should_skip_step(3, pattern=_pattern, tier=_tier):
+        _orch_log.info("Step 3 (documentation) skipped per pipeline_options config")
+        log.info("Step 3 skipped per org_config pipeline_options", step=3)
+        state["documentation_md"] = "(skipped per org config)"
+        state["doc_truncated"] = False
+        yield await emit(3, JobStatus.DOCUMENTING, "Documentation skipped per org config")
+        documentation_md = "(skipped per org config)"
+    else:
+        yield await emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
+
+        # Run documentation as a background task so we can emit heartbeat SSE events
+        # every 30 s while both passes run — prevents the client from seeing a frozen
+        # spinner and keeps the SSE connection alive during long Claude calls.
+        _doc_task = asyncio.create_task(
+            documentation_agent.document(
+                parse_report, complexity, graph, session_parse_report=session_parse_report
             )
-            continue
-        break  # task completed normally
-
-    try:
-        documentation_md = _doc_task.result()
-    except Exception as e:
-        log.step_failed(3, "Generate Documentation", str(e), exc_info=True)
-        log.finalize("failed", steps_completed=3)
-        log.close()
-        yield await emit(3, JobStatus.FAILED, f"Documentation error: {e}", _err(e))
-        return
-
-    # ── STEP 3 VALIDATION — check doc completeness ────────────────────────────
-    # Truncation is a WARNING, not a hard failure.  The reviewer sees a prominent
-    # flag at Gate 1 and decides whether the partial documentation is sufficient
-    # to proceed.  Hard-failing here wastes all prior Claude calls and forces a
-    # full re-upload — not worth it when the doc is usually 90%+ complete.
-    doc_truncated = DOC_TRUNCATION_SENTINEL in documentation_md
-    doc_missing_sentinel = DOC_COMPLETE_SENTINEL not in documentation_md and not doc_truncated
-
-    if doc_truncated:
-        log.warning(
-            "Documentation was truncated (hit token limit on one pass). "
-            "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
-            step=3,
         )
-    elif doc_missing_sentinel:
-        log.warning(
-            "Documentation completion marker missing — output may be incomplete. "
-            "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
-            step=3,
+        _HEARTBEAT = 30  # seconds between progress SSE events
+        _elapsed   = 0
+        while not _doc_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(_doc_task), timeout=_HEARTBEAT)
+            except asyncio.TimeoutError:
+                _elapsed += _HEARTBEAT
+                _mins, _secs = divmod(_elapsed, 60)
+                _elapsed_str = f"{_mins}m {_secs}s" if _mins else f"{_secs}s"
+                _pass_hint = "Pass 2 (lineage)…" if _elapsed > 120 else "Pass 1 (transformations)…"
+                yield await emit(
+                    3, JobStatus.DOCUMENTING,
+                    f"Generating documentation — {_pass_hint} ({_elapsed_str} elapsed)",
+                )
+                continue
+            break  # task completed normally
+
+        try:
+            documentation_md = _doc_task.result()
+        except Exception as e:
+            log.step_failed(3, "Generate Documentation", str(e), exc_info=True)
+            log.finalize("failed", steps_completed=3)
+            log.close()
+            yield await emit(3, JobStatus.FAILED, f"Documentation error: {e}", _err(e))
+            return
+
+        # ── STEP 3 VALIDATION — check doc completeness ────────────────────────────
+        # Truncation is a WARNING, not a hard failure.  The reviewer sees a prominent
+        # flag at Gate 1 and decides whether the partial documentation is sufficient
+        # to proceed.  Hard-failing here wastes all prior Claude calls and forces a
+        # full re-upload — not worth it when the doc is usually 90%+ complete.
+        doc_truncated = DOC_TRUNCATION_SENTINEL in documentation_md
+        doc_missing_sentinel = DOC_COMPLETE_SENTINEL not in documentation_md and not doc_truncated
+
+        if doc_truncated:
+            log.warning(
+                "Documentation was truncated (hit token limit on one pass). "
+                "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
+                step=3,
+            )
+        elif doc_missing_sentinel:
+            log.warning(
+                "Documentation completion marker missing — output may be incomplete. "
+                "A HIGH warning flag will be surfaced to the reviewer at Gate 1.",
+                step=3,
+            )
+
+        # Strip sentinels so they never appear in UI, reports, or agent prompts.
+        documentation_md = (
+            documentation_md
+            .replace(DOC_COMPLETE_SENTINEL, "")
+            .replace(DOC_TRUNCATION_SENTINEL, "")
+            .strip()
         )
 
-    # Strip sentinels so they never appear in UI, reports, or agent prompts.
-    documentation_md = (
-        documentation_md
-        .replace(DOC_COMPLETE_SENTINEL, "")
-        .replace(DOC_TRUNCATION_SENTINEL, "")
-        .strip()
-    )
-
-    doc_len = len(documentation_md)
-    log.info(f"Documentation generated — {doc_len} chars (truncated={doc_truncated})",
-             step=3, data={"doc_chars": doc_len, "doc_truncated": doc_truncated})
-    log.step_complete(3, "Generate Documentation", f"{doc_len:,} chars")
-    yield await emit(3, JobStatus.DOCUMENTING,
-                     "Documentation complete" + (" (truncated — reviewer notified)" if doc_truncated else ""),
-                     {"documentation_md": documentation_md, "doc_truncated": doc_truncated})
+        doc_len = len(documentation_md)
+        log.info(f"Documentation generated — {doc_len} chars (truncated={doc_truncated})",
+                 step=3, data={"doc_chars": doc_len, "doc_truncated": doc_truncated})
+        log.step_complete(3, "Generate Documentation", f"{doc_len:,} chars")
+        yield await emit(3, JobStatus.DOCUMENTING,
+                         "Documentation complete" + (" (truncated — reviewer notified)" if doc_truncated else ""),
+                         {"documentation_md": documentation_md, "doc_truncated": doc_truncated})
 
     # ── STEP 4 — VERIFY ───────────────────────────────────────
     log.step_start(4, "Verification")
@@ -879,55 +892,64 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
     # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
     log.step_start(11, "Test Generation & Coverage Check")
     log.state_change("reviewing", "testing", step=11)
-    yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
-                     {
-                         "code_review": code_review.model_dump(),
-                         "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
-                     })
 
-    try:
-        test_report = test_agent.generate_tests(
-            conversion_output=conversion_output,
-            s2t=s2t_state,
-            verification=verification_dict,
-            graph=graph,
-        )
-        log.info(
-            f"Test generation complete — coverage {test_report.coverage_pct}%, "
-            f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
-            f"{len(test_report.test_files)} test file(s) generated",
-            step=11,
-            data={
-                "coverage_pct":   test_report.coverage_pct,
-                "fields_covered": test_report.fields_covered,
-                "fields_missing": test_report.fields_missing,
-                "missing_fields": test_report.missing_fields,
-                "test_files":     list(test_report.test_files.keys()),
-            }
-        )
-        if test_report.notes:
-            for note in test_report.notes:
-                log.info(f"Test note: {note}", step=11)
-        log.step_complete(11, "Test Generation",
-                          f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
-    except Exception as e:
-        log.warning(f"Test generation failed (non-blocking): {e}", step=11)
-        from .models.schemas import TestReport as TR
-        test_report = TR(
-            mapping_name=conversion_output.mapping_name,
-            target_stack=conversion_output.target_stack.value,
-            test_files={},
-            field_coverage=[],
-            filter_coverage=[],
-            fields_covered=0,
-            fields_missing=0,
-            coverage_pct=0.0,
-            missing_fields=[],
-            filters_covered=0,
-            filters_missing=0,
-            notes=[f"Test generation failed (non-blocking): {e}"],
-        )
-        log.step_complete(11, "Test Generation", "SKIPPED (error)")
+    # G6: Check if this step should be skipped per org_config pipeline_options
+    _pattern = state.get("pattern_classification", {}).get("pattern")
+    _tier = state.get("complexity", {}).get("tier")
+    if should_skip_step(11, pattern=_pattern, tier=_tier):
+        _orch_log.info("Step 11 (test generation) skipped per pipeline_options config")
+        log.info("Step 11 skipped per org_config pipeline_options", step=11)
+        test_report = None
+    else:
+        yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
+                         {
+                             "code_review": code_review.model_dump(),
+                             "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
+                         })
+
+        try:
+            test_report = test_agent.generate_tests(
+                conversion_output=conversion_output,
+                s2t=s2t_state,
+                verification=verification_dict,
+                graph=graph,
+            )
+            log.info(
+                f"Test generation complete — coverage {test_report.coverage_pct}%, "
+                f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
+                f"{len(test_report.test_files)} test file(s) generated",
+                step=11,
+                data={
+                    "coverage_pct":   test_report.coverage_pct,
+                    "fields_covered": test_report.fields_covered,
+                    "fields_missing": test_report.fields_missing,
+                    "missing_fields": test_report.missing_fields,
+                    "test_files":     list(test_report.test_files.keys()),
+                }
+            )
+            if test_report.notes:
+                for note in test_report.notes:
+                    log.info(f"Test note: {note}", step=11)
+            log.step_complete(11, "Test Generation",
+                              f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
+        except Exception as e:
+            log.warning(f"Test generation failed (non-blocking): {e}", step=11)
+            from .models.schemas import TestReport as TR
+            test_report = TR(
+                mapping_name=conversion_output.mapping_name,
+                target_stack=conversion_output.target_stack.value,
+                test_files={},
+                field_coverage=[],
+                filter_coverage=[],
+                fields_covered=0,
+                fields_missing=0,
+                coverage_pct=0.0,
+                missing_fields=[],
+                filters_covered=0,
+                filters_missing=0,
+                notes=[f"Test generation failed (non-blocking): {e}"],
+            )
+            log.step_complete(11, "Test Generation", "SKIPPED (error)")
 
     # ── STEP 11b — SECURITY SCAN OF GENERATED TEST FILES ────────────────────
     # Test code can contain hardcoded credentials and real-looking connection strings.
@@ -1367,55 +1389,64 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
     # ── STEP 11 — TEST GENERATION & COVERAGE CHECK ───────────────────────────
     log.step_start(11, "Test Generation & Coverage Check")
     log.state_change("reviewing", "testing", step=11)
-    yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
-                     {
-                         "code_review": code_review.model_dump(),
-                         "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
-                     })
 
-    try:
-        test_report = test_agent.generate_tests(
-            conversion_output=conversion_output,
-            s2t=s2t_state,
-            verification=verification_dict,
-            graph=graph,
-        )
-        log.info(
-            f"Test generation complete — coverage {test_report.coverage_pct}%, "
-            f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
-            f"{len(test_report.test_files)} test file(s) generated",
-            step=11,
-            data={
-                "coverage_pct":   test_report.coverage_pct,
-                "fields_covered": test_report.fields_covered,
-                "fields_missing": test_report.fields_missing,
-                "missing_fields": test_report.missing_fields,
-                "test_files":     list(test_report.test_files.keys()),
-            }
-        )
-        if test_report.notes:
-            for note in test_report.notes:
-                log.info(f"Test note: {note}", step=11)
-        log.step_complete(11, "Test Generation",
-                          f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
-    except Exception as e:
-        log.warning(f"Test generation failed (non-blocking): {e}", step=11)
-        from .models.schemas import TestReport as TR
-        test_report = TR(
-            mapping_name=conversion_output.mapping_name,
-            target_stack=conversion_output.target_stack.value,
-            test_files={},
-            field_coverage=[],
-            filter_coverage=[],
-            fields_covered=0,
-            fields_missing=0,
-            coverage_pct=0.0,
-            missing_fields=[],
-            filters_covered=0,
-            filters_missing=0,
-            notes=[f"Test generation failed (non-blocking): {e}"],
-        )
-        log.step_complete(11, "Test Generation", "SKIPPED (error)")
+    # G6: Check if this step should be skipped per org_config pipeline_options
+    _pattern = state.get("pattern_classification", {}).get("pattern")
+    _tier = state.get("complexity", {}).get("tier")
+    if should_skip_step(11, pattern=_pattern, tier=_tier):
+        _orch_log.info("Step 11 (test generation) skipped per pipeline_options config")
+        log.info("Step 11 skipped per org_config pipeline_options", step=11)
+        test_report = None
+    else:
+        yield await emit(11, JobStatus.TESTING, "Generating tests and checking field coverage…",
+                         {
+                             "code_review": code_review.model_dump(),
+                             "reconciliation": reconciliation_report.model_dump() if reconciliation_report else None,
+                         })
+
+        try:
+            test_report = test_agent.generate_tests(
+                conversion_output=conversion_output,
+                s2t=s2t_state,
+                verification=verification_dict,
+                graph=graph,
+            )
+            log.info(
+                f"Test generation complete — coverage {test_report.coverage_pct}%, "
+                f"{test_report.fields_covered}/{test_report.fields_covered + test_report.fields_missing} fields covered, "
+                f"{len(test_report.test_files)} test file(s) generated",
+                step=11,
+                data={
+                    "coverage_pct":   test_report.coverage_pct,
+                    "fields_covered": test_report.fields_covered,
+                    "fields_missing": test_report.fields_missing,
+                    "missing_fields": test_report.missing_fields,
+                    "test_files":     list(test_report.test_files.keys()),
+                }
+            )
+            if test_report.notes:
+                for note in test_report.notes:
+                    log.info(f"Test note: {note}", step=11)
+            log.step_complete(11, "Test Generation",
+                              f"{test_report.coverage_pct}% coverage, {len(test_report.test_files)} file(s)")
+        except Exception as e:
+            log.warning(f"Test generation failed (non-blocking): {e}", step=11)
+            from .models.schemas import TestReport as TR
+            test_report = TR(
+                mapping_name=conversion_output.mapping_name,
+                target_stack=conversion_output.target_stack.value,
+                test_files={},
+                field_coverage=[],
+                filter_coverage=[],
+                fields_covered=0,
+                fields_missing=0,
+                coverage_pct=0.0,
+                missing_fields=[],
+                filters_covered=0,
+                filters_missing=0,
+                notes=[f"Test generation failed (non-blocking): {e}"],
+            )
+            log.step_complete(11, "Test Generation", "SKIPPED (error)")
 
     # ── STEP 11b — SECURITY SCAN OF GENERATED TEST FILES ────────────────────
     if test_report.test_files and security_scan:

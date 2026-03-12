@@ -1,0 +1,112 @@
+# warehouse_registry.yaml — Extensible dbt warehouse profile templates.
+# Add new warehouse types here without touching Python source.
+# Credential env var names can be overridden in org_config.yaml.
+
+warehouses:
+  postgres:
+    adapter: postgres
+    credential_vars:
+      host: DBT_HOST
+      port: "5432"
+      user: DBT_USER
+      password: DBT_PASSWORD
+      database: DBT_DATABASE
+      schema: DBT_SCHEMA
+    defaults:
+      schema: public
+      threads: 4
+      threads_prod: 8
+
+  snowflake:
+    adapter: snowflake
+    credential_vars:
+      account: SNOWFLAKE_ACCOUNT
+      user: SNOWFLAKE_USER
+      password: SNOWFLAKE_PASSWORD
+      role: SNOWFLAKE_ROLE
+      database: SNOWFLAKE_DATABASE
+      warehouse: SNOWFLAKE_WAREHOUSE
+      schema: SNOWFLAKE_SCHEMA
+    defaults:
+      role: TRANSFORMER
+      schema: DEV
+      schema_prod: PROD
+      threads: 8
+      threads_prod: 16
+
+  redshift:
+    adapter: redshift
+    credential_vars:
+      host: REDSHIFT_HOST
+      user: REDSHIFT_USER
+      password: REDSHIFT_PASSWORD
+      database: REDSHIFT_DATABASE
+      schema: REDSHIFT_SCHEMA
+    defaults:
+      port: "5439"
+      schema: public
+      threads: 4
+      threads_prod: 8
+      ra3_node: "true"
+
+  bigquery:
+    adapter: bigquery
+    credential_vars:
+      project: BIGQUERY_PROJECT
+      dataset: BIGQUERY_DATASET
+      keyfile: GOOGLE_APPLICATION_CREDENTIALS
+    defaults:
+      method: service-account
+      threads: 8
+
+  databricks:
+    adapter: databricks
+    credential_vars:
+      host: DATABRICKS_HOST
+      token: DATABRICKS_TOKEN
+      schema: DATABRICKS_SCHEMA
+      http_path: DATABRICKS_HTTP_PATH
+      catalog: DATABRICKS_CATALOG
+    defaults:
+      threads: 8
+
+  sqlserver:
+    adapter: sqlserver
+    credential_vars:
+      host: MSSQL_HOST
+      user: MSSQL_USER
+      password: MSSQL_PASSWORD
+      database: MSSQL_DATABASE
+      schema: MSSQL_SCHEMA
+    defaults:
+      port: "1433"
+      schema: dbo
+      threads: 4
+
+  # ── NEW: Azure Synapse ──────────────────────────────────────────────────────
+  synapse:
+    adapter: synapse
+    credential_vars:
+      host: SYNAPSE_HOST
+      user: SYNAPSE_USER
+      password: SYNAPSE_PASSWORD
+      database: SYNAPSE_DATABASE
+      schema: SYNAPSE_SCHEMA
+    defaults:
+      port: "1433"
+      schema: dbo
+      threads: 4
+
+  # ── NEW: Microsoft Fabric ───────────────────────────────────────────────────
+  fabric:
+    adapter: fabric
+    credential_vars:
+      host: FABRIC_HOST
+      user: FABRIC_USER
+      password: FABRIC_PASSWORD
+      database: FABRIC_DATABASE
+      schema: FABRIC_SCHEMA
+    defaults:
+      port: "1433"
+      schema: dbo
+      threads: 4

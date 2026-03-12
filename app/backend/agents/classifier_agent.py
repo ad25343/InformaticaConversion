@@ -4,11 +4,16 @@ Rule-based scoring against objective criteria from the spec.
 """
 from __future__ import annotations
 from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport
+from ..org_config_loader import get_pattern_signals, get_unsupported_types
 
-UNSUPPORTED_TYPES = {
-    "Java Transformation", "External Procedure",
-    "Advanced External Procedure", "Stored Procedure"
-}
+def _get_unsupported_types() -> set[str]:
+    try:
+        return get_unsupported_types()
+    except Exception:
+        return {"Java Transformation", "External Procedure",
+                "Advanced External Procedure", "Stored Procedure"}
+
+UNSUPPORTED_TYPES = _get_unsupported_types()
 
 
 def classify(parse_report: ParseReport, graph: dict) -> ComplexityReport:
@@ -186,8 +191,11 @@ def _elevate(current: ComplexityTier, candidate: ComplexityTier) -> ComplexityTi
 def _is_complex_expression(expr: str) -> bool:
     if not expr:
         return False
-    indicators = ["IIF(", "DECODE(", "TO_DATE(", "IN(", "INSTR(", "SUBSTR(",
-                  "TRUNC(", "ROUND(", ":LKP.", "$$", "$$$"]
+    try:
+        indicators = get_pattern_signals()["expression_complexity"]
+    except Exception:
+        indicators = ["IIF(", "DECODE(", "TO_DATE(", "IN(", "INSTR(", "SUBSTR(",
+                      "TRUNC(", "ROUND(", ":LKP.", "$$", "$$$"]
     return any(ind in expr.upper() for ind in indicators)
 
 
@@ -254,6 +262,9 @@ def _classify_pattern(
     tgt_str = " ".join(target_names).upper()
     sq_count = sum(1 for t in trans_types if "Source Qualifier" in t)
 
+    # G1: Load configurable pattern signals at runtime
+    _signals = get_pattern_signals()
+
     # 1. filter_and_route — Router → N targets
     if _has("router"):
         return (
@@ -283,7 +294,7 @@ def _classify_pattern(
         )
 
     # 4. scd2 — history / slowly changing dimension type 2
-    _SCD2_SIGNALS = ("SCD", "HISTORY", "HIST", "ARCHIVE", "SCD2", "DIM_HIST")
+    _SCD2_SIGNALS = _signals["scd2"]
     if any(sig in tgt_str for sig in _SCD2_SIGNALS):
         return (
             "scd2",
@@ -294,7 +305,7 @@ def _classify_pattern(
         )
 
     # 5. upsert — overwrite-on-key pattern (Type 1 SCD / dimension load)
-    _UPSERT_SIGNALS = ("UPSERT", "UPDATE", "MERGE", "DIM_", "_DIM", "DIMENSION")
+    _UPSERT_SIGNALS = _signals["upsert"]
     has_single_joiner = _count("joiner") == 1 and not _has("aggregator")
     if any(sig in tgt_str for sig in _UPSERT_SIGNALS) or has_single_joiner:
         conf = "HIGH" if any(sig in tgt_str for sig in _UPSERT_SIGNALS) else "MEDIUM"
@@ -320,7 +331,7 @@ def _classify_pattern(
     # 7. incremental_append — watermark-filtered append
     # Use specific signals that reliably indicate delta/incremental loads.
     # Avoid generic terms like STAGING that are commonly used for full-reload tables.
-    _INC_SIGNALS = ("APPEND", "_INC", "INC_", "DELTA", "INCREMENTAL", "RECENT")
+    _INC_SIGNALS = _signals["incremental_append"]
     if any(sig in tgt_str for sig in _INC_SIGNALS) and _has("expression"):
         return (
             "incremental_append",

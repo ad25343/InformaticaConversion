@@ -18,6 +18,7 @@ from ..models.schemas import (
     ComplexityTier, ComplexityReport, ParseReport, SessionParseReport,
 )
 from ._client import make_client
+from ..org_config_loader import get_verification_policy, get_unsupported_types
 
 from ..config import settings as _cfg
 MODEL = _cfg.claude_model
@@ -34,10 +35,14 @@ _QC_MAX_TOKENS: dict[ComplexityTier, int] = {
     ComplexityTier.VERY_HIGH: 8_192,
 }
 
-UNSUPPORTED_TYPES = {
-    "Java Transformation", "External Procedure",
-    "Advanced External Procedure", "Stored Procedure"
-}
+def _get_unsupported_types() -> set[str]:
+    try:
+        return get_unsupported_types()
+    except Exception:
+        return {"Java Transformation", "External Procedure",
+                "Advanced External Procedure", "Stored Procedure"}
+
+UNSUPPORTED_TYPES = _get_unsupported_types()
 
 BLOCKING_FLAG_TYPES = {
     "UNSUPPORTED_TRANSFORMATION", "UNRESOLVED_PARAMETER_BLOCKING",
@@ -192,6 +197,19 @@ FLAG_META: dict[str, dict] = {
 }
 
 
+def _get_effective_flag_meta() -> dict:
+    """G4: Merge FLAG_META with org-level verification_policy overrides."""
+    policy = get_verification_policy()
+    if not policy:
+        return FLAG_META
+    merged = {k: dict(v) for k, v in FLAG_META.items()}
+    for flag_type, overrides in policy.items():
+        if flag_type not in merged:
+            merged[flag_type] = {}
+        merged[flag_type].update(overrides)
+    return merged
+
+
 def _make_flag(
     flag_type: str,
     location: str,
@@ -202,7 +220,7 @@ def _make_flag(
     auto_fix_suggestion: str = None,
 ) -> VerificationFlag:
     """Create a VerificationFlag, auto-populating severity/recommendation from FLAG_META."""
-    meta = FLAG_META.get(flag_type, {})
+    meta = _get_effective_flag_meta().get(flag_type, {})
     return VerificationFlag(
         flag_type=flag_type,
         location=location,
@@ -903,10 +921,11 @@ Respond with ONLY the JSON array. No other text."""
         flags = []
         for item in data:
             # Fill in meta defaults if Claude didn't supply them
+            effective_meta = _get_effective_flag_meta()
             if "severity" not in item or not item["severity"]:
-                item["severity"] = FLAG_META.get(item.get("flag_type",""), {}).get("severity", "MEDIUM")
+                item["severity"] = effective_meta.get(item.get("flag_type",""), {}).get("severity", "MEDIUM")
             if "recommendation" not in item or not item["recommendation"]:
-                item["recommendation"] = FLAG_META.get(item.get("flag_type",""), {}).get(
+                item["recommendation"] = effective_meta.get(item.get("flag_type",""), {}).get(
                     "recommendation", "Review this flag with your team before proceeding."
                 )
             # Normalise auto_fix_suggestion — strip empty strings to None
