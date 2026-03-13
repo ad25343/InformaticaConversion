@@ -347,7 +347,7 @@ async def security_headers_middleware(request: Request, call_next):
     # Tighten further (nonce/hash) once the front-end is refactored to avoid inline JS.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "font-src 'self'; "
