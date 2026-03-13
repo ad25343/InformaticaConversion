@@ -397,7 +397,7 @@ def _compare_series(
             avg_diff = (n_exp - n_act).abs().dropna().mean()
             if avg_diff < 0.01:
                 heuristic = (
-                    f"{{col_name}}: Float rounding ({avg_diff:.6f} avg diff) — "
+                    f"{{col_name}}: Float rounding ({{avg_diff:.6f}} avg diff) — "
                     "review IIF/arithmetic expression translation"
                 )
         match_rate = 100.0 * matches / total

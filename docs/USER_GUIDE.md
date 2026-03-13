@@ -1,6 +1,6 @@
 # User Guide — Informatica Conversion Tool
 
-> **Version:** 2.17.0
+> **Version:** 2.17.4
 > **Audience:** Data engineers, migration leads, and operations teams
 
 ---
@@ -49,11 +49,41 @@ Open `http://localhost:8000` in your browser.
 
 ---
 
+## Navigating the UI
+
+The tool has four main areas accessible from the top navigation bar:
+
+| Tab | Purpose |
+|---|---|
+| **⚡ Home** | Landing page with at-a-glance stats (total jobs, running, complete, awaiting review) and quick-action cards |
+| **🏠 Submit** | Upload files and start a pipeline; the right panel shows live insights after submission |
+| **📋 Job History** | Full table of all jobs with search, status filter, and pagination |
+| **👁 Review Queue** | All jobs waiting at a gate — click any row to open that job's sign-off form directly |
+| **🧪 Health Check** | Platform diagnostics and end-to-end test runner (admin only — visible when signed in as a reviewer persona) |
+
+The **left sidebar** shows live pipeline activity at all times regardless of which tab you are on:
+- **Running** — in-progress jobs with a step progress bar and current step name. Click to open the job.
+- **Needs Sign-off** — jobs paused at Gate 1, 2, or 3. Click to jump directly to the sign-off form.
+
+Use **⌘K** (Mac) or **Ctrl+K** (Windows/Linux) to open the global search modal. Search across all jobs by filename, tracking ID, submitter name, team, status, or complexity tier.
+
+Every job displays a short **tracking ID** (`#XXXXXXXX`) — an 8-character code derived from the job UUID — visible in job headers, history rows, review queue rows, and sidebar cards.
+
+---
+
 ## Manual conversion (single mapping)
 
 ### Step 1 — Upload your files
 
-Click **Upload** and provide:
+Navigate to the **Submit** tab. The left column contains the upload form; select your upload mode using the tabs at the top:
+
+| Mode | Use when |
+|---|---|
+| **📄 Individual** | You have separate mapping, workflow, and/or parameter files |
+| **🗜 ZIP** | Your files are already zipped together |
+| **📦 Batch** | You want to convert multiple mappings at once (one subfolder per mapping) |
+
+For Individual mode, provide:
 
 | File | Required? | Description |
 |---|---|---|
@@ -61,9 +91,25 @@ Click **Upload** and provide:
 | Workflow XML | No | Enables session-level extraction (Step 0) |
 | Parameter file | No | Enables `$$VARIABLE` resolution throughout the mapping |
 
-You can also drag and drop a ZIP containing multiple mapping XMLs to run a **batch conversion** — the tool processes all mappings concurrently up to `BATCH_CONCURRENCY` (default: 3).
+For Batch ZIP mode, package your files as one subfolder per mapping:
 
-### Step 2 — Watch the pipeline run
+```
+batch.zip/
+  mapping_a/mapping.xml
+  mapping_b/mapping.xml  workflow.xml  params.txt
+```
+
+The tool processes all mappings concurrently up to `BATCH_CONCURRENCY` (default: 3).
+
+### Step 2 — Monitor your job
+
+After clicking **▶ Start Pipeline**, the right column of the Submit tab immediately switches to a **Job Insights** panel for your submission. It shows live metrics as each pipeline step completes — no need to navigate away:
+
+- Tracking ID, live status badge, complexity tier, and assigned stack
+- Animated progress bar (N / 12 steps)
+- Metric cards that populate as the pipeline runs: mappings found, sources, targets, transforms, blocking flags, security findings, review score, and test coverage
+
+Click **View Full Details →** at any time to open the complete job view. You can also navigate to **Job History** to see all your past runs.
 
 The tool runs a 12-step pipeline automatically. Progress is visible in real time via the step indicator at the top of the job panel:
 
@@ -121,9 +167,13 @@ After Gate 3 approval, the following are available from the job panel:
 
 ## Reviewing jobs at scale (Review Queue)
 
-When running a large migration, many jobs can be waiting at gates simultaneously. The **Review Queue** tab (alongside Individual / ZIP / Batch in the upload section) shows all pending gate decisions in a single table so you can process them in bulk.
+When running a large migration, many jobs can be waiting at gates simultaneously. The **Review Queue** tab shows all pending gate decisions in a single table so you can process them in bulk.
 
-The summary bar shows how many jobs are waiting at Gate 1, Gate 2, and Gate 3. Use the filter buttons to focus on one gate at a time. Check the boxes next to the jobs you want to act on, enter a reviewer name, then click **Approve Selected**, **Reject Selected**, or **Acknowledge Selected** (Gate 2 only).
+**Opening a specific job for review:** click anywhere on a row (or the "Review →" button at the right) to open that job's full detail view. The page scrolls automatically to the active gate sign-off card. A "← Back to Review Queue" bar at the top lets you return to the list without losing your place.
+
+**Bulk sign-off:** check the boxes next to multiple jobs, enter a reviewer name, then click **Approve Selected**, **Reject Selected**, or **Acknowledge Selected** (Gate 2 only). The summary bar shows how many jobs are waiting at Gate 1, Gate 2, and Gate 3 — use the filter buttons to focus on one gate at a time.
+
+**Sidebar shortcut:** the **Needs Sign-off** section in the left sidebar always shows jobs at any gate regardless of which screen you are on. Clicking a card there also navigates directly to that job's sign-off form.
 
 To track overall migration progress, use `GET /api/progress` or the **Export Progress CSV** option for a spreadsheet view of all job statuses — useful for weekly management reporting.
 

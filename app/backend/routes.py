@@ -281,6 +281,34 @@ async def stream_progress(job_id: str):
 # Job State
 # ─────────────────────────────────────────────
 
+@router.get("/jobs/stats")
+async def job_stats():
+    """Return total job counts grouped by status bucket — used by the landing page."""
+    running_statuses = (
+        "pending","parsing","classifying","documenting","verifying",
+        "assigning_stack","converting","security_scanning","validating",
+        "reviewing","testing",
+    )
+    gate_statuses = ("awaiting_review","awaiting_security_review","awaiting_code_review")
+    placeholders_r = ",".join("?" * len(running_statuses))
+    placeholders_g = ",".join("?" * len(gate_statuses))
+    async with db._connect() as conn:
+        async with conn.execute(
+            f"""SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status IN ({placeholders_r}) THEN 1 ELSE 0 END) AS running,
+                SUM(CASE WHEN status = 'complete'            THEN 1 ELSE 0 END) AS complete,
+                SUM(CASE WHEN status IN ({placeholders_g})   THEN 1 ELSE 0 END) AS awaiting_review
+            FROM jobs WHERE deleted_at IS NULL""",
+            (*running_statuses, *gate_statuses),
+        ) as cur:
+            row = await cur.fetchone()
+    if row:
+        return {"total": row[0] or 0, "running": row[1] or 0,
+                "complete": row[2] or 0, "awaiting_review": row[3] or 0}
+    return {"total": 0, "running": 0, "complete": 0, "awaiting_review": 0}
+
+
 @router.get("/jobs")
 async def list_jobs(page: int = 1, page_size: int = 20):
     """List jobs newest-first with pagination.
@@ -1847,13 +1875,13 @@ async def export_progress_csv():
 # ─────────────────────────────────────────────
 
 _SUITE_FILES = {
-    "auth":       "tests/playwright/auth.spec.js",
     "landing":    "tests/playwright/landing.spec.js",
     "navigation": "tests/playwright/navigation.spec.js",
     "submission": "tests/playwright/submission.spec.js",
     "history":    "tests/playwright/history.spec.js",
     "review":     "tests/playwright/review.spec.js",
     "security":   "tests/playwright/security.spec.js",
+    "auth":       "tests/playwright/z_auth.spec.js",   # z_ prefix forces alphabetical sort LAST
 }
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -1865,7 +1893,8 @@ async def run_tests(request: Request, suites: str = ""):
     SSE stream that runs the selected Playwright suites and streams output
     line-by-line.  Admin-only: requires persona cookie == 'Asin D'.
     """
-    persona = request.cookies.get("persona", "")
+    from urllib.parse import unquote as _unquote
+    persona = _unquote(request.cookies.get("persona", ""))
     if persona != "Asin D":
         raise HTTPException(403, "Test runner is restricted to the admin persona.")
 
@@ -1875,9 +1904,17 @@ async def run_tests(request: Request, suites: str = ""):
         raise HTTPException(400, "No valid suites specified.")
 
     spec_paths = [_SUITE_FILES[s] for s in selected]
-    cmd = ["npx", "playwright", "test", "--reporter=line"] + spec_paths
+    cmd = [
+        "npx", "playwright", "test",
+        "--reporter=list",   # newline-terminated output — safe for SSE streaming
+        "--timeout=15000",   # 15 s per test (fast-fail if server unreachable)
+        "--retries=0",       # no retries in health-check mode
+        "--workers=1",       # serial execution — prevents rate-limiter tests from blocking parallel logins
+    ] + spec_paths
 
     async def _stream() -> AsyncGenerator[str, None]:
+        import re as _re
+
         def _evt(payload: dict) -> str:
             return f"data: {json.dumps(payload)}\n\n"
 
@@ -1889,26 +1926,65 @@ async def run_tests(request: Request, suites: str = ""):
                 cwd=_REPO_ROOT,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env={**os.environ, "FORCE_COLOR": "0", "CI": "1"},
+                env={
+                    **os.environ,
+                    "FORCE_COLOR": "0",
+                    "CI": "1",
+                    # Disable Node/npm stdout buffering
+                    "NODE_NO_WARNINGS": "1",
+                },
             )
 
             passed = failed = skipped = 0
+            buf = ""
+            # Read in small chunks so we don't wait for a full newline to arrive.
+            # Playwright can buffer output when stdout is a pipe; chunked reads
+            # unblock the stream as soon as any bytes arrive.
+            READ_TIMEOUT = 30.0   # seconds to wait for ANY new output before giving up
 
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="replace").rstrip()
-                if not line:
-                    continue
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        proc.stdout.read(2048), timeout=READ_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    # Nothing arrived for 30 s — report and kill
+                    yield _evt({
+                        "type": "error",
+                        "text": (
+                            "No output from test runner after 30 s. "
+                            "Playwright may not be installed — try running: "
+                            "npx playwright install chromium"
+                        ),
+                    })
+                    proc.kill()
+                    break
 
-                # Parse playwright summary line  e.g. "5 passed (12s)"  "2 failed"
-                import re as _re
-                m_pass  = _re.search(r"(\d+)\s+passed",  line)
-                m_fail  = _re.search(r"(\d+)\s+failed",  line)
-                m_skip  = _re.search(r"(\d+)\s+skipped", line)
-                if m_pass:  passed  = int(m_pass.group(1))
-                if m_fail:  failed  = int(m_fail.group(1))
-                if m_skip:  skipped = int(m_skip.group(1))
+                if not chunk:
+                    break  # EOF — process finished
 
-                yield _evt({"type": "line", "text": line})
+                buf += chunk.decode("utf-8", errors="replace")
+
+                # Emit complete lines as they accumulate in the buffer
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.rstrip("\r")
+                    if not line:
+                        continue
+
+                    # Parse Playwright summary: "5 passed (12s)"  /  "2 failed"
+                    m_pass  = _re.search(r"(\d+)\s+passed",  line)
+                    m_fail  = _re.search(r"(\d+)\s+failed",  line)
+                    m_skip  = _re.search(r"(\d+)\s+skipped", line)
+                    if m_pass:  passed  = int(m_pass.group(1))
+                    if m_fail:  failed  = int(m_fail.group(1))
+                    if m_skip:  skipped = int(m_skip.group(1))
+
+                    yield _evt({"type": "line", "text": line})
+
+            # Flush any remaining partial line
+            if buf.strip():
+                yield _evt({"type": "line", "text": buf.strip()})
 
             await proc.wait()
             rc = proc.returncode

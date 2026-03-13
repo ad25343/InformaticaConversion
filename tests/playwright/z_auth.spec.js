@@ -61,7 +61,7 @@ test('AUTH-03: correct password logs in and shows landing page', async ({ page }
   // Persona cookie present and readable
   const personaCookie = cookies.find(c => c.name === 'persona');
   expect(personaCookie).toBeTruthy();
-  expect(personaCookie.value).toBe('Asin D');
+  expect(decodeURIComponent(personaCookie.value)).toBe('Asin D');
 });
 
 // ─── AUTH-04: Wrong password → error banner ──────────────────────────────────
@@ -109,7 +109,7 @@ for (const persona of PERSONAS) {
     // persona cookie value
     const cookies = await ctx.cookies();
     const pc = cookies.find(c => c.name === 'persona');
-    expect(pc?.value).toBe(persona.name);
+    expect(decodeURIComponent(pc?.value ?? '')).toBe(persona.name);
 
     await ctx.close();
   });

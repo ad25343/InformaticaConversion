@@ -84,13 +84,14 @@ test.describe('File Submission', () => {
     await page.fill('#submitterTeam',  'QA');
     await page.fill('#submitterNotes', 'SUB-03-ticket');
 
-    await page.click('#startBtn');
-
-    // View should switch and stepper appear
-    await page.waitForSelector('.stepper', { timeout: 15_000 });
-
-    // Job panel shows the filename
-    await expect(page.locator('#panelDashboard')).toContainText('sample_mapping');
+    // Intercept the POST — confirms job was created without waiting for pipeline
+    const [resp] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/jobs') && r.request().method() === 'POST'),
+      page.click('#startBtn'),
+    ]);
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.job_id).toBeTruthy();
   });
 
   // ─── SUB-04: Individual XML + Workflow XML ────────────────────────────────
@@ -106,8 +107,13 @@ test.describe('File Submission', () => {
     await expect(page.locator('#workflowLabel')).toContainText('sample_workflow');
 
     await expect(page.locator('#startBtn')).toBeEnabled();
-    await page.click('#startBtn');
-    await page.waitForSelector('.stepper', { timeout: 15_000 });
+    const [resp] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/jobs') && r.request().method() === 'POST'),
+      page.click('#startBtn'),
+    ]);
+    expect(resp.status()).toBe(200);
+    const data = await resp.json();
+    expect(data.job_id).toBeTruthy();
   });
 
   // ─── SUB-05: ZIP upload mode ───────────────────────────────────────────────

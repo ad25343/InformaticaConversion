@@ -27,7 +27,7 @@ npm run test:e2e
 npm run test:e2e:ui
 
 # Single suite
-npx playwright test tests/playwright/auth.spec.js
+npx playwright test tests/playwright/z_auth.spec.js
 
 # Run with visible browser
 npx playwright test --headed
@@ -52,7 +52,7 @@ APP_URL=http://localhost:8080 npm run test:e2e
 
 | File | Covers |
 |------|--------|
-| `auth.spec.js` | AUTH-01–09: login, persona picker, cookies, logout, rate limiting |
+| `z_auth.spec.js` | AUTH-01–09: login, persona picker, cookies, logout, rate limiting |
 | `landing.spec.js` | LAND-01–07: greeting, action cards, live stats, navigation |
 | `navigation.spec.js` | NAV-01–06: top nav, sidebar persona chip, view switching |
 | `submission.spec.js` | SUB-01–08: upload modes, submitter prefill, button state |

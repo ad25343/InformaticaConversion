@@ -40,8 +40,10 @@ async function login(page, personaName, password) {
   await card.click();
   await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');
-  // Wait for landing page
-  await page.waitForSelector('#landingGreeting', { timeout: 10_000 });
+  // Wait for redirect to root and JS to finish bootstrapping the SPA
+  await page.waitForURL('**/', { timeout: 15_000 });
+  await page.waitForLoadState('networkidle', { timeout: 15_000 });
+  await page.waitForSelector('#landingGreeting', { state: 'visible', timeout: 15_000 });
 }
 
 /**
@@ -54,7 +56,7 @@ async function logout(page) {
 
 /**
  * Navigate to a main view using the top nav.
- * view: 'landing' | 'dashboard' | 'history' | 'review'
+ * view: 'landing' | 'dashboard' | 'history' | 'review' | 'tests'
  */
 async function goToView(page, view) {
   const ids = {
@@ -62,6 +64,7 @@ async function goToView(page, view) {
     dashboard: '#navDashboard',
     history:   '#navHistory',
     review:    '#navReview',
+    tests:     '#navTests',
   };
   await page.click(ids[view]);
   const panels = {
@@ -69,6 +72,7 @@ async function goToView(page, view) {
     dashboard: '#panelDashboard',
     history:   '#panelHistory',
     review:    '#panelReview',
+    tests:     '#panelTests',
   };
   await page.waitForSelector(panels[view] + ':visible', { timeout: 8_000 });
 }

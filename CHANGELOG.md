@@ -10,6 +10,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.10] — 2026-03-13 — Test Suite Reliability: Auth-Last Ordering & Login Warmup Fix
+
+### Fixed
+
+- **LAND-01–03 (and SUB-01–02b) timing out after AUTH-09**: Playwright sorts spec files alphabetically before running, so `auth.spec.js` always executed first regardless of user-selected suite order. AUTH-09 fires 7 bad-password attempts to trigger the rate limiter (5/minute, 60-second window). That window then blocked all subsequent `login()` calls in `landing.spec.js`, causing LAND-01 through LAND-03 to timeout at `waitForURL('**/')`. Fixed by renaming `auth.spec.js` → `z_auth.spec.js` so it always sorts last alphabetically.
+- **`login()` timing out on cold server start**: `waitForSelector('#landingGreeting')` was called immediately after `page.click('button[type="submit"]')`, before the post-login redirect to `/` had completed. Fixed by adding `waitForURL('**/')` + `waitForLoadState('networkidle')` ahead of the selector check, and raising all three timeouts to 15 s.
+
+### Changed
+
+- `tests/playwright/auth.spec.js` renamed to `tests/playwright/z_auth.spec.js` (guarantees alphabetical-last execution).
+- `_SUITE_FILES` in `routes.py` updated to `tests/playwright/z_auth.spec.js`.
+- All doc references (`playwright.config.js`, `tests/playwright/README.md`) updated to match.
+
+---
+
+## [2.17.4] — 2026-03-12 — UI Overhaul: Submit Intelligence, Live Sidebar, Search & UX Polish
+
+### Added
+
+**Submit panel redesign**
+Upload form moved from sidebar into the main panel with a two-column layout. Left column (400px) contains the upload form (Individual / ZIP / Batch mode tabs, file dropzones, submitter fields, Start Pipeline button). Right column is a live intelligence panel with three states:
+- *Before submission* — "Your Recent Submissions" (last 5 jobs by current persona, clickable), 12-Step Pipeline overview (purple = automated, amber = gate), and mode-specific tips that update when switching upload tabs.
+- *After submission* — transforms into a live Job Insights panel: tracking ID + status badge + complexity tier + assigned stack, animated progress bar (N/12 steps), and metric cards that populate as the pipeline runs (Mappings found, Sources, Targets, Transforms, Blocking Flags, Security Findings, Review Score, Test Coverage). Updates via SSE — no page navigation required. "View Full Details →" button available throughout.
+- *On return to Submit tab* — reverts to the overview + recent jobs state.
+
+**Live sidebar activity feed**
+Sidebar persona card replaced with two live sections, updated every 5 seconds:
+- **Running** — up to 6 in-progress jobs, each showing filename, a thin animated progress bar (N/12 steps), current step name, and tracking ID. Click any card to open the job.
+- **Needs Sign-off** — jobs waiting at Gate 1, 2, or 3 (amber styling). Click any card to navigate directly to that job's sign-off form.
+Count badges appear on each section header when items are present.
+
+**Short job tracking ID**
+Every job is assigned a compact 8-character tracking ID (`#XXXXXXXX`) derived from its UUID. Displayed prominently in job detail headers, history table rows, review queue rows, sidebar cards, global search results, and the insights panel.
+
+**Global search (Cmd/Ctrl+K)**
+Modal overlay searches all jobs by filename, tracking ID, full job ID, submitter name, team, status, and complexity tier. Keyboard-navigable (↑↓ to move, ↵ to open, Esc to close). Search button in the top nav bar.
+
+**Gate banners in job detail**
+When a job is paused at a gate, a banner appears below the stepper explaining which gate is active and what is required. The banner button scrolls directly to the relevant sign-off card rather than navigating to the Review Queue list.
+
+**Review Queue — direct job navigation**
+Every row in the Review Queue is now clickable. Clicking a row or the "Review →" button opens the specific job's full detail view and auto-scrolls to the active gate sign-off card. A "← Back to Review Queue" bar is injected at the top for context.
+
+**`GET /api/jobs/stats`**
+New lightweight endpoint returning total job counts grouped by status bucket (total, running, awaiting_review, complete) via a single SQL `COUNT` + `CASE` query. Used by the landing page stats panel — eliminates the previous bug where stats showed 0 because they were counting from a paginated 20-job result set.
+
+### Changed
+
+- **"Tests" tab renamed to "Health Check"** — nav button and panel header updated.
+- **Landing page stats** now call `/api/jobs/stats` instead of counting from `_allJobs` (which only held the first page of 20 jobs). Stats now reflect all jobs in the database.
+- **`setUploadMode()`** now updates the tips box content dynamically — Individual / ZIP / Batch each show mode-specific guidance.
+- **`openJob()`** now renders into a dedicated `#jobDetailContainer` div instead of replacing `panelDashboard.innerHTML`, preserving upload form elements and their event listeners across job navigations.
+- **`openJobFromHistory()` and `openJobForReview()`** updated to insert context back-bars into `#jobDetailContainer` instead of `panelDashboard`.
+- **Sidebar CSS** updated to `overflow: hidden` with `flex: 1` on the activity section so the two feeds fill available height cleanly.
+
+### Fixed
+
+- Upload form drag-drop event listeners were being destroyed whenever a job was opened (because `openJob` replaced `panelDashboard.innerHTML`). Fixed by the `jobDetailContainer` / `submitFormContainer` dual-container structure.
+- Landing page "–" stats were caused by a wrong fetch URL (`/jobs` instead of `/api/jobs`) and then by reading from a 20-job paginated slice. Both issues resolved.
+
+---
+
 ## [2.17.3] — 2026-03-12 — Retry, Audit Trail, Search & Pagination
 
 Closes the four remaining end-user gaps identified post-v2.17.2.

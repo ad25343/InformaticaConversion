@@ -3,7 +3,7 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.22
 lxml==5.3.2
 anthropic==0.34.0
-sqlalchemy==2.0.35
+pyyaml==6.0.2
 aiosqlite==0.20.0
 pydantic==2.9.0
 pydantic-settings==2.6.1

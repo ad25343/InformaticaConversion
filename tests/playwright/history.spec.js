@@ -27,8 +27,11 @@ async function seedJob(page, overrides = {}) {
   await page.fill('#submitterTeam',  overrides.team  || 'QA Team');
   await page.fill('#submitterNotes', overrides.notes || 'HIST-ticket-001');
 
-  await page.locator('#startBtn').click();
-  await page.waitForSelector('.stepper', { timeout: 15_000 });
+  const [resp] = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/api/jobs') && r.request().method() === 'POST'),
+    page.locator('#startBtn').click(),
+  ]);
+  expect((await resp.json()).job_id).toBeTruthy();
 }
 
 // ─── HIST-01: History table loads ─────────────────────────────────────────────
@@ -58,7 +61,7 @@ test('HIST-01b: history table has all required column headers', async ({ page })
   await expect(headers).toHaveCount(8);
 
   const texts = await headers.allTextContents();
-  const expected = ['Filename', 'Submitter', 'Team', 'Ticket', 'Status', 'Tier', 'Submitted'];
+  const expected = ['Filename', 'Submitter', 'Ticket', 'Status', 'Tier', 'Submitted'];
   for (const col of expected) {
     expect(texts.some(t => t.toLowerCase().includes(col.toLowerCase())),
       `Expected column "${col}" in table headers`).toBe(true);

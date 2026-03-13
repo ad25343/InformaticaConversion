@@ -17,13 +17,13 @@
     body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
 
     /* ── Layout ── */
-    .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
-    .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 24px 16px; display: flex; flex-direction: column; gap: 20px; }
+    .app { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; }
+    .sidebar { background: var(--surface); border-right: 1px solid var(--border); padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
     .main { padding: 32px; overflow-y: auto; }
 
     /* ── Header ── */
-    .logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
-    .logo-sub { font-size: 11px; color: var(--muted); }
+    .logo { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; margin-bottom: 2px; display: flex; align-items: center; justify-content: space-between; }
+    .logo-sub { font-size: 15px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
     /* ── Notification bell ─────────────────────────────────────────────── */
     .notif-bell { position: relative; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 4px; transition: background .15s; }
     .notif-bell:hover { background: var(--surface2); }
@@ -41,6 +41,12 @@
     .toast-close { cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; flex-shrink: 0; margin-top: -1px; }
     .toast-close:hover { color: var(--text); }
     @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+    /* ── Health Check progress bar ─────────────────────────────────────────── */
+    .hc-progress-wrap { height:8px; border-radius:6px; background:var(--surface2); overflow:hidden; margin:8px 0 10px; border:1px solid var(--border); }
+    .hc-progress-bar  { height:100%; width:28%; border-radius:6px; background:var(--accent); animation:hcSlide 1.6s cubic-bezier(.4,0,.6,1) infinite; }
+    .hc-progress-bar.done  { animation:none; background:var(--accent2); transition:width .5s ease; }
+    .hc-progress-bar.error { animation:none; background:var(--danger);  transition:width .5s ease; }
+    @keyframes hcSlide { 0% { margin-left:-28%; } 100% { margin-left:100%; } }
     hr { border: none; border-top: 1px solid var(--border); }
 
     /* ── Upload zone ── */
@@ -101,6 +107,9 @@
     .step-label { font-size: 9px; color: var(--muted); margin-top: 5px; text-align: center; max-width: 52px; line-height: 1.3; }
     .step-connector { position: absolute; top: 13px; left: 50%; right: -50%; height: 2px; background: var(--border); z-index: 0; }
     .step-connector.done { background: var(--accent2); }
+    /* Global search */
+    .gsearch-row { display:flex; align-items:center; gap:12px; padding:10px 16px; cursor:pointer; transition:background .1s; }
+    .gsearch-row:hover { background: var(--surface2); }
     .step:last-child .step-connector { display: none; }
 
     /* ── Cards ── */
@@ -270,7 +279,11 @@
     .landing-stat {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 10px; padding: 16px; text-align: center;
+      cursor: pointer; transition: border-color .15s, background .15s, transform .12s;
+      user-select: none;
     }
+    .landing-stat:hover  { border-color: var(--accent); background: rgba(108,99,255,.07); transform: translateY(-2px); }
+    .landing-stat:active { transform: translateY(0); }
     .landing-stat-val   { font-size: 28px; font-weight: 800; }
     .landing-stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
@@ -342,118 +355,83 @@
 <!-- ── Toast notification container ──────────────────────────────────── -->
 <div id="toastContainer"></div>
 
+<!-- ── Global Search Modal ──────────────────────────────────────── -->
+<div id="globalSearchOverlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.65);align-items:flex-start;justify-content:center;padding-top:80px"
+     onclick="if(event.target===this)closeGlobalSearch()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:620px;box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden">
+    <!-- Search input row -->
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)">
+      <span style="font-size:16px;color:var(--muted)">🔍</span>
+      <input id="globalSearchInput" type="text" placeholder="Search by filename, job ID, submitter, status…"
+             oninput="runGlobalSearch()"
+             style="flex:1;background:none;border:none;outline:none;font-size:14px;color:var(--text);"/>
+      <span style="font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:2px 6px;cursor:pointer" onclick="closeGlobalSearch()">Esc</span>
+    </div>
+    <!-- Results -->
+    <div id="globalSearchResults" style="max-height:420px;overflow-y:auto;padding:6px 0">
+      <div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Start typing to search all jobs…</div>
+    </div>
+    <!-- Footer hint -->
+    <div style="padding:8px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;gap:16px">
+      <span>↵ Open job</span><span>↑↓ Navigate</span><span>Esc Close</span>
+    </div>
+  </div>
+</div>
+
 <div class="app">
 
-  <!-- ── Sidebar: upload only ─────────────── -->
+  <!-- ── Sidebar: brand + live activity ─────── -->
   <aside class="sidebar">
     <div>
       <div class="logo">
-        <span>⚡ Informatica Converter</span>
+        <span>⚡ Informatica</span>
         <span class="notif-bell" id="notifBell" title="Pending gate reviews"
               onclick="setMainView('review')" style="display:none">
-          🔔
-          <span class="notif-badge" id="notifBadge">0</span>
+          🔔 <span class="notif-badge" id="notifBadge">0</span>
         </span>
       </div>
-      <div class="logo-sub">PowerCenter → Python / PySpark / dbt</div>
+      <div class="logo-sub">PowerCenter Converter</div>
+    </div>
+    <!-- Compact user tag -->
+    <div style="display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border)">
+      <div id="sidebarAvatar" style="width:22px;height:22px;border-radius:50%;background:rgba(108,99,255,.25);color:#a5b4fc;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0">?</div>
+      <div style="min-width:0;flex:1">
+        <div id="sidebarName" style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2">User</div>
+        <div id="sidebarRole" style="font-size:10px;color:var(--muted);line-height:1.2">–</div>
+      </div>
     </div>
     <hr/>
 
-    <!-- Upload -->
-    <div style="display:flex;flex-direction:column;gap:10px">
-      <div class="section-title" style="margin-bottom:0">New Conversion</div>
+    <!-- ── Running now ──────────────────────── -->
+    <div style="flex:1;display:flex;flex-direction:column;gap:12px;overflow:hidden">
 
-      <!-- Upload mode toggle -->
-      <div style="display:flex;gap:4px;background:var(--surface);border-radius:8px;padding:3px">
-        <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
-                onclick="setUploadMode('files')">📄 Individual</button>
-        <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
-                onclick="setUploadMode('zip')">🗜 ZIP</button>
-        <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
-                onclick="setUploadMode('batch')">📦 Batch</button>
-      </div>
-
-      <!-- ── Individual files panel ── -->
-      <div id="panelFiles">
-        <div class="upload-zone" id="dropzone">
-          <input type="file" id="fileInput" accept=".xml"/>
-          <div class="upload-icon">📂</div>
-          <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+          <span>Running</span>
+          <span id="sidebarRunningCount" style="background:rgba(108,99,255,.2);color:var(--accent);font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;display:none">0</span>
         </div>
-        <div style="margin-top:8px">
-          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Workflow XML <span style="font-weight:400">(optional)</span></label>
-          <div class="upload-zone" id="dropzoneWF" style="padding:10px">
-            <input type="file" id="workflowInput" accept=".xml"/>
-            <div class="upload-label" id="workflowLabel" style="font-size:11px">Drop Workflow .xml or click</div>
-          </div>
-        </div>
-        <div style="margin-top:8px">
-          <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
-          <div class="upload-zone" id="dropzonePF" style="padding:10px">
-            <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
-            <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
-          </div>
+        <div id="sidebarRunning" style="display:flex;flex-direction:column;gap:4px">
+          <div style="font-size:11px;color:var(--muted);padding:6px 0">No active jobs</div>
         </div>
       </div>
 
-      <!-- ── ZIP archive panel ── -->
-      <div id="panelZip" style="display:none">
-        <div class="upload-zone" id="dropzoneZip">
-          <input type="file" id="zipInput" accept=".zip"/>
-          <div class="upload-icon">🗜</div>
-          <div class="upload-label" id="zipLabel">
-            Drop .zip archive here or click<br/>
-            <span style="font-size:11px;color:var(--muted)">Mapping XML required — Workflow &amp; params auto-detected</span>
-          </div>
-        </div>
-        <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
-      </div>
+      <hr/>
 
-      <!-- ── Batch ZIP panel ── -->
-      <div id="panelBatch" style="display:none">
-        <div class="upload-zone" id="dropzoneBatch">
-          <input type="file" id="batchInput" accept=".zip"/>
-          <div class="upload-icon">📦</div>
-          <div class="upload-label" id="batchLabel">
-            Drop batch .zip here or click<br/>
-            <span style="font-size:11px;color:var(--muted)">One subfolder per mapping — up to 3 run concurrently</span>
-          </div>
+      <!-- ── At a gate ────────────────────────── -->
+      <div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+          <span>Needs Sign-off</span>
+          <span id="sidebarGateCount" style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;display:none">0</span>
         </div>
-        <div style="margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.6">
-          <strong style="color:var(--text)">ZIP structure:</strong><br/>
-          batch.zip / mapping_a / mapping.xml<br/>
-          batch.zip / mapping_a / workflow.xml <em>(optional)</em><br/>
-          batch.zip / mapping_b / mapping.xml …
-        </div>
-        <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
-      </div>
-
-      <!-- ── Submitter details ── -->
-      <div style="border-top:1px solid var(--border);padding-top:10px">
-        <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Submitter</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          <input id="submitterName" type="text" placeholder="Your name" autocomplete="name"
-                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
-          <input id="submitterTeam" type="text" placeholder="Team / department"
-                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
-          <input id="submitterNotes" type="text" placeholder="Ticket # or notes (optional)"
-                 style="padding:6px 9px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:100%"/>
+        <div id="sidebarGates" style="display:flex;flex-direction:column;gap:4px">
+          <div style="font-size:11px;color:var(--muted);padding:6px 0">No pending gates</div>
         </div>
       </div>
 
-      <button class="btn btn-primary" id="startBtn" disabled>▶ Start Pipeline</button>
     </div>
 
-    <!-- ── Sidebar footer: persona + sign out ── -->
-    <div style="margin-top:auto;padding-top:16px;border-top:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <div id="sidebarAvatar"
-             style="width:32px;height:32px;border-radius:50%;background:rgba(108,99,255,.25);color:#a5b4fc;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">?</div>
-        <div style="min-width:0">
-          <div id="sidebarName" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">User</div>
-          <div id="sidebarRole" style="font-size:11px;color:var(--muted)">–</div>
-        </div>
-      </div>
+    <!-- Sign out at bottom -->
+    <div style="margin-top:8px">
       <a href="/logout" style="text-decoration:none">
         <button style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--border);background:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:color .15s,border-color .15s,background .15s"
                 onmouseover="this.style.color='var(--danger)';this.style.borderColor='var(--danger)';this.style.background='rgba(248,113,113,.06)'"
@@ -473,9 +451,9 @@
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
         ⚡ Home
       </button>
-      <button id="navDashboard" onclick="setMainView('dashboard')"
+      <button id="navDashboard" onclick="showSubmitPanel()"
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
-        🏠 Submit
+        🏠 Submit Job
       </button>
       <button id="navHistory" onclick="setMainView('history')"
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
@@ -483,13 +461,18 @@
       </button>
       <button id="navReview" onclick="setMainView('review')"
               style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
-        👁 Review Queue <span id="navReviewBadge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px">0</span>
+        ✅ Review Queue <span id="navReviewBadge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px">0</span>
       </button>
       <button id="navTests" onclick="setMainView('tests')" style="display:none;padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
-        🧪 Tests
+        🧪 Health Check
+      </button>
+      <!-- Global search button -->
+      <button onclick="openGlobalSearch()" title="Search jobs (⌘K)"
+              style="margin-left:auto;margin-right:8px;padding:6px 12px;font-size:12px;font-weight:600;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">
+        🔍 <span>Search jobs</span> <span style="font-size:10px;opacity:.6;font-weight:400">⌘K</span>
       </button>
       <!-- Persona chip (right side) -->
-      <div class="persona-chip" id="personaChip" style="margin-left:auto" title="Signed in as…">
+      <div class="persona-chip" id="personaChip" title="Signed in as…">
         <div class="persona-avatar-sm" id="personaAvatarNav">?</div>
         <div>
           <div class="persona-chip-name" id="personaNameNav">User</div>
@@ -507,17 +490,11 @@
 
         <!-- Action cards -->
         <div class="action-cards">
-          <div class="action-card" onclick="setMainView('dashboard')">
+          <div class="action-card" onclick="showSubmitPanel()">
             <span class="action-card-icon">📤</span>
             <div class="action-card-title">Submit a Conversion</div>
             <div class="action-card-desc">Upload an Informatica mapping XML and run the 12-step pipeline to generate production-ready code.</div>
             <span class="action-card-cta">Upload &amp; start →</span>
-          </div>
-          <div class="action-card" onclick="setMainView('review')">
-            <span class="action-card-icon">👁</span>
-            <div class="action-card-title">Review Queue</div>
-            <div class="action-card-desc">Approve or reject jobs awaiting Gate 1, Gate 2, or Gate 3 review. Badge shows pending items.</div>
-            <span class="action-card-cta" id="landingReviewCta">Open queue →</span>
           </div>
           <div class="action-card" onclick="setMainView('history')">
             <span class="action-card-icon">📋</span>
@@ -525,23 +502,29 @@
             <div class="action-card-desc">Browse all past conversion runs, filter by status, submitter, or team, and open any job to review its output.</div>
             <span class="action-card-cta">View history →</span>
           </div>
+          <div class="action-card" onclick="setMainView('review')">
+            <span class="action-card-icon">✅</span>
+            <div class="action-card-title">Review Queue</div>
+            <div class="action-card-desc">Approve or reject jobs awaiting Analysis Sign-off, Security Sign-off, or Final Sign-off. Badge shows pending items.</div>
+            <span class="action-card-cta" id="landingReviewCta">Open queue →</span>
+          </div>
         </div>
 
         <!-- Quick stats -->
         <div class="landing-stats" id="landingStats">
-          <div class="landing-stat">
+          <div class="landing-stat" onclick="setMainView('history');loadHistory();" title="View all jobs">
             <div class="landing-stat-val" id="lsTotal">–</div>
             <div class="landing-stat-label">Total Jobs</div>
           </div>
-          <div class="landing-stat">
+          <div class="landing-stat" onclick="setMainView('history');loadHistory();setTimeout(()=>{const s=document.getElementById('histStatusFilter');if(s){s.value='running';applyHistoryFilter();}},300);" title="View in-progress jobs">
             <div class="landing-stat-val" id="lsRunning">–</div>
             <div class="landing-stat-label">In Progress</div>
           </div>
-          <div class="landing-stat">
+          <div class="landing-stat" onclick="setMainView('history');loadHistory();setTimeout(()=>{const s=document.getElementById('histStatusFilter');if(s){s.value='complete';applyHistoryFilter();}},300);" title="View completed jobs">
             <div class="landing-stat-val" id="lsComplete">–</div>
             <div class="landing-stat-label">Complete</div>
           </div>
-          <div class="landing-stat">
+          <div class="landing-stat" onclick="setMainView('review');loadReviewQueue();" title="Open review queue">
             <div class="landing-stat-val" id="lsPending">–</div>
             <div class="landing-stat-label">Awaiting Review</div>
           </div>
@@ -550,12 +533,140 @@
     </div>
 
     <!-- ── Dashboard panel ── -->
-    <div id="panelDashboard" style="display:none;flex:1;overflow-y:auto;padding:32px">
-      <div class="empty">
-        <div class="empty-icon">📤</div>
-        <div class="empty-title">Submit a Conversion</div>
-        <div class="empty-sub">Upload an Informatica XML export using the panel on the left.<br/>The 12-step pipeline will parse, document, verify, convert,<br/>security scan, quality review, generate tests, and deliver reviewed, production-ready code.</div>
+    <div id="panelDashboard" style="display:none;flex:1;overflow-y:auto;padding:0">
+
+      <!-- ── Submit form container (always in DOM, hidden when job is open) ── -->
+      <div id="submitFormContainer" style="display:flex;gap:0;min-height:100%;flex:1">
+
+        <!-- Left: upload form -->
+        <div style="width:400px;min-width:340px;flex-shrink:0;padding:32px 28px;border-right:1px solid var(--border);overflow-y:auto">
+          <div style="font-size:20px;font-weight:700;margin-bottom:4px">New Conversion</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:20px">Upload an Informatica XML export to start the 12-step pipeline.</div>
+
+          <!-- Upload mode toggle -->
+          <div style="display:flex;gap:4px;background:var(--surface);border-radius:8px;padding:3px;margin-bottom:14px">
+            <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
+                    onclick="setUploadMode('files')">📄 Individual</button>
+            <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+                    onclick="setUploadMode('zip')">🗜 ZIP</button>
+            <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+                    onclick="setUploadMode('batch')">📦 Batch</button>
+          </div>
+
+          <!-- ── Individual files panel ── -->
+          <div id="panelFiles">
+            <div class="upload-zone" id="dropzone">
+              <input type="file" id="fileInput" accept=".xml"/>
+              <div class="upload-icon">📂</div>
+              <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
+            </div>
+            <div style="margin-top:10px">
+              <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Workflow XML <span style="font-weight:400">(optional)</span></label>
+              <div class="upload-zone" id="dropzoneWF" style="padding:10px">
+                <input type="file" id="workflowInput" accept=".xml"/>
+                <div class="upload-label" id="workflowLabel" style="font-size:11px">Drop Workflow .xml or click</div>
+              </div>
+            </div>
+            <div style="margin-top:10px">
+              <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
+              <div class="upload-zone" id="dropzonePF" style="padding:10px">
+                <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
+                <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── ZIP archive panel ── -->
+          <div id="panelZip" style="display:none">
+            <div class="upload-zone" id="dropzoneZip">
+              <input type="file" id="zipInput" accept=".zip"/>
+              <div class="upload-icon">🗜</div>
+              <div class="upload-label" id="zipLabel">
+                Drop .zip archive here or click<br/>
+                <span style="font-size:11px;color:var(--muted)">Mapping XML required — Workflow &amp; params auto-detected</span>
+              </div>
+            </div>
+            <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
+          </div>
+
+          <!-- ── Batch ZIP panel ── -->
+          <div id="panelBatch" style="display:none">
+            <div class="upload-zone" id="dropzoneBatch">
+              <input type="file" id="batchInput" accept=".zip"/>
+              <div class="upload-icon">📦</div>
+              <div class="upload-label" id="batchLabel">
+                Drop batch .zip here or click<br/>
+                <span style="font-size:11px;color:var(--muted)">One subfolder per mapping — up to 3 run concurrently</span>
+              </div>
+            </div>
+            <div style="margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.6">
+              <strong style="color:var(--text)">ZIP structure:</strong><br/>
+              batch.zip / mapping_a / mapping.xml<br/>
+              batch.zip / mapping_a / workflow.xml <em>(optional)</em><br/>
+              batch.zip / mapping_b / mapping.xml …
+            </div>
+            <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
+          </div>
+
+          <!-- ── Submitter details ── -->
+          <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:14px">
+            <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px">Submitter</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <input id="submitterName" type="text" placeholder="Your name" autocomplete="name"
+                     style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;width:100%"/>
+              <input id="submitterTeam" type="text" placeholder="Team / department"
+                     style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;width:100%"/>
+              <input id="submitterNotes" type="text" placeholder="Ticket # or notes (optional)"
+                     style="padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;width:100%"/>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="startBtn" disabled style="width:100%;margin-top:18px;padding:11px;font-size:14px">▶ Start Pipeline</button>
+        </div>
+
+        <!-- Right: intelligence panel -->
+        <div id="submitIntelPanel" style="flex:1;padding:32px 28px;overflow-y:auto;display:flex;flex-direction:column;gap:24px">
+
+          <!-- Recent jobs by this submitter -->
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Your Recent Submissions</div>
+            <div id="submitRecentJobs" style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+              <div style="padding:20px;text-align:center;color:var(--muted);font-size:13px">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Pipeline overview -->
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">The 12-Step Pipeline</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 1</span><span style="font-size:12px;font-weight:600">Parse Report</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Reads your XML. Extracts all mappings, sources, targets, and transformations.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 2</span><span style="font-size:12px;font-weight:600">Classify</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Rates complexity: Low / Medium / High / VeryHigh based on transformation count.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 3</span><span style="font-size:12px;font-weight:600">Document</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Auto-generates source-to-target lineage docs and a full S2T mapping matrix.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 4</span><span style="font-size:12px;font-weight:600">Verify</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Runs completeness, accuracy, and self-checks. Flags blockers and recommendations.</div></div>
+              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 5 ⏸</span><span style="font-size:12px;font-weight:600">Analysis Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Business analyst reviews docs and signs off before code generation begins.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 6</span><span style="font-size:12px;font-weight:600">Stack Assign</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Picks the best target stack: Python, PySpark, or dbt based on complexity.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 7</span><span style="font-size:12px;font-weight:600">Convert</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Generates production-ready code using AI with any manifest overrides applied.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 8</span><span style="font-size:12px;font-weight:600">Security Scan</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Scans generated code for vulnerabilities using Bandit + pattern matching.</div></div>
+              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 9 ⏸</span><span style="font-size:12px;font-weight:600">Security Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Security architect reviews scan findings and approves or requests fixes.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 10</span><span style="font-size:12px;font-weight:600">Quality Review</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Checks logic equivalence, coverage, and code quality against standards.</div></div>
+              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 11</span><span style="font-size:12px;font-weight:600">Test Generation</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Generates unit tests with field-level coverage reporting.</div></div>
+              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 12 ⏸</span><span style="font-size:12px;font-weight:600">Final Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Final human approval. Once approved, job is Complete and artifacts are exported.</div></div>
+            </div>
+          </div>
+
+          <!-- Tips box -->
+          <div id="submitTipsBox" style="padding:14px 16px;background:rgba(108,99,255,.06);border:1px solid rgba(108,99,255,.2);border-radius:8px;font-size:12px;color:var(--muted);line-height:1.6">
+            <strong style="color:var(--text)">💡 Individual mode tips:</strong><br/>
+            • Use <strong>Individual</strong> for a single mapping XML export from Informatica Designer.<br/>
+            • Optionally attach the matching <strong>Workflow XML</strong> to extract session-level metadata.<br/>
+            • <strong>Parameter files</strong> (.txt/.par) provide runtime variable values used in the mapping.
+          </div>
+        </div>
       </div>
+
+      <!-- ── Job detail container (populated by openJob, hidden by default) ── -->
+      <div id="jobDetailContainer" style="display:none;flex-direction:column;padding:32px;flex:1"></div>
+
     </div>
 
     <!-- ── History panel ── -->
@@ -567,7 +678,7 @@
           <div style="font-size:13px;color:var(--muted);margin-top:2px">All conversion runs · <span id="historyCount">–</span> jobs</div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <input id="histSearchInput" type="search" placeholder="🔍 Search filename, submitter, team, ticket…"
+          <input id="histSearchInput" type="search" placeholder="🔍 Search by Job ID, filename, submitter, ticket…"
                  oninput="applyHistoryFilter()"
                  style="padding:7px 11px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:260px"/>
           <select id="histStatusFilter" onchange="applyHistoryFilter()"
@@ -575,9 +686,9 @@
             <option value="">All statuses</option>
             <option value="pending">Pending</option>
             <option value="running">Running</option>
-            <option value="awaiting_review">Gate 1</option>
-            <option value="awaiting_sec_review">Gate 2</option>
-            <option value="awaiting_code_review">Gate 3</option>
+            <option value="awaiting_review">Analysis Sign-off</option>
+            <option value="awaiting_security_review">Security Sign-off</option>
+            <option value="awaiting_code_review">Final Sign-off</option>
             <option value="complete">Complete ✓</option>
             <option value="blocked">Blocked</option>
             <option value="failed">Failed</option>
@@ -591,9 +702,9 @@
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
             <tr style="background:var(--surface2);text-align:left">
+              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;white-space:nowrap">Job ID</th>
               <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;white-space:nowrap">Filename</th>
               <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Submitter</th>
-              <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Team</th>
               <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Ticket / Notes</th>
               <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Status</th>
               <th style="padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">Tier</th>
@@ -624,9 +735,9 @@
         <div>
           <div style="font-size:20px;font-weight:700">Review Queue</div>
           <div style="font-size:13px;color:var(--muted);margin-top:2px">
-            Gate 1: <strong id="reviewGate1Count">–</strong> &nbsp;·&nbsp;
-            Gate 2: <strong id="reviewGate2Count">–</strong> &nbsp;·&nbsp;
-            Gate 3: <strong id="reviewGate3Count">–</strong> &nbsp;·&nbsp;
+            Analysis Sign-off: <strong id="reviewGate1Count">–</strong> &nbsp;·&nbsp;
+            Security Sign-off: <strong id="reviewGate2Count">–</strong> &nbsp;·&nbsp;
+            Final Sign-off: <strong id="reviewGate3Count">–</strong> &nbsp;·&nbsp;
             Total: <strong id="reviewTotalCount">–</strong>
           </div>
         </div>
@@ -637,9 +748,9 @@
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn" onclick="setReviewGateFilter(null)">All</button>
-          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Gate 1</button>
-          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Gate 2</button>
-          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Gate 3</button>
+          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Analysis Sign-off</button>
+          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Security Sign-off</button>
+          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Final Sign-off</button>
         </div>
         <input type="text" id="reviewerNameInput" placeholder="Your reviewer name"
                style="flex:1;min-width:160px;max-width:260px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
@@ -650,9 +761,9 @@
 
       <!-- Jobs table -->
       <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-        <div style="background:var(--surface2);padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:16px 1fr 140px 80px 60px 70px 90px 90px;gap:10px;align-items:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+        <div style="background:var(--surface2);padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:16px 90px 1fr 140px 80px 60px 70px 90px 90px 80px;gap:10px;align-items:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
           <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAllReview(this.checked)" style="width:16px;height:16px;cursor:pointer"/>
-          <span>Filename</span><span>Submitter</span><span>Batch</span><span>Gate</span><span>Tier</span><span>Flags</span><span>Waiting</span>
+          <span>Job ID</span><span>Filename</span><span>Submitter</span><span>Batch</span><span>Gate</span><span>Tier</span><span>Flags</span><span>Waiting</span><span></span>
         </div>
         <div id="reviewQueueTable">
           <div style="padding:40px;text-align:center;color:var(--muted)">
@@ -674,7 +785,7 @@
       <!-- Header -->
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
         <div>
-          <div style="font-size:20px;font-weight:700">🧪 Test Runner</div>
+          <div style="font-size:20px;font-weight:700">🧪 Health Check</div>
           <div style="font-size:13px;color:var(--muted);margin-top:2px">
             Select suites and run the Playwright e2e suite against the live server.
           </div>
@@ -693,6 +804,13 @@
         <button id="testRunBtn" class="btn btn-primary" onclick="runTests()" disabled
                 style="min-width:140px">▶ Run Selected</button>
         <div id="testStatus" style="font-size:13px;color:var(--muted)">No run yet</div>
+      </div>
+
+      <!-- Progress bar (shown while running) -->
+      <div id="testProgressWrap" style="display:none">
+        <div class="hc-progress-wrap">
+          <div id="testProgressBar" class="hc-progress-bar"></div>
+        </div>
       </div>
 
       <!-- Results bar (shown after run) -->
@@ -744,15 +862,15 @@ const STATUS_BADGE = {
   classifying:     ['badge-running','Classifying'],
   documenting:     ['badge-running','Documenting'],
   verifying:       ['badge-running','Verifying'],
-  awaiting_review: ['badge-waiting','Awaiting Review'],
+  awaiting_review: ['badge-waiting','Analysis Sign-off'],
   assigning_stack: ['badge-running','Assigning Stack'],
   converting:        ['badge-running','Converting'],
   security_scanning:      ['badge-running','Security Scan'],
   validating:             ['badge-running','Security Scan'],
-  awaiting_security_review: ['badge-waiting','Sec Review'],
+  awaiting_security_review: ['badge-waiting','Security Sign-off'],
   reviewing:              ['badge-running','Quality Review'],
   testing:                ['badge-running','Testing'],
-  awaiting_code_review:   ['badge-waiting','Code Review'],
+  awaiting_code_review:   ['badge-waiting','Final Sign-off'],
   complete:             ['badge-complete','Complete'],
   failed:               ['badge-failed','Failed'],
   blocked:              ['badge-blocked','Blocked'],
@@ -846,6 +964,22 @@ function initPersonaUI() {
   const sn = document.getElementById('submitterName');
   if (sn && !sn.value) sn.value = name;
 
+  // Pre-fill reviewer name if empty
+  const rn = document.getElementById('reviewerNameInput');
+  if (rn && !rn.value) rn.value = name;
+
+  // Pre-fill all sign-off name fields (rendered dynamically but polled on focus)
+  ['reviewerName','codeReviewerName','secReviewerName'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.value) el.value = name;
+  });
+  // Re-fill on focus in case the card wasn't rendered yet when initPersonaUI ran
+  document.addEventListener('focusin', e => {
+    if (['reviewerName','codeReviewerName','secReviewerName'].includes(e.target?.id) && !e.target.value) {
+      e.target.value = getPersonaCookie();
+    }
+  }, { once: false });
+
   // Admin-only nav items
   const navTests = document.getElementById('navTests');
   if (navTests) navTests.style.display = (name === 'Asin D') ? '' : 'none';
@@ -862,7 +996,7 @@ function setMainView(view) {
         panel.style.display = 'flex';
         // Only explicitly override flex-direction for panels that need 'column'.
         // Others keep whatever flex-direction their HTML inline style defines.
-        if (v === 'review' || v === 'tests') panel.style.flexDirection = 'column';
+        if (v !== 'landing') panel.style.flexDirection = 'column';
         panel.style.flex = '1';
         panel.style.overflowY = 'auto';
       } else {
@@ -882,35 +1016,31 @@ function setMainView(view) {
   if (view !== 'history') _stopHistLive();
   if (view === 'landing') loadLandingStats();
   if (view === 'tests')   initTestRunner();
-  // Remove stale "Back to History" bar when switching away from the detail view
+  // Sidebar is always visible — refresh immediately on every view change
+  try { refreshSidebarActivity(); } catch(e) {}
+  // Remove stale back bars when switching away from detail view
   if (view !== 'dashboard') {
-    const bb = document.getElementById('histBackBar');
-    if (bb) bb.remove();
+    ['histBackBar','reviewBackBar'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   }
 }
 
 // ── Landing stats ──────────────────────────────
+const _RUNNING_SET = new Set(['pending','parsing','classifying','documenting','verifying',
+  'assigning_stack','converting','security_scanning','validating','reviewing','testing']);
+const _GATE_SET = new Set(['awaiting_review','awaiting_security_review','awaiting_code_review']);
+
 async function loadLandingStats() {
   try {
-    const r = await fetch('/jobs?limit=500');
+    const r = await fetch('/api/jobs/stats');
     if (!r.ok) return;
-    const data = await r.json();
-    const jobs = Array.isArray(data) ? data : (data.jobs || []);
-    const total    = jobs.length;
-    const running  = jobs.filter(j => ['parsing','classifying','documenting','verifying',
-                      'assigning_stack','converting','security_scanning','validating',
-                      'reviewing','testing'].includes(j.status)).length;
-    const complete = jobs.filter(j => j.status === 'complete').length;
-    const waiting  = jobs.filter(j => ['awaiting_review','awaiting_security_review',
-                      'awaiting_code_review'].includes(j.status)).length;
-    const s = v => v === 0 ? '0' : String(v);
-    document.getElementById('lsTotal').textContent    = s(total);
-    document.getElementById('lsRunning').textContent  = s(running);
-    document.getElementById('lsComplete').textContent = s(complete);
-    document.getElementById('lsPending').textContent  = s(waiting);
-    // Update review CTA with count
+    const d = await r.json();
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v ?? 0); };
+    set('lsTotal',   d.total);
+    set('lsRunning', d.running);
+    set('lsComplete',d.complete);
+    set('lsPending', d.awaiting_review);
     const cta = document.getElementById('landingReviewCta');
-    if (cta && waiting > 0) cta.textContent = `${waiting} awaiting review →`;
+    if (cta) cta.textContent = d.awaiting_review > 0 ? `${d.awaiting_review} awaiting review →` : 'Open queue →';
   } catch(e) { /* silent */ }
 }
 
@@ -929,6 +1059,198 @@ function setUploadMode(mode) {
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
+  // Update tips box based on mode
+  const tips = document.getElementById('submitTipsBox');
+  if (!tips) return;
+  const tipsMap = {
+    files: `<strong style="color:var(--text)">💡 Individual mode tips:</strong><br/>
+      • Use <strong>Individual</strong> for a single mapping XML export from Informatica Designer.<br/>
+      • Optionally attach the matching <strong>Workflow XML</strong> to extract session-level metadata.<br/>
+      • <strong>Parameter files</strong> (.txt/.par) provide runtime variable values used in the mapping.`,
+    zip: `<strong style="color:var(--text)">💡 ZIP mode tips:</strong><br/>
+      • Drop a <strong>.zip archive</strong> containing your mapping XML plus optional workflow and parameter files.<br/>
+      • The tool auto-detects <code>workflow.xml</code> and <code>*.par</code> / <code>*.txt</code> parameter files.<br/>
+      • Saves time when your mapping, workflow, and params live in the same directory.`,
+    batch: `<strong style="color:var(--text)">💡 Batch mode tips:</strong><br/>
+      • Package multiple mappings as <strong>one subfolder per mapping</strong> inside the ZIP.<br/>
+      • Up to 3 jobs run concurrently. Large batches are queued automatically.<br/>
+      • Track each child job individually in Job History once submitted.`,
+  };
+  tips.innerHTML = tipsMap[mode] || tipsMap.files;
+}
+
+// ── Show submit panel (form + intelligence) ──────────────────────────────
+function showSubmitPanel() {
+  const sfc = document.getElementById('submitFormContainer');
+  const jdc = document.getElementById('jobDetailContainer');
+  if (sfc) sfc.style.display = 'flex';
+  if (jdc) { jdc.style.display = 'none'; jdc.innerHTML = ''; }
+  setMainView('dashboard');
+  // Remove back bars
+  ['histBackBar','reviewBackBar'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+  loadSubmitRecentJobs();
+}
+
+// ── Load recent submissions for current persona ──────────────────────────
+async function loadSubmitRecentJobs() {
+  const el = document.getElementById('submitRecentJobs');
+  if (!el) return;
+  // Use _allJobs (always refreshed after each submission via loadJobs()).
+  // Fall back to loadHistory() only if neither cache is populated.
+  const pool = (_allJobs && _allJobs.length) ? _allJobs
+             : (_histJobs && _histJobs.length) ? _histJobs
+             : null;
+  if (!pool) await loadHistory();
+  const source = (_allJobs && _allJobs.length) ? _allJobs : (_histJobs || []);
+  const persona = getPersonaCookie();
+  const jobs = source.filter(j => (j.submitter_name||'').replace(/^"|"$/g,'') === persona).slice(0, 5);
+  if (!jobs.length) {
+    el.innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">No submissions yet — start your first conversion!</div>`;
+    return;
+  }
+  el.innerHTML = jobs.map(j => {
+    const [badgeCls, badgeLabel] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+    const ago = _timeAgo(j.created_at);
+    return `<div onclick="openJob('${j.job_id}')" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s" onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.filename)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:1px">${shortId(j.job_id)} &nbsp;·&nbsp; ${ago}</div>
+      </div>
+      <span class="badge ${badgeCls}" style="flex-shrink:0;font-size:10px">${badgeLabel}</span>
+    </div>`;
+  }).join('') + `<div style="padding:8px 12px;text-align:right"><button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="setMainView('history')">View all →</button></div>`;
+}
+
+function _timeAgo(iso) {
+  if (!iso) return '';
+  const secs = Math.floor((Date.now() - utcDate(iso).getTime()) / 1000);
+  if (secs < 5)  return 'just now';
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+  return `${Math.floor(secs/86400)}d ago`;
+}
+
+// ── Show live job insights in the right intel column ─────────────────────
+let _insightsSSE = null;
+async function showJobInsights(jobId, filename) {
+  const panel = document.getElementById('submitIntelPanel');
+  if (!panel) return;
+  if (_insightsSSE) { _insightsSSE.close(); _insightsSSE = null; }
+
+  const renderInsights = (job) => {
+    const st = job.state || {};
+    const [badgeCls, badgeLabel] = STATUS_BADGE[job.status] || ['badge-pending', job.status];
+    const tier = job.complexity_tier || st.complexity_tier || (st.classification ? st.classification.tier : null);
+    const tierColor = { Low:'#4ade80', Medium:'#60a5fa', High:'#fb923c', VeryHigh:'#f87171' }[tier] || 'var(--muted)';
+    const flags = (st.verification_report?.flags || []);
+    const blocking = flags.filter(f => f.blocking).length;
+    const warns = flags.filter(f => !f.blocking && (f.severity||'').toLowerCase() !== 'info').length;
+    const stack = st.assigned_stack || st.stack_assignment?.stack || null;
+    const parseReport = st.parse_report || {};
+    const mappingCount = parseReport.mapping_count ?? parseReport.mappings?.length ?? null;
+    const srcCount = parseReport.source_count ?? null;
+    const tgtCount = parseReport.target_count ?? null;
+    const tfmCount = parseReport.transformation_count ?? null;
+    const secFindings = (st.security_report?.findings || []).length;
+    const reviewScore = st.review_report?.overall_score ?? null;
+    const testCoverage = st.test_report?.coverage_pct ?? null;
+    const stepsComplete = (job.current_step || 1) - 1;
+    const elapsed = (() => {
+      if (!job.created_at) return null;
+      const s = Math.floor((Date.now() - new Date(job.created_at).getTime()) / 1000);
+      return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s/60)}m ${s%60}s` : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    })();
+
+    const metricCard = (icon, label, value, sub, color) => value !== null && value !== undefined ? `
+      <div style="flex:1;min-width:120px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:18px;margin-bottom:4px">${icon}</div>
+        <div style="font-size:20px;font-weight:700;color:${color||'var(--text)'}">${value}</div>
+        <div style="font-size:11px;font-weight:600;color:var(--muted);margin-top:2px">${label}</div>
+        ${sub ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${sub}</div>` : ''}
+      </div>` : '';
+
+    const isComplete = job.status === 'complete';
+    const isFailed   = job.status === 'failed' || job.status === 'blocked';
+
+    panel.innerHTML = `
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Job Insights</div>
+          <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="openJob('${jobId}')">View Full Details →</button>
+        </div>
+
+        <!-- ID + Status bar -->
+        <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-family:monospace;font-size:14px;font-weight:700;color:var(--accent)">${shortId(jobId)}</span>
+          <span class="badge ${badgeCls}">${badgeLabel}</span>
+          ${tier ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:${tierColor}22;color:${tierColor};border:1px solid ${tierColor}44">${tier} Complexity</span>` : ''}
+          ${stack ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:rgba(108,99,255,.15);color:var(--accent)">${esc(stack)}</span>` : ''}
+          <span style="font-size:11px;color:var(--muted);margin-left:auto">${elapsed ? `⏱ ${elapsed}` : ''}</span>
+        </div>
+
+        <!-- Mini progress bar -->
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+            <span>Pipeline progress</span><span>${stepsComplete}/12 steps</span>
+          </div>
+          <div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${Math.min(100, Math.round(stepsComplete/12*100))}%;background:${isFailed?'var(--danger)':isComplete?'var(--accent2)':'var(--accent)'};border-radius:3px;transition:width .4s"></div>
+          </div>
+        </div>
+
+        <!-- Metrics grid -->
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+          ${metricCard('🗺', 'Mappings', mappingCount, null, 'var(--text)')}
+          ${metricCard('📥', 'Sources', srcCount, null, 'var(--text)')}
+          ${metricCard('📤', 'Targets', tgtCount, null, 'var(--text)')}
+          ${metricCard('⚙️', 'Transforms', tfmCount, null, 'var(--text)')}
+          ${metricCard('🚩', 'Blocking Flags', blocking, warns > 0 ? `+ ${warns} warning${warns>1?'s':''}` : null, blocking > 0 ? 'var(--danger)' : 'var(--accent2)')}
+          ${metricCard('🔒', 'Security Findings', secFindings, null, secFindings > 0 ? 'var(--warn)' : 'var(--accent2)')}
+          ${reviewScore !== null ? metricCard('📊', 'Review Score', reviewScore + '%', null, reviewScore >= 80 ? 'var(--accent2)' : reviewScore >= 60 ? 'var(--warn)' : 'var(--danger)') : ''}
+          ${testCoverage !== null ? metricCard('🧪', 'Test Coverage', testCoverage + '%', null, testCoverage >= 80 ? 'var(--accent2)' : 'var(--warn)') : ''}
+        </div>
+
+        ${isComplete ? `<div style="padding:12px 14px;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.25);border-radius:8px;font-size:12px;color:var(--accent2);line-height:1.6">
+          ✅ <strong>Conversion complete!</strong> All 12 steps and 3 gates passed. Download your artifacts from the full details view.
+        </div>` : ''}
+        ${isFailed ? `<div style="padding:12px 14px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25);border-radius:8px;font-size:12px;color:var(--danger);line-height:1.6">
+          ❌ <strong>Pipeline stopped at Step ${job.current_step}.</strong> Open full details to review the error and flags.
+        </div>` : ''}
+      </div>
+
+      <!-- Recent jobs still shown below -->
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Your Other Recent Submissions</div>
+        <div id="submitRecentJobs" style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Loading…</div>
+        </div>
+      </div>`;
+
+    loadSubmitRecentJobs();
+  };
+
+  // Fetch initial state and render
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const job = await res.json();
+    renderInsights(job);
+    // Live updates via SSE
+    _insightsSSE = new EventSource(`/api/jobs/${jobId}/stream`);
+    _insightsSSE.onmessage = async (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'done' || msg.type === 'progress' || msg.type === 'state') {
+        try {
+          const upd = await fetch(`/api/jobs/${jobId}`);
+          renderInsights(await upd.json());
+        } catch(_) {}
+        if (msg.type === 'done') { _insightsSSE.close(); _insightsSSE = null; }
+      }
+    };
+    _insightsSSE.onerror = () => { if (_insightsSSE) { _insightsSSE.close(); _insightsSSE = null; } };
+  } catch(err) {
+    if (panel) panel.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:12px">Could not load job insights.</div>`;
+  }
 }
 
 // Workflow XML dropzone wiring
@@ -1048,6 +1370,8 @@ startBtn.addEventListener('click', async () => {
         resetSubmitForm();
         await loadJobs();
         if (_mainView === 'history') loadHistory();
+        // For batch, show recent jobs updated panel (no single job to show insights for)
+        loadSubmitRecentJobs();
       } else {
         alert('Batch upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1072,10 +1396,13 @@ startBtn.addEventListener('click', async () => {
           zipWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
           zipWarnings.style.display = 'block';
         }
-        showToast('✓ ZIP queued', `${selectedZipFile.name} is processing — track it in Job History.`, 'ok', 6000);
+        const _zfname = selectedZipFile.name;
+        showToast('✓ ZIP queued', `${_zfname} is processing — live insights below.`, 'ok', 4000);
         resetSubmitForm();
         await loadJobs();
         if (_mainView === 'history') loadHistory();
+        loadSubmitRecentJobs();
+        showJobInsights(data.job_id, _zfname);
       } else {
         alert('ZIP upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1099,10 +1426,12 @@ startBtn.addEventListener('click', async () => {
       const data = await res.json();
       if (data.job_id) {
         const fname = selectedFile ? selectedFile.name : 'file';
-        showToast('✓ Job queued', `${fname} is processing — track it in Job History.`, 'ok', 6000);
+        showToast('✓ Job queued', `${fname} is processing — live insights below.`, 'ok', 4000);
         resetSubmitForm();
         await loadJobs();
         if (_mainView === 'history') loadHistory();
+        loadSubmitRecentJobs();
+        showJobInsights(data.job_id, fname);
       } else {
         alert('Upload failed: ' + JSON.stringify(data));
         startBtn.disabled = false;
@@ -1161,18 +1490,93 @@ function resetSubmitForm() {
 
 async function loadJobs() {
   try {
-    const res  = await fetch('/api/jobs');
-    const data = await res.json();
+    // Pull all jobs (up to 500) so sidebar, filters, and search see the full dataset.
+    let all = [];
+    for (let page = 1; page <= 5; page++) {
+      const res  = await fetch(`/api/jobs?page=${page}&page_size=100`);
+      const data = await res.json();
+      const batch = data.jobs || [];
+      all = all.concat(batch);
+      if (all.length >= (data.total || 0) || batch.length < 100) break;
+    }
     let history = [];
     try {
       const histRes  = await fetch('/api/logs/history');
       const histData = await histRes.json();
       history = histData.history || [];
     } catch(he) { /* history is supplemental — never break the main list */ }
-    _allJobs    = data.jobs || [];
+    _allJobs    = all;
     _allHistory = history;
-    applyJobFilter();
+    // Sidebar and stats update first — they must never be blocked by a render error
+    try { refreshSidebarActivity(); } catch(e) { /* sidebar is non-blocking */ }
+    try { if (_mainView === 'landing') loadLandingStats(); } catch(e) { /* stats non-blocking */ }
+    // Job list render — isolated so errors here don't cascade
+    try { applyJobFilter(); } catch(e) { /* render non-blocking */ }
   } catch(e) { /* ignore poll errors */ }
+}
+
+// ── Live sidebar: Running + Gate activity ─────────────────────────────────
+const STEP_NAMES = ['','Parse','Classify','Document','Verify','Analysis Sign-off','Stack','Convert',
+  'Sec Scan','Security Sign-off','Quality','Test Gen','Final Sign-off'];
+
+function refreshSidebarActivity() {
+  const jobs = _allJobs || [];
+
+  // ── Running jobs ──────────────────────────────────
+  const running = jobs.filter(j => _RUNNING_SET.has(j.status));
+  const rEl = document.getElementById('sidebarRunning');
+  const rCt = document.getElementById('sidebarRunningCount');
+  if (rEl) {
+    if (!running.length) {
+      rEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">No active jobs</div>';
+      if (rCt) rCt.style.display = 'none';
+    } else {
+      if (rCt) { rCt.textContent = running.length; rCt.style.display = ''; }
+      rEl.innerHTML = running.slice(0, 6).map(j => {
+        const step = j.current_step || 1;
+        const stepName = STEP_NAMES[step] || `Step ${step}`;
+        const pct = Math.round((step - 1) / 12 * 100);
+        return `<div onclick="openJob('${j.job_id}')" title="${esc(j.filename)}"
+          style="padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:border-color .12s"
+          onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'">
+          <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:4px">${esc(j.filename)}</div>
+          <div style="height:3px;background:var(--border);border-radius:2px;margin-bottom:4px">
+            <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:2px;transition:width .3s"></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:10px;color:var(--accent);font-weight:600">${stepName}</span>
+            <span style="font-size:10px;color:var(--muted);font-family:monospace">${shortId(j.job_id)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // ── Jobs at a gate ────────────────────────────────
+  const gates = jobs.filter(j => _GATE_SET.has(j.status));
+  const gEl = document.getElementById('sidebarGates');
+  const gCt = document.getElementById('sidebarGateCount');
+  if (gEl) {
+    if (!gates.length) {
+      gEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">No pending gates</div>';
+      if (gCt) gCt.style.display = 'none';
+    } else {
+      if (gCt) { gCt.textContent = gates.length; gCt.style.display = ''; }
+      const gateLabel = { awaiting_review:'Analysis Sign-off', awaiting_security_review:'Security Sign-off', awaiting_code_review:'Final Sign-off' };
+      gEl.innerHTML = gates.slice(0, 6).map(j => {
+        const gl = gateLabel[j.status] || 'Gate';
+        return `<div onclick="openJobForReview('${j.job_id}')" title="${esc(j.filename)}"
+          style="padding:6px 8px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);border-radius:6px;cursor:pointer;transition:border-color .12s"
+          onmouseenter="this.style.borderColor='#fbbf24'" onmouseleave="this.style.borderColor='rgba(251,191,36,.2)'">
+          <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px">${esc(j.filename)}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:10px;font-weight:700;color:#fbbf24">⏸ ${gl}</span>
+            <span style="font-size:10px;color:var(--muted);font-family:monospace">${shortId(j.job_id)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
 }
 
 function applyJobFilter() {
@@ -1254,9 +1658,17 @@ const _HIST_PAGE = 25;
 
 async function loadHistory() {
   try {
-    const res  = await fetch('/api/jobs');
-    const data = await res.json();
-    _histJobs = data.jobs || [];
+    // Fetch up to 500 jobs so search, filters, and recent-submissions all see the full dataset.
+    // The API caps page_size at 100, so we pull up to 5 pages if needed.
+    let all = [];
+    for (let page = 1; page <= 5; page++) {
+      const res  = await fetch(`/api/jobs?page=${page}&page_size=100`);
+      const data = await res.json();
+      const batch = data.jobs || [];
+      all = all.concat(batch);
+      if (all.length >= (data.total || 0) || batch.length < 100) break;
+    }
+    _histJobs = all;
     _histPage = 0;
     applyHistoryFilter();
   } catch(e) { /* ignore */ }
@@ -1294,9 +1706,13 @@ function _histJobRow(j, indent) {
   return `<tr style="border-top:1px solid var(--border);cursor:pointer"
               onclick="openJobFromHistory('${j.job_id}')"
               onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
-    <td style="padding:10px 14px;font-weight:${indent?'400':'500'};max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${indentStyle}">${arrow}${esc(j.filename)}</td>
-    <td style="padding:10px 14px;color:${j.submitter_name?'var(--text)':'var(--muted)'}">${esc(j.submitter_name||'—')}</td>
-    <td style="padding:10px 14px;color:${j.submitter_team?'var(--text)':'var(--muted)'};font-size:12px">${esc(j.submitter_team||'—')}</td>
+    <td style="padding:10px 14px;white-space:nowrap">
+      <span style="font-family:monospace;font-size:11px;font-weight:700;background:rgba(108,99,255,.15);color:var(--accent);padding:2px 6px;border-radius:4px">${shortId(j.job_id)}</span>
+    </td>
+    <td style="padding:10px 14px;max-width:220px;${indentStyle}">
+      <div style="font-weight:${indent?'400':'500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${arrow}${esc(j.filename)}</div>
+    </td>
+    <td style="padding:10px 14px;color:${j.submitter_name?'var(--text)':'var(--muted)'}">${esc((j.submitter_name||'').replace(/^"|"$/g,'')||'—')}</td>
     <td style="padding:10px 14px;color:${j.submitter_notes?'var(--text)':'var(--muted)'};font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.submitter_notes||'—')}</td>
     <td style="padding:10px 14px"><span class="badge ${cls}">${lbl}</span></td>
     <td style="padding:10px 14px">${tier}</td>
@@ -1358,17 +1774,16 @@ function toggleBatchGroup(childId, arrowId) {
 
 // ── Open job from History (adds Back button context) ──────────────────────
 function openJobFromHistory(jobId) {
-  setMainView('dashboard');
-  openJob(jobId);
-  // Insert Back button at the top of the rendered dashboard
-  const panel = document.getElementById('panelDashboard');
-  if (panel) {
-    const backBar = document.createElement('div');
-    backBar.id = 'histBackBar';
-    backBar.style.cssText = 'padding:10px 0 0 0;margin-bottom:-8px';
-    backBar.innerHTML = `<button class="btn btn-sm btn-ghost" onclick="setMainView('history');loadHistory()" style="font-size:12px">← Back to History</button>`;
-    panel.insertBefore(backBar, panel.firstChild);
-  }
+  openJob(jobId).then(() => {
+    const jdc = document.getElementById('jobDetailContainer');
+    if (jdc && !document.getElementById('histBackBar')) {
+      const bar = document.createElement('div');
+      bar.id = 'histBackBar';
+      bar.style.cssText = 'padding:0 0 8px 0';
+      bar.innerHTML = `<button class="btn btn-sm btn-ghost" onclick="setMainView('history');loadHistory()" style="font-size:12px">← Back to History</button>`;
+      jdc.insertBefore(bar, jdc.firstChild);
+    }
+  });
 }
 
 function applyHistoryFilter() {
@@ -1379,7 +1794,8 @@ function applyHistoryFilter() {
 
   let filtered = _histJobs.filter(j => {
     if (query) {
-      const haystack = [j.filename, j.submitter_name, j.submitter_team, j.submitter_notes]
+      const sid = shortId(j.job_id).toLowerCase();
+      const haystack = [j.job_id, sid, j.filename, j.submitter_name, j.submitter_team, j.submitter_notes]
         .filter(Boolean).join(' ').toLowerCase();
       if (!haystack.includes(query)) return false;
     }
@@ -1628,17 +2044,16 @@ async function openHistoryJob(jobId, name) {
   if (eventSource) { eventSource.close(); eventSource = null; }
   currentJobId = jobId;
   await loadJobs();
-
-  const panel = document.getElementById('panelDashboard');
-  if (!panel) return;
   setMainView('dashboard');
 
-  // Show a loading state
-  panel.innerHTML = `<div style="padding:32px;color:var(--muted);font-size:13px">Loading log archive…</div>`;
+  const jdc = document.getElementById('jobDetailContainer');
+  const sfc = document.getElementById('submitFormContainer');
+  if (sfc) sfc.style.display = 'none';
+  if (jdc) { jdc.style.display = 'flex'; jdc.innerHTML = `<div style="padding:32px;color:var(--muted);font-size:13px">Loading log archive…</div>`; }
 
   try {
     const res  = await fetch(`/api/logs/history/${jobId}`);
-    if (!res.ok) { panel.innerHTML = `<div style="padding:32px;color:var(--danger)">Log file not found on disk.</div>`; return; }
+    if (!res.ok) { if (jdc) jdc.innerHTML = `<div style="padding:32px;color:var(--danger)">Log file not found on disk.</div>`; return; }
     const data = await res.json();
     const entries = data.entries || [];
 
@@ -1657,7 +2072,7 @@ async function openHistoryJob(jobId, name) {
       </div>`;
     }).join('') || '<div style="color:var(--muted);padding:8px 0;font-size:11px">No log entries found.</div>';
 
-    panel.innerHTML = `
+    if (jdc) jdc.innerHTML = `
       <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between">
         <div>
           <div class="panel-title">🗄 ${name}</div>
@@ -1673,7 +2088,7 @@ async function openHistoryJob(jobId, name) {
     const scroll = document.getElementById('logScroll');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
   } catch(e) {
-    panel.innerHTML = `<div style="padding:32px;color:var(--danger)">Failed to load log: ${esc(String(e))}</div>`;
+    if (jdc) jdc.innerHTML = `<div style="padding:32px;color:var(--danger)">Failed to load log: ${esc(String(e))}</div>`;
   }
 }
 
@@ -1722,7 +2137,11 @@ function renderJobPanel(job) {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
       <div>
         <div class="panel-title" style="margin-bottom:4px">${esc(job.filename)} <span class="badge ${badgeCls}" style="font-size:12px;vertical-align:middle">${badgeLabel}</span></div>
-        <div class="panel-sub" style="margin-bottom:0">Job ID: ${job.job_id} &nbsp;·&nbsp; Started: ${utcDate(job.created_at).toLocaleString()}</div>
+        <div class="panel-sub" style="margin-bottom:0">
+          <span style="font-family:monospace;font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.5px" title="Tracking ID (short form of Job ID)">${shortId(job.job_id)}</span>
+          &nbsp;·&nbsp; <span style="font-size:11px;color:var(--muted)" title="Full Job ID">${job.job_id}</span>
+          &nbsp;·&nbsp; Started: ${utcDate(job.created_at).toLocaleString()}
+        </div>
       </div>
       <div class="report-actions" style="margin-bottom:0;flex-shrink:0">
         <span class="lbl">Download report:</span>
@@ -1924,7 +2343,7 @@ function renderJobPanel(job) {
       ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,146,60,.12);border:1px solid var(--sev-high);border-radius:8px;font-size:12px;color:#fb923c">
            ⚠️ <strong>Documentation was truncated</strong> — the token limit was reached during generation.
            One or more sections (field lineage, session context, or ambiguities) may be incomplete.
-           Review carefully before approving at Gate 1. If critical sections are missing, Reject and re-upload.
+           Review carefully before approving at Analysis Sign-off. If critical sections are missing, Reject and re-upload.
          </div>`
       : '';
     html += `<div class="card" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
@@ -1990,7 +2409,7 @@ function renderJobPanel(job) {
       if (a.blocking !== b.blocking) return a.blocking ? -1 : 1;
       return (SEV_ORDER[a.severity]??9) - (SEV_ORDER[b.severity]??9);
     });
-    html += `<div class="card" style="border-color:var(--accent)">
+    html += `<div class="card" id="signoffCard" style="border-color:var(--accent)">
       <div class="card-title" onclick="toggleCard(this)"><span class="icon">👤</span> Step 5 — Human Review & Sign-off<span class="card-chevron">▼</span></div>
       <div class="card-body">
       <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
@@ -2311,7 +2730,7 @@ function renderJobPanel(job) {
              🔄 Fix round ${remRound} of 2 — code was regenerated with security findings as context and re-scanned.
              ${canFixAgain ? 'One more fix round available.' : '<strong>No further fix rounds — choose Approve, Acknowledge, or Fail.</strong>'}
            </div>${roundDiffHtml}` : '';
-      html += `<div class="card" style="border-color:var(--warn)">
+      html += `<div class="card" id="secReviewCard" style="border-color:var(--warn)">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
           <span><span class="icon">🔐</span> Step 9 — Security Review <span style="font-size:11px;color:var(--warn);margin-left:8px">⏳ AWAITING YOUR DECISION</span></span>
           <span class="card-chevron" style="margin-left:0">▼</span>
@@ -2599,7 +3018,7 @@ function renderJobPanel(job) {
       </div>`;
     } else {
       // Gate is open — show sign-off form
-      html += `<div class="card" style="border-color:var(--accent)">
+      html += `<div class="card" id="codeSignoffCard" style="border-color:var(--accent)">
         <div class="card-title" onclick="toggleCard(this)" style="justify-content:space-between">
           <span><span class="icon">🏁</span> Step 12 — Code Review Sign-Off</span>
           <span style="display:flex;align-items:center;gap:8px">
@@ -2656,7 +3075,11 @@ function renderJobPanel(job) {
     </div>
   </div>`;
 
-  document.getElementById('panelDashboard').innerHTML = html;
+  // Use the dedicated job detail container (keeps upload form in DOM)
+  const _jdc = document.getElementById('jobDetailContainer');
+  const _sfc = document.getElementById('submitFormContainer');
+  if (_jdc) { _jdc.innerHTML = html; _jdc.style.display = 'flex'; }
+  if (_sfc) _sfc.style.display = 'none';
   setMainView('dashboard');  // ensure dashboard tab is active
 
   // After render: auto-scroll the log to bottom
@@ -2879,6 +3302,19 @@ async function downloadJobLog(jobId) {
 
 function renderStepper(currentStep, status) {
   const isBlocked = status === 'blocked' || status === 'failed';
+  const GATE_BANNERS = {
+    awaiting_review:          { gate: 1, icon: '⏸', cardId: 'signoffCard',     msg: 'Steps 1–5 complete. <strong>Analysis Sign-off is required</strong> to continue.' },
+    awaiting_security_review: { gate: 2, cardId: 'secReviewCard', icon: '⏸', msg: 'Steps 1–9 complete. <strong>Security Sign-off is required</strong> to continue.' },
+    awaiting_code_review:     { gate: 3, cardId: 'codeSignoffCard', icon: '✅', msg: 'All 12 automated steps complete. <strong>Final Sign-off required</strong> to mark this job Complete.' },
+  };
+  const banner = GATE_BANNERS[status];
+  const bannerHtml = banner ? `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;margin-bottom:16px">
+      <span style="font-size:20px;flex-shrink:0">${banner.icon}</span>
+      <div style="flex:1;font-size:13px;line-height:1.5">${banner.msg}</div>
+      <button class="btn btn-sm" style="background:#fbbf24;color:#000;font-weight:700;flex-shrink:0;white-space:nowrap"
+              onclick="scrollToSignoff('${banner.cardId}')">✍ Sign Off on This Job ↓</button>
+    </div>` : '';
   return `<div class="stepper">
     ${STEPS.map((s) => {
       let dotClass = '';
@@ -2897,7 +3333,7 @@ function renderStepper(currentStep, status) {
         </div>
       </div>`;
     }).join('')}
-  </div>`;
+  </div>${bannerHtml}`;
 }
 
 function renderFailedChecks(v) {
@@ -3550,6 +3986,8 @@ function escHtml(s) { return esc(s); }
 // Python's datetime.utcnow().isoformat() omits 'Z', so JavaScript treats it
 // as local time instead of UTC — appending 'Z' forces correct UTC parsing.
 function utcDate(s) { if (!s) return new Date(NaN); return new Date(s.endsWith('Z') ? s : s + 'Z'); }
+// Short 8-char tracking ID derived from job_id UUID, e.g. "#A1B2C3D4"
+function shortId(jobId) { return jobId ? '#' + jobId.replace(/-/g,'').slice(0,8).toUpperCase() : '–'; }
 
 function markdownToHtml(md) {
   return md
@@ -3625,14 +4063,24 @@ function renderReviewQueueTable() {
     }
     const flagsHtml = severityBadges.length ? severityBadges.join('') : '—';
 
-    return `<div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border);background:${isSelected?'rgba(108,99,255,.06)':''}">
-      <input type="checkbox" ${isSelected?'checked':''} onchange="toggleReviewJobSelection('${j.job_id}', this.checked)" style="width:16px;height:16px;cursor:pointer"/>
-      <span style="width:200px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.filename)}">${esc(j.filename)}</span>
-      <span style="width:120px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.batch_id||'–')}</span>
-      <span style="width:60px;font-size:12px;font-weight:600">Gate ${j.gate}</span>
-      <span style="width:80px;font-size:11px">${esc(j.complexity_tier||'unknown')}</span>
-      <span style="width:100px;font-size:11px">${flagsHtml}</span>
-      <span style="width:80px;font-size:11px;color:var(--muted)">${j.waiting_minutes}m ago</span>
+    const submitterDisplay = esc((j.submitter_name||'').replace(/^"|"$/g,'')||'–');
+    return `<div style="display:grid;grid-template-columns:16px 90px 1fr 140px 80px 60px 70px 90px 90px 80px;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;background:${isSelected?'rgba(108,99,255,.06)':''}"
+                 onclick="openJobForReview('${j.job_id}')"
+                 onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background='${isSelected?'rgba(108,99,255,.06)':''}'"
+            >
+      <input type="checkbox" ${isSelected?'checked':''} onchange="event.stopPropagation();toggleReviewJobSelection('${j.job_id}', this.checked)" style="width:16px;height:16px;cursor:pointer"/>
+      <span style="white-space:nowrap">
+        <span style="font-family:monospace;font-size:11px;font-weight:700;background:rgba(108,99,255,.15);color:var(--accent);padding:2px 6px;border-radius:4px">${shortId(j.job_id)}</span>
+      </span>
+      <span style="overflow:hidden;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.filename)}">${esc(j.filename)}</span>
+      <span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${submitterDisplay}</span>
+      <span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.batch_id||'–')}</span>
+      <span style="font-size:12px;font-weight:600">${{1:'Analysis Sign-off',2:'Security Sign-off',3:'Final Sign-off'}[j.gate]||('Gate '+j.gate)}</span>
+      <span style="font-size:11px">${esc(j.complexity_tier||'–')}</span>
+      <span style="font-size:11px">${flagsHtml}</span>
+      <span style="font-size:11px;color:var(--muted)">${j.waiting_minutes}m ago</span>
+      <span onclick="event.stopPropagation();openJobForReview('${j.job_id}')"
+            style="font-size:11px;color:var(--accent);font-weight:600;white-space:nowrap">Review →</span>
     </div>`;
   }).join('');
 
@@ -3811,6 +4259,8 @@ async function updateNotifBell() {
 // ─────────────────────────────────────────────
 loadJobs();
 setInterval(loadJobs, 5000);
+// Sidebar activity refreshes on its own heartbeat so it's never blocked by render errors
+setInterval(() => { try { refreshSidebarActivity(); } catch(e) {} }, 5000);
 
 // Notify bell: poll every 30 s, run immediately on load
 updateNotifBell();
@@ -3819,6 +4269,8 @@ setInterval(updateNotifBell, 30000);
 // ── Persona + initial view ─────────────────────
 initPersonaUI();
 setMainView('landing');  // always start on the landing page
+// Pre-load history so recent submissions panel is ready
+loadHistory().then(() => loadSubmitRecentJobs());
 
 // Load security KB badge once on startup
 (async () => {
@@ -3847,7 +4299,133 @@ function openS2TModal() {
   renderS2TTable();
 }
 function closeS2TModal() { document.getElementById('s2tModal').style.display = 'none'; }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeS2TModal(); });
+
+// ── Global Job Search ──────────────────────────────────────────────────────
+let _gSearchIdx = -1;
+
+function openGlobalSearch() {
+  const overlay = document.getElementById('globalSearchOverlay');
+  overlay.style.display = 'flex';
+  const inp = document.getElementById('globalSearchInput');
+  inp.value = '';
+  _gSearchIdx = -1;
+  document.getElementById('globalSearchResults').innerHTML =
+    '<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Start typing to search all jobs…</div>';
+  setTimeout(() => inp.focus(), 50);
+}
+
+// Open a specific job FROM the Review Queue — goes to full job detail, then
+// scrolls to the sign-off card so the reviewer doesn't have to search for it.
+function openJobForReview(jobId) {
+  openJob(jobId).then(() => {
+    // Add "Back to Review Queue" bar into jobDetailContainer
+    const jdc = document.getElementById('jobDetailContainer');
+    if (jdc && !document.getElementById('reviewBackBar')) {
+      const bar = document.createElement('div');
+      bar.id = 'reviewBackBar';
+      bar.style.cssText = 'padding:0 0 8px 0';
+      bar.innerHTML = `<button class="btn btn-sm btn-ghost" onclick="setMainView('review')" style="font-size:12px">← Back to Review Queue</button>`;
+      jdc.insertBefore(bar, jdc.firstChild);
+    }
+    // Scroll to sign-off card after render
+    setTimeout(() => {
+      const candidates = ['signoffCard','secReviewCard','codeSignoffCard'];
+      for (const id of candidates) {
+        const el = document.getElementById(id);
+        if (el) { scrollToSignoff(id); break; }
+      }
+    }, 300);
+  });
+}
+
+function scrollToSignoff(cardId) {
+  const el = document.getElementById(cardId);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Flash highlight so the user's eye goes to it
+    el.style.transition = 'box-shadow .2s';
+    el.style.boxShadow = '0 0 0 3px #fbbf24';
+    setTimeout(() => { el.style.boxShadow = ''; }, 1800);
+  }
+}
+
+function closeGlobalSearch() {
+  document.getElementById('globalSearchOverlay').style.display = 'none';
+  _gSearchIdx = -1;
+}
+
+function runGlobalSearch() {
+  const q = (document.getElementById('globalSearchInput').value || '').trim().toLowerCase();
+  const container = document.getElementById('globalSearchResults');
+  if (!q) {
+    container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">Start typing to search all jobs…</div>';
+    return;
+  }
+  const jobs = _histJobs || [];
+  const hits = jobs.filter(j => {
+    const name   = (j.submitter_name||'').replace(/^"|"$/g,'').toLowerCase();
+    const sid    = shortId(j.job_id).toLowerCase();
+    const haystack = [j.filename, j.job_id, sid, name, j.submitter_team,
+                      j.submitter_notes, j.status, j.complexity_tier]
+      .filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(q);
+  }).slice(0, 12);
+
+  if (!hits.length) {
+    container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">No jobs found</div>';
+    _gSearchIdx = -1;
+    return;
+  }
+
+  _gSearchIdx = -1;
+  container.innerHTML = hits.map((j, i) => {
+    const [cls, lbl] = STATUS_BADGE[j.status] || ['badge-pending', j.status];
+    const submitter  = esc((j.submitter_name||'').replace(/^"|"$/g,'')||'—');
+    const dt = j.created_at ? new Date(j.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+    return `<div class="gsearch-row" data-idx="${i}" data-jobid="${j.job_id}"
+                 onclick="gSearchOpen('${j.job_id}')"
+                 onmouseenter="_gSearchIdx=${i};_gHighlight()">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(j.filename)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${shortId(j.job_id)} &nbsp;·&nbsp; ${submitter} &nbsp;·&nbsp; ${dt}</div>
+      </div>
+      <span class="badge ${cls}" style="flex-shrink:0;font-size:11px">${lbl}</span>
+    </div>`;
+  }).join('');
+}
+
+function _gHighlight() {
+  document.querySelectorAll('.gsearch-row').forEach((r, i) => {
+    r.style.background = i === _gSearchIdx ? 'var(--surface2)' : '';
+  });
+}
+
+function gSearchOpen(jobId) {
+  closeGlobalSearch();
+  openJobFromHistory(jobId);
+}
+
+// Keyboard navigation inside search modal
+document.addEventListener('keydown', e => {
+  const overlay = document.getElementById('globalSearchOverlay');
+  if (overlay && overlay.style.display !== 'none') {
+    const rows = document.querySelectorAll('.gsearch-row');
+    if (e.key === 'Escape') { closeGlobalSearch(); e.preventDefault(); }
+    else if (e.key === 'ArrowDown') {
+      _gSearchIdx = Math.min(_gSearchIdx + 1, rows.length - 1);
+      _gHighlight(); e.preventDefault();
+    } else if (e.key === 'ArrowUp') {
+      _gSearchIdx = Math.max(_gSearchIdx - 1, 0);
+      _gHighlight(); e.preventDefault();
+    } else if (e.key === 'Enter' && _gSearchIdx >= 0 && rows[_gSearchIdx]) {
+      rows[_gSearchIdx].click(); e.preventDefault();
+    }
+    return;
+  }
+  // ⌘K / Ctrl+K from anywhere
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { openGlobalSearch(); e.preventDefault(); }
+  if (e.key === 'Escape') { closeS2TModal(); }
+});
 
 function renderS2TTable() {
   const SC = {'Direct':'#dcfce7','Derived':'#fef9c3','Lookup':'#ede9fe','Filtered':'#ffedd5',
@@ -3911,13 +4489,13 @@ function renderS2TTable() {
 // ─────────────────────────────────────────────
 
 const TEST_SUITES = [
-  { id: 'auth',       label: 'Auth & Session',    count: 13, icon: '🔐' },
-  { id: 'landing',    label: 'Landing Page',       count: 7,  icon: '🏠' },
-  { id: 'navigation', label: 'Navigation',         count: 8,  icon: '🗺' },
-  { id: 'submission', label: 'File Submission',    count: 9,  icon: '📤' },
-  { id: 'history',    label: 'Job History',        count: 8,  icon: '📋' },
-  { id: 'review',     label: 'Review Queue',       count: 8,  icon: '👁' },
-  { id: 'security',   label: 'Security & Headers', count: 8,  icon: '🔒' },
+  { id: 'landing',    label: 'Landing Page',        count: 7,  icon: '🏠', dep: null },
+  { id: 'navigation', label: 'Navigation',          count: 8,  icon: '🗺', dep: null },
+  { id: 'review',     label: 'Review Queue',        count: 8,  icon: '✅', dep: null },
+  { id: 'auth',       label: 'Auth & Session',      count: 13, icon: '🔐', dep: null },
+  { id: 'submission', label: 'File Submission',     count: 9,  icon: '📤', dep: 'Submits 2 real jobs to the pipeline' },
+  { id: 'history',    label: 'Job History',         count: 8,  icon: '📋', dep: 'Seeds up to 8 jobs via the pipeline' },
+  { id: 'security',   label: 'Security & Headers',  count: 8,  icon: '🔒', dep: 'Submits 2 real jobs to the pipeline' },
 ];
 
 let _testRunnerReady = false;
@@ -3937,7 +4515,7 @@ function initTestRunner() {
       <span style="font-size:20px">${s.icon}</span>
       <span style="flex:1;min-width:0">
         <span style="display:block;font-size:13px;font-weight:600">${s.label}</span>
-        <span style="font-size:11px;color:var(--muted)">~${s.count} tests</span>
+        <span style="font-size:11px;color:var(--muted)">~${s.count} tests${s.dep ? ' &nbsp;·&nbsp; <span style="color:#f59e0b">⚠ ' + s.dep + '</span>' : ''}</span>
       </span>`;
     card.querySelector('input').addEventListener('change', () => {
       card.style.borderColor = card.querySelector('input').checked ? 'var(--accent)' : 'var(--border)';
@@ -3983,15 +4561,18 @@ function _appendLog(text, color) {
 }
 
 function _colorForLine(line) {
-  if (/\bpassed\b/i.test(line))  return '#4ade80';
-  if (/\bfailed\b/i.test(line))  return '#f87171';
+  // list reporter: "  ✔  1 [chromium] › test name (1.2s)"
+  //                "  ✘  1 [chromium] › test name (0.9s)"
+  if (/^\s*[✔✓]/.test(line) || /\bpassed\b/i.test(line))  return '#4ade80';
+  if (/^\s*[✘✗×]/.test(line) || /\bfailed\b/i.test(line)) return '#f87171';
   if (/\bskipped\b/i.test(line)) return '#facc15';
-  if (/^\s+\d+ /.test(line))      return '#94a3b8';   // indented test lines
-  if (/Error|FAIL/i.test(line))    return '#f87171';
-  return null; // default terminal colour
+  if (/Error:/i.test(line))      return '#f87171';
+  if (/^\s+at /.test(line))      return '#94a3b8';  // stack trace lines
+  if (/Running \d+ test/.test(line)) return '#a5b4fc';
+  return null;
 }
 
-async function runTests() {
+function runTests() {
   const suites = [...document.querySelectorAll('#testSuiteGrid input[type=checkbox]')]
     .filter(c => c.checked).map(c => c.dataset.suite);
   if (!suites.length) return;
@@ -4000,63 +4581,144 @@ async function runTests() {
   _updateRunBtn();
   document.getElementById('testRunBtn').textContent = '⏳ Running…';
   document.getElementById('testStatus').textContent = `Running: ${suites.join(', ')}`;
+  document.getElementById('testStatus').style.color = '';
   document.getElementById('testResultBar').style.display = 'none';
+
+  // Show indeterminate progress bar (switches to real progress once tests fire)
+  const pbWrap = document.getElementById('testProgressWrap');
+  const pb     = document.getElementById('testProgressBar');
+  if (pbWrap) pbWrap.style.display = 'block';
+  if (pb)     pb.className = 'hc-progress-bar';  // start with sliding animation
+
+  // Calculate total expected tests for selected suites
+  const totalTests = suites.reduce((sum, id) => {
+    const s = TEST_SUITES.find(t => t.id === id);
+    return sum + (s ? s.count : 8);
+  }, 0);
+  let doneTests = 0;
+
+  function _setProgress(pct) {
+    if (!pb) return;
+    // Switch from indeterminate animation to real fill
+    if (pb.classList.contains('hc-progress-bar') && !pb.style.width) {
+      pb.style.animation = 'none';
+      pb.style.marginLeft = '0';
+      pb.style.transition = 'width .3s ease';
+    }
+    pb.style.width = Math.min(100, Math.round(pct)) + '%';
+  }
 
   const log = document.getElementById('testLog');
   if (log) log.innerHTML = '';
   _appendLog(`▶ Starting: ${suites.join(', ')}`, '#a5b4fc');
 
-  try {
-    const res = await fetch(`/run-tests?suites=${encodeURIComponent(suites.join(','))}`);
-    if (!res.ok) {
-      _appendLog(`Error: ${res.status} ${res.statusText}`, '#f87171');
-      _testRunning = false; _updateRunBtn();
-      document.getElementById('testRunBtn').textContent = '▶ Run Selected';
-      return;
+  // ── Animated "connecting" spinner (inside the log box) ───────────────────
+  let connectTimer = null, connectEl = null;
+  let firstOutput = false;
+
+  const spinDots = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+  let spinIdx = 0;
+  connectEl = document.createElement('span');
+  connectEl.style.color = '#94a3b8';
+  connectEl.textContent = `${spinDots[0]}  Connecting to test runner…`;
+  if (log) { log.appendChild(connectEl); log.appendChild(document.createElement('br')); }
+  connectTimer = setInterval(() => {
+    spinIdx = (spinIdx + 1) % spinDots.length;
+    if (connectEl) connectEl.textContent = `${spinDots[spinIdx]}  Connecting to test runner…`;
+  }, 100);
+
+  // ── Timeout warnings ─────────────────────────────────────────────────────
+  const warn5  = setTimeout(() => {
+    if (!firstOutput) _appendLog('⚠  No output yet — Playwright is still starting up…', '#fbbf24');
+  }, 5000);
+  const warn20 = setTimeout(() => {
+    if (!firstOutput) _appendLog('⚠  Still no output after 20 s. Try restarting the server.', '#f87171');
+  }, 20000);
+
+  // ── Cleanup helper ───────────────────────────────────────────────────────
+  function finish(ok) {
+    clearInterval(connectTimer); connectTimer = null;
+    clearTimeout(warn5); clearTimeout(warn20);
+    if (connectEl && connectEl.parentNode) {
+      const br = connectEl.nextSibling;
+      connectEl.parentNode.removeChild(connectEl);
+      if (br && br.nodeName === 'BR') br.parentNode.removeChild(br);
+      connectEl = null;
     }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-
-      const parts = buf.split('\n\n');
-      buf = parts.pop();
-
-      for (const part of parts) {
-        if (!part.startsWith('data:')) continue;
-        let evt;
-        try { evt = JSON.parse(part.slice(5).trim()); } catch { continue; }
-
-        if (evt.type === 'line') {
-          _appendLog(evt.text, _colorForLine(evt.text));
-        } else if (evt.type === 'done') {
-          const ok = evt.rc === 0;
-          document.getElementById('testResPassed').textContent  = `✓ ${evt.passed}  passed`;
-          document.getElementById('testResFailed').textContent  = `✗ ${evt.failed}  failed`;
-          document.getElementById('testResSkipped').textContent = `⊘ ${evt.skipped} skipped`;
-          document.getElementById('testResultBar').style.display = 'flex';
-          document.getElementById('testStatus').textContent = ok ? '✓ All suites passed' : `✗ ${evt.failed} test(s) failed`;
-          document.getElementById('testStatus').style.color = ok ? '#4ade80' : '#f87171';
-          _appendLog('', null);
-          _appendLog(ok ? '✓ Run complete — all tests passed.' : `✗ Run complete — ${evt.failed} failed.`,
-                     ok ? '#4ade80' : '#f87171');
-        } else if (evt.type === 'error') {
-          _appendLog(`Error: ${evt.text}`, '#f87171');
-        }
-      }
-    }
-  } catch (err) {
-    _appendLog(`Network error: ${err.message}`, '#f87171');
+    if (pb) pb.className = ok ? 'hc-progress-bar done' : 'hc-progress-bar error';
+    setTimeout(() => { if (pbWrap) pbWrap.style.display = 'none'; }, 2000);
+    _testRunning = false;
+    _updateRunBtn();
+    document.getElementById('testRunBtn').textContent = '▶ Run Selected';
   }
 
-  _testRunning = false;
-  _updateRunBtn();
-  document.getElementById('testRunBtn').textContent = '▶ Run Selected';
+  function onFirst() {
+    if (firstOutput) return;
+    firstOutput = true;
+    clearInterval(connectTimer); connectTimer = null;
+    clearTimeout(warn5); clearTimeout(warn20);
+    if (connectEl && connectEl.parentNode) {
+      const br = connectEl.nextSibling;
+      connectEl.parentNode.removeChild(connectEl);
+      if (br && br.nodeName === 'BR') br.parentNode.removeChild(br);
+      connectEl = null;
+    }
+  }
+
+  // ── Use native EventSource — built for SSE, no buffering issues ──────────
+  const es = new EventSource(`/api/run-tests?suites=${encodeURIComponent(suites.join(','))}`);
+
+  es.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+
+    if (evt.type === 'start') {
+      onFirst();
+      _appendLog(`▶ Playwright launched — suites: ${evt.suites.join(', ')}`, '#a5b4fc');
+
+    } else if (evt.type === 'line') {
+      onFirst();
+      const clean = evt.text.replace(/\x1b\[[0-9;]*[mGKJHF]/g, '').replace(/\[[\d]+[A-Z]/g, '');
+      if (!clean.trim()) return;
+      // Count individual test completions (✔ pass  or  ✘ fail lines)
+      const isResult = /^\s*[✔✓✘✗×]/.test(clean);
+      if (isResult) {
+        doneTests++;
+        _setProgress((doneTests / totalTests) * 100);
+        document.getElementById('testStatus').textContent =
+          `Running: ${suites.join(', ')} — ${doneTests} / ${totalTests}`;
+      }
+      _appendLog(clean, _colorForLine(clean));
+
+    } else if (evt.type === 'done') {
+      onFirst();
+      es.close();
+      const ok = evt.rc === 0;
+      _setProgress(100);
+      document.getElementById('testResPassed').textContent  = `✓ ${evt.passed}  passed`;
+      document.getElementById('testResFailed').textContent  = `✗ ${evt.failed}  failed`;
+      document.getElementById('testResSkipped').textContent = `⊘ ${evt.skipped} skipped`;
+      document.getElementById('testResultBar').style.display = 'flex';
+      document.getElementById('testStatus').textContent = ok ? '✓ All suites passed' : `✗ ${evt.failed} test(s) failed`;
+      document.getElementById('testStatus').style.color = ok ? '#4ade80' : '#f87171';
+      _appendLog('', null);
+      _appendLog(ok ? '✓ Run complete — all tests passed.' : `✗ Run complete — ${evt.failed} failed.`,
+                 ok ? '#4ade80' : '#f87171');
+      finish(ok);
+
+    } else if (evt.type === 'error') {
+      onFirst();
+      es.close();
+      _appendLog(`Error: ${evt.text}`, '#f87171');
+      finish(false);
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    if (!firstOutput) _appendLog('Connection to test runner failed. Is the server running?', '#f87171');
+    finish(false);
+  };
 }
 
 </script>

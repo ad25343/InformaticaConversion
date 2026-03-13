@@ -6,7 +6,7 @@
  */
 
 const { test, expect } = require('@playwright/test');
-const { login, BASE_URL } = require('./helpers');
+const { login, BASE_URL, goToView } = require('./helpers');
 
 // ─── SEC-01: Unauthenticated API returns 401 / redirects ─────────────────────
 test('SEC-01: /jobs API requires authentication', async ({ request }) => {
@@ -65,8 +65,7 @@ test('SEC-05b: security headers present on authenticated main page', async ({ br
 // ─── SEC-02: Non-XML file input restricted ────────────────────────────────────
 test('SEC-02: mapping file input only accepts .xml', async ({ page }) => {
   await login(page, 'Asin D');
-  await page.click('#navDashboard');
-  await page.waitForSelector('#panelDashboard:visible');
+  await goToView(page, 'dashboard');
 
   await page.click('#tabFiles');
   const accept = await page.locator('#fileInput').getAttribute('accept');
@@ -78,8 +77,7 @@ test('SEC-02: mapping file input only accepts .xml', async ({ page }) => {
 // ─── SEC-02b: ZIP and batch inputs also restricted ────────────────────────────
 test('SEC-02b: ZIP and batch inputs only accept .zip', async ({ page }) => {
   await login(page, 'Asin D');
-  await page.click('#navDashboard');
-  await page.waitForSelector('#panelDashboard:visible');
+  await goToView(page, 'dashboard');
 
   for (const id of ['#zipInput', '#batchInput']) {
     await page.click(id === '#zipInput' ? '#tabZip' : '#tabBatch');
@@ -99,10 +97,13 @@ test('SEC-06: duplicate filename submissions produce separate job IDs', async ({
   await goToView(page, 'dashboard');
   await page.click('#tabFiles');
   await uploadFile(page, '#fileInput', SAMPLE_XML);
-  await page.click('#startBtn');
-  await page.waitForSelector('.stepper', { timeout: 15_000 });
+  const [resp1] = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/api/jobs') && r.request().method() === 'POST'),
+    page.click('#startBtn'),
+  ]);
+  expect((await resp1.json()).job_id).toBeTruthy();
 
-  // Capture first job ID from URL or page if available, or just check history count
+  // Check history count
   await page.click('#navHistory');
   await page.waitForSelector('#historyTableBody tr');
   const countAfterFirst = await page.locator('#historyTableBody tr').count();
@@ -111,8 +112,11 @@ test('SEC-06: duplicate filename submissions produce separate job IDs', async ({
   await goToView(page, 'dashboard');
   await page.click('#tabFiles');
   await uploadFile(page, '#fileInput', SAMPLE_XML);
-  await page.click('#startBtn');
-  await page.waitForSelector('.stepper', { timeout: 15_000 });
+  const [resp2] = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/api/jobs') && r.request().method() === 'POST'),
+    page.click('#startBtn'),
+  ]);
+  expect((await resp2.json()).job_id).toBeTruthy();
 
   await page.click('#navHistory');
   await page.waitForSelector('#historyTableBody tr');

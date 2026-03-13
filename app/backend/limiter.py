@@ -122,8 +122,49 @@ class RateLimiter:
             self._windows[ip] = window
 
 
+class FailedAttemptLimiter:
+    """
+    Sliding-window limiter that only counts FAILED attempts.
+
+    Use for login endpoints: successful logins do not increment the counter,
+    so legitimate users can log in freely across many test runs or sessions.
+    Call check(request) at the start of the handler, then record_failure(request)
+    only when the credential check fails.
+    """
+
+    def __init__(self, limit_str: str) -> None:
+        self.max_calls, self.period = _parse(limit_str)
+        self._windows: Dict[str, List[float]] = defaultdict(list)
+        self._lock = asyncio.Lock()
+
+    async def check(self, request: Request) -> None:
+        """Raise HTTP 429 if this IP has too many recent failures."""
+        ip = _real_client_ip(request)
+        now = time.monotonic()
+        async with self._lock:
+            window = [t for t in self._windows[ip] if now - t < self.period]
+            self._windows[ip] = window          # prune old entries
+            if len(window) >= self.max_calls:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Too many failed login attempts — maximum {self.max_calls} "
+                        f"per {self.period}s from this IP. Please wait and retry."
+                    ),
+                )
+
+    async def record_failure(self, request: Request) -> None:
+        """Record one failed attempt for this IP."""
+        ip = _real_client_ip(request)
+        now = time.monotonic()
+        async with self._lock:
+            window = [t for t in self._windows[ip] if now - t < self.period]
+            window.append(now)
+            self._windows[ip] = window
+
+
 # ── Singleton instances ───────────────────────────────────────────────────────
 # Created once at import time; shared across all requests for the same tier.
 
 jobs_limiter  = RateLimiter(RATE_LIMIT_JOBS)
-login_limiter = RateLimiter(RATE_LIMIT_LOGIN)
+login_limiter = FailedAttemptLimiter(RATE_LIMIT_LOGIN)

@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import time
+import urllib.parse
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -284,8 +285,10 @@ async def login_submit(
     request: Request,
     password: str = Form(...),
     persona:  str = Form(default=""),
-    _rl: None = Depends(login_limiter),
 ):
+    # Check failed-attempt rate limit before processing (successful logins never count)
+    await login_limiter.check(request)
+
     if check_password(password):
         token = create_session_token()
         response = RedirectResponse("/", status_code=302)
@@ -302,13 +305,16 @@ async def login_submit(
         safe_persona = persona.strip() if persona.strip() in _VALID_PERSONAS else "User"
         response.set_cookie(
             key="persona",
-            value=safe_persona,
+            value=urllib.parse.quote(safe_persona),  # URL-encode to avoid RFC-2109 auto-quoting of spaces
             httponly=False,      # readable by JS
             samesite="lax",
             max_age=SESSION_HOURS * 3600,
             secure=_cfg.https,
         )
         return response
+
+    # Wrong password — record this failure toward the rate limit
+    await login_limiter.record_failure(request)
     return RedirectResponse("/login?error=1", status_code=302)
 
 

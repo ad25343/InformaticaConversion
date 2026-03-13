@@ -11,7 +11,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report tests/playwright/report"
+    "test:e2e:report": "playwright show-report tests/playwright/report",
+    "postinstall": "playwright install chromium"
   },
   "repository": {
     "type": "git",

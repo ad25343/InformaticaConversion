@@ -130,10 +130,20 @@ for (const persona of PERSONAS) {
   });
 }
 
-// ─── NAV-06: Notification bell appears when review items exist ───────────────
-test('NAV-06: notification bell is hidden initially (clean DB)', async ({ page }) => {
+// ─── NAV-06: Badge and bell correctly reflect actual pending review count ───────
+test('NAV-06: badge and notification bell match actual pending review count', async ({ page }) => {
   await login(page, 'Asin D');
-  // With a clean database there should be no pending reviews
-  await expect(page.locator('#notifBell')).not.toBeVisible();
-  await expect(page.locator('#navReviewBadge')).not.toBeVisible();
+
+  // Ask the server how many jobs are actually awaiting review
+  const res  = await page.request.get('/api/gates/pending');
+  const data = await res.json();
+  const hasPending = (data.total ?? 0) > 0;
+
+  if (hasPending) {
+    await expect(page.locator('#navReviewBadge')).toBeVisible();
+    await expect(page.locator('#notifBell')).toBeVisible();
+  } else {
+    await expect(page.locator('#navReviewBadge')).not.toBeVisible();
+    await expect(page.locator('#notifBell')).not.toBeVisible();
+  }
 });

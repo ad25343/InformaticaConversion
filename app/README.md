@@ -4,6 +4,8 @@ Converts Informatica PowerCenter XML exports to PySpark, dbt, or Python.
 
 12-step agentic pipeline powered by Claude with a self-improving security knowledge base, actionable remediation guidance, two-pass documentation generation, XML-grounded logic equivalence checking, three human review gates, and batch conversion — submit an entire set of mappings in a single ZIP and run up to 3 concurrently. Every Gate 2 approval makes future conversions smarter.
 
+The UI includes a live sidebar activity feed (running jobs + gate queue), a post-submission insights panel that streams real-time metrics as the pipeline runs, global job search (⌘K), short 8-character tracking IDs, and a clickable Review Queue that navigates directly to the relevant sign-off form.
+
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 
 > Free to use and adapt. Commercial use requires written permission. See [LICENSE](../LICENSE).
@@ -267,7 +269,8 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | `POST` | `/api/jobs/zip` | Upload a single-mapping ZIP archive — file types auto-detected |
 | `POST` | `/api/jobs/batch` | Upload a batch ZIP (one subfolder per mapping) — starts all pipelines |
 | `GET` | `/api/batches/{id}` | Get batch record + per-job summaries and computed batch status |
-| `GET` | `/api/jobs` | List all jobs (most recent 50) |
+| `GET` | `/api/jobs` | List jobs (paginated — `page` and `page_size` params; default 20 per page, max 100) |
+| `GET` | `/api/jobs/stats` | Total job counts grouped by status bucket (total, running, awaiting_review, complete) — single SQL query, no pagination |
 | `GET` | `/api/jobs/{id}` | Get full job state |
 | `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
 | `DELETE` | `/api/jobs/{id}` | Soft-delete job — stamps `deleted_at`; data preserved in Log Archive |
@@ -331,7 +334,8 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.10–v2.15** | Shipped | GitHub PR integration; mapplet detection + inline expansion; data-level equivalence tests; manifest-based file watcher; time-based cron scheduler; security hardening patch |
 | **v2.16.0** | Shipped | Config-driven pattern library — 10 ETL patterns (pass_through → scd2); pip-installable `etl_patterns` package; 199 tests; classifier decision tree + conversion agent integration |
 | **v2.17.0** | Shipped | Generic component architecture — org_config.yaml + warehouse_registry.yaml + Jinja2 prompt overrides; all hardcoded org signals externalised; backwards-compatible |
-| **v2.17.1** | Current | Batch gate review queue (`GET /api/gates/pending`, `POST /api/gates/batch-signoff`); migration progress endpoint + CSV export; Review Queue UI tab |
+| **v2.17.1** | Shipped | Batch gate review queue (`GET /api/gates/pending`, `POST /api/gates/batch-signoff`); migration progress endpoint + CSV export; Review Queue UI tab |
+| **v2.17.4** | Current | UI overhaul — Submit panel intelligence (live job insights, recent submissions, mode tips); live sidebar feed (running jobs + gate queue); global search ⌘K; short tracking IDs; clickable Review Queue with direct sign-off navigation; gate banners; `GET /api/jobs/stats`; landing page stats fix; "Health Check" tab rename |
 | **v2.18** | Planned | Estate analyser (bulk XML → pattern/complexity/cost report) + migration wave planner (dependency DAG, topological wave sequencing, quick-win identification) |
 | **v2.19** | Planned | Multi-user access control (ADMIN/REVIEWER/ENGINEER/READ_ONLY roles, job ownership, audit trail) + SSO/OIDC + SAML 2.0 + JIT provisioning |
 | **v3.0** | Vision | Continuous migration mode; migration velocity dashboard; re-export delta handling; self-hosted model support; repository-level object handling |

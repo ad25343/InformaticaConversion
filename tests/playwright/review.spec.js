@@ -27,7 +27,7 @@ test('REV-01 + REV-07: review queue panel loads and refresh button works', async
 
   // Refresh button triggers an API call
   const [request] = await Promise.all([
-    page.waitForRequest(req => req.url().includes('/jobs')),
+    page.waitForRequest(req => req.url().includes('/gates')),
     page.locator('#panelReview button', { hasText: '🔄' }).click(),
   ]);
   expect(request).toBeTruthy();
@@ -99,16 +99,28 @@ test('REV-05: Approve Selected and Reject Selected buttons present', async ({ pa
   await expect(page.locator('button', { hasText: 'Reject Selected' })).toBeVisible();
 });
 
-// ─── REV-06: Nav badge hidden with no pending reviews ────────────────────────
-test('REV-06: nav review badge hidden when no jobs pending review', async ({ page }) => {
+// ─── REV-06: Nav badge visibility matches actual pending review count ─────────
+test('REV-06: nav review badge visibility matches pending review count', async ({ page }) => {
   await login(page, 'Asin D');
-  await expect(page.locator('#navReviewBadge')).not.toBeVisible();
+  const res  = await page.request.get('/api/gates/pending');
+  const data = await res.json();
+  if ((data.total ?? 0) > 0) {
+    await expect(page.locator('#navReviewBadge')).toBeVisible();
+  } else {
+    await expect(page.locator('#navReviewBadge')).not.toBeVisible();
+  }
 });
 
-// ─── REV-06b: Notification bell hidden with no pending reviews ───────────────
-test('REV-06b: notification bell hidden when no jobs pending review', async ({ page }) => {
+// ─── REV-06b: Notification bell visibility matches actual pending review count ─
+test('REV-06b: notification bell visibility matches pending review count', async ({ page }) => {
   await login(page, 'Asin D');
-  await expect(page.locator('#notifBell')).not.toBeVisible();
+  const res  = await page.request.get('/api/gates/pending');
+  const data = await res.json();
+  if ((data.total ?? 0) > 0) {
+    await expect(page.locator('#notifBell')).toBeVisible();
+  } else {
+    await expect(page.locator('#notifBell')).not.toBeVisible();
+  }
 });
 
 // ─── REV INTEGRATION: Full Gate 1 approve flow (requires LLM pipeline) ───────

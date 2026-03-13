@@ -5,7 +5,7 @@ const { defineConfig, devices } = require('@playwright/test');
  * Informatica Conversion Tool — Playwright configuration
  *
  * Run all tests:   npx playwright test
- * Run one suite:   npx playwright test tests/playwright/auth.spec.js
+ * Run one suite:   npx playwright test tests/playwright/z_auth.spec.js
  * Show report:     npx playwright show-report
  * UI mode:         npx playwright test --ui
  */
