@@ -84,6 +84,24 @@ async def lifespan(app: FastAPI):
             len(recovered),
         )
 
+    # ── Batch job recovery ─────────────────────────────────────────────────
+    # Batch jobs that were still 'pending' (never got an asyncio task, e.g.
+    # queued behind the semaphore) are re-queued so they continue processing.
+    # Gate-waiting batch job IDs are restored to _batch_job_ids so that human
+    # approvals after the restart still reacquire the concurrency semaphore.
+    from backend.routes import recover_batch_jobs as _recover_batch_jobs
+    _batch_recovery = await _recover_batch_jobs()
+    if _batch_recovery["requeued"]:
+        _startup_log.info(
+            "Startup recovery: re-queued %d pending batch job(s).",
+            _batch_recovery["requeued"],
+        )
+    if _batch_recovery["gate_restored"]:
+        _startup_log.info(
+            "Startup recovery: restored semaphore tracking for %d gate-waiting batch job(s).",
+            _batch_recovery["gate_restored"],
+        )
+
     # ── GAP #13 — Model deprecation + API key check ───────────────────────
     try:
         import anthropic as _anthropic

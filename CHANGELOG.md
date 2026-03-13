@@ -10,6 +10,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.18] — 2026-03-13 — Batch startup recovery (re-queue pending, restore gate tracking)
+
+### Fixed
+
+- **Stranded batch jobs after server restart**: Batch jobs with status `pending` (queued behind the semaphore when the server stopped) now automatically re-queue on startup and continue processing. Gate-waiting batch job IDs are restored to `_batch_job_ids` so human gate approvals after a restart still reacquire the semaphore via `_resume_batch_job`.
+
+### Added
+
+- `db.get_pending_batch_jobs()` — returns batch jobs with `pending` status for startup requeue.
+- `db.get_gate_waiting_batch_jobs()` — returns job_ids of batch jobs waiting at a human gate for `_batch_job_ids` restoration.
+- `routes.recover_batch_jobs()` — orchestrates both recovery steps; returns counts for logging.
+- `main.py` lifespan calls `recover_batch_jobs()` immediately after `recover_stuck_jobs()`.
+
+---
+
 ## [2.18.17] — 2026-03-13 — Batch semaphore released at gate, reacquired on resume
 
 ### Fixed

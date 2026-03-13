@@ -530,6 +530,44 @@ async def recover_stuck_jobs() -> List[str]:
     return job_ids
 
 
+async def get_pending_batch_jobs() -> List[dict]:
+    """
+    Return all batch jobs whose status is 'pending' and that have not been
+    soft-deleted.  Used at startup to re-queue any jobs that were waiting
+    behind the semaphore when the server stopped.
+
+    Returns a list of dicts with job_id, filename, batch_id.
+    """
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT job_id, filename, batch_id FROM jobs "
+            "WHERE status = 'pending' AND batch_id IS NOT NULL AND deleted_at IS NULL "
+            "ORDER BY created_at ASC",
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def get_gate_waiting_batch_jobs() -> List[str]:
+    """
+    Return job_ids of batch jobs currently paused at a human review gate
+    (awaiting_review / awaiting_security_review / awaiting_code_review).
+    Used at startup to repopulate _batch_job_ids so gate approvals still
+    go through _resume_batch_job and reacquire the semaphore correctly.
+    """
+    gate_statuses = ("awaiting_review", "awaiting_security_review", "awaiting_code_review")
+    placeholders = ",".join("?" * len(gate_statuses))
+    async with _connect() as db:
+        async with db.execute(
+            f"SELECT job_id FROM jobs "
+            f"WHERE status IN ({placeholders}) AND batch_id IS NOT NULL AND deleted_at IS NULL",
+            gate_statuses,
+        ) as cur:
+            rows = await cur.fetchall()
+            return [r[0] for r in rows]
+
+
 async def count_jobs() -> int:
     """Return the total number of non-deleted jobs (for pagination metadata)."""
     async with _connect() as db:

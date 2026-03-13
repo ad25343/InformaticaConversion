@@ -1231,6 +1231,51 @@ async def _resume_batch_job(j_id: str, resume_gen) -> None:
         await _progress_queues[j_id].put(None)
 
 
+async def recover_batch_jobs() -> dict:
+    """
+    Called once at startup (from main.py lifespan) after recover_stuck_jobs().
+
+    Does two things:
+
+    1. Re-queues any batch job with status 'pending'.
+       These were created atomically but their asyncio tasks never started (or
+       were waiting behind the semaphore) when the server stopped.  Each is
+       relaunched via _run_with_semaphore so the concurrency cap is respected.
+
+    2. Repopulates _batch_job_ids for gate-waiting batch jobs so that when a
+       human approves a gate after a server restart, _resume_batch_job() is
+       called and the semaphore is correctly reacquired.
+
+    Returns a summary dict for startup logging.
+    """
+    # -- Gate-waiting: just restore the tracking set; no task needed --
+    gate_job_ids = await db.get_gate_waiting_batch_jobs()
+    for jid in gate_job_ids:
+        _batch_job_ids.add(jid)
+
+    # -- Pending: re-queue each job --
+    pending_jobs = await db.get_pending_batch_jobs()
+    requeued = 0
+    for pj in pending_jobs:
+        j_id   = pj["job_id"]
+        fname  = pj["filename"]
+        queue: asyncio.Queue = asyncio.Queue()
+        _progress_queues[j_id] = queue
+        _batch_job_ids.add(j_id)
+        task = asyncio.create_task(_run_with_semaphore(j_id, fname))
+        _active_tasks[j_id] = task
+        requeued += 1
+        logger.info(
+            "Startup recovery: re-queued pending batch job job_id=%s batch_id=%s filename=%s",
+            j_id, pj["batch_id"], fname,
+        )
+
+    return {
+        "requeued":    requeued,
+        "gate_restored": len(gate_job_ids),
+    }
+
+
 def _compute_batch_status(job_statuses: list[str]) -> str:
     """Derive a BatchStatus string from a list of individual job status strings."""
     if not job_statuses:
