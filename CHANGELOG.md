@@ -10,6 +10,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.17] — 2026-03-13 — Batch semaphore released at gate, reacquired on resume
+
+### Fixed
+
+- **Batch concurrency gate-hold bug**: Previously the `_batch_semaphore` slot was held for the full pipeline duration including human review gates, so a 3-slot semaphore with 2 jobs paused at Gate 1 left only 1 slot for the remaining 15 jobs. Now the slot is released as soon as a job emits `awaiting_review`, `awaiting_security_review`, or `awaiting_code_review`, and reacquired by `_resume_batch_job()` when the reviewer approves. All N mappings can now advance to their first gate concurrently.
+
+### Added
+
+- `_GATE_WAITING_STATUSES` constant — centralises the three gate status strings.
+- `_batch_job_ids: set[str]` — tracks which job IDs belong to a batch so sign-off endpoints know to reacquire the semaphore on resume.
+- `_resume_batch_job(j_id, resume_gen)` helper — acquires the semaphore, drives any resume generator, releases at next gate or completion.
+- All three sign-off endpoints (`/signoff`, `/security-review`, `/code-signoff`) now call `_resume_batch_job` for batch jobs.
+
+---
+
 ## [2.18.16] — 2026-03-13 — Batch output grouped under one folder per batch run
 
 ### Added

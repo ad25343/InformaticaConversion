@@ -539,14 +539,22 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
     state    = job["state"]
     filename = job["filename"]
 
-    async def _resume():
-        async for progress in orchestrator.resume_after_signoff(job_id, state, filename):
-            await queue.put(progress)
-        await queue.put(None)
+    resume_gen = orchestrator.resume_after_signoff(job_id, state, filename)
+    if job_id in _batch_job_ids:
+        # Batch job: reacquire the concurrency semaphore before resuming so the
+        # active-pipeline cap is respected.  The slot was freed when the job
+        # first reached this gate in _run_with_semaphore.
+        task = asyncio.create_task(_resume_batch_job(job_id, resume_gen))
+    else:
+        async def _resume():
+            async for progress in resume_gen:
+                await queue.put(progress)
+            await queue.put(None)
+        task = asyncio.create_task(_resume())
 
-    task = asyncio.create_task(_resume())
     _active_tasks[job_id] = task
-    logger.info("Pipeline resuming after approval: job_id=%s", job_id)
+    logger.info("Pipeline resuming after approval: job_id=%s batch=%s",
+                job_id, job_id in _batch_job_ids)
 
     return {"message": "Sign-off accepted. Pipeline resuming from Step 6.", "job_id": job_id}
 
@@ -621,14 +629,17 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
         state["security_sign_off"] = sec_signoff.model_dump()
         state["remediation_round"] = this_round
 
-        async def _fix_and_rescan():
-            async for progress in orchestrator.resume_after_security_fix_request(
-                job_id, state, filename, remediation_round=this_round
-            ):
-                await queue.put(progress)
-            await queue.put(None)
-
-        task = asyncio.create_task(_fix_and_rescan())
+        fix_gen = orchestrator.resume_after_security_fix_request(
+            job_id, state, filename, remediation_round=this_round
+        )
+        if job_id in _batch_job_ids:
+            task = asyncio.create_task(_resume_batch_job(job_id, fix_gen))
+        else:
+            async def _fix_and_rescan():
+                async for progress in fix_gen:
+                    await queue.put(progress)
+                await queue.put(None)
+            task = asyncio.create_task(_fix_and_rescan())
         _active_tasks[job_id] = task
         logger.info("Pipeline re-running Steps 7-8 for security fix: job_id=%s round=%d",
                     job_id, this_round)
@@ -656,15 +667,19 @@ async def submit_security_review(job_id: str, payload: SecuritySignOffRequest):
         except Exception as kb_err:
             logger.warning("Security KB: failed to record findings: %s", kb_err)
 
-    async def _resume():
-        async for progress in orchestrator.resume_after_security_review(job_id, state, filename):
-            await queue.put(progress)
-        await queue.put(None)
+    sec_resume_gen = orchestrator.resume_after_security_review(job_id, state, filename)
+    if job_id in _batch_job_ids:
+        task = asyncio.create_task(_resume_batch_job(job_id, sec_resume_gen))
+    else:
+        async def _resume():
+            async for progress in sec_resume_gen:
+                await queue.put(progress)
+            await queue.put(None)
+        task = asyncio.create_task(_resume())
 
-    task = asyncio.create_task(_resume())
     _active_tasks[job_id] = task
-    logger.info("Pipeline resuming after security review: job_id=%s decision=%s",
-                job_id, payload.decision)
+    logger.info("Pipeline resuming after security review: job_id=%s decision=%s batch=%s",
+                job_id, payload.decision, job_id in _batch_job_ids)
 
     return {
         "message": f"Security review recorded ({payload.decision}). Pipeline resuming from Step 10.",
@@ -738,15 +753,19 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
     state["code_sign_off"] = code_signoff.model_dump()
     filename = job["filename"]
 
-    async def _resume():
-        async for progress in orchestrator.resume_after_code_signoff(job_id, state, filename):
-            await queue.put(progress)
-        await queue.put(None)
+    code_resume_gen = orchestrator.resume_after_code_signoff(job_id, state, filename)
+    if job_id in _batch_job_ids:
+        task = asyncio.create_task(_resume_batch_job(job_id, code_resume_gen))
+    else:
+        async def _resume():
+            async for progress in code_resume_gen:
+                await queue.put(progress)
+            await queue.put(None)
+        task = asyncio.create_task(_resume())
 
-    task = asyncio.create_task(_resume())
     _active_tasks[job_id] = task
-    logger.info("Pipeline resuming after code sign-off: job_id=%s decision=%s",
-                job_id, payload.decision)
+    logger.info("Pipeline resuming after code sign-off: job_id=%s decision=%s batch=%s",
+                job_id, payload.decision, job_id in _batch_job_ids)
 
     return {
         "message": f"Code sign-off recorded ({payload.decision}). Pipeline resuming.",
@@ -1161,6 +1180,56 @@ from .config import settings as _cfg
 _BATCH_CONCURRENCY: int = _cfg.batch_concurrency
 _batch_semaphore = asyncio.Semaphore(_BATCH_CONCURRENCY)
 
+# Statuses that mean the pipeline is paused waiting for human input.
+# When a batch job reaches one of these we release the semaphore so a queued
+# mapping can advance — the slot is reacquired when the gate is approved.
+_GATE_WAITING_STATUSES: frozenset[str] = frozenset({
+    JobStatus.AWAITING_REVIEW.value,
+    JobStatus.AWAITING_SEC_REVIEW.value,
+    JobStatus.AWAITING_CODE_REVIEW.value,
+})
+
+# Track which job_ids belong to a batch so sign-off handlers know to
+# reacquire the semaphore before resuming.
+_batch_job_ids: set[str] = set()
+
+
+async def _resume_batch_job(j_id: str, resume_gen) -> None:
+    """
+    Re-acquire the batch concurrency semaphore, drive *resume_gen* to
+    completion (or to the next gate), then release the slot.
+
+    Called when a human approves a gate on a batch job.  The slot was freed
+    when the pipeline first reached the gate in _run_with_semaphore / a
+    previous call to this function.
+    """
+    await _batch_semaphore.acquire()
+    semaphore_held = True
+    try:
+        async for progress in resume_gen:
+            await _progress_queues[j_id].put(progress)
+            # Hit another gate — release the slot so other jobs can advance
+            if semaphore_held and progress.get("status") in _GATE_WAITING_STATUSES:
+                _batch_semaphore.release()
+                semaphore_held = False
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Batch resume crashed unexpectedly: job_id=%s error=%s", j_id, exc, exc_info=True,
+        )
+        try:
+            await db.update_job(j_id, JobStatus.FAILED.value, -1,
+                                {"error": f"Batch resume crashed: {exc}"})
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to mark crashed batch resume job as FAILED: job_id=%s", j_id)
+        await _progress_queues[j_id].put(
+            {"step": -1, "status": JobStatus.FAILED.value,
+             "message": f"Resume crashed: {exc}"}
+        )
+    finally:
+        if semaphore_held:
+            _batch_semaphore.release()
+        await _progress_queues[j_id].put(None)
+
 
 def _compute_batch_status(job_statuses: list[str]) -> str:
     """Derive a BatchStatus string from a list of individual job status strings."""
@@ -1266,17 +1335,31 @@ async def create_batch_jobs(
         queue: asyncio.Queue = asyncio.Queue()
         _progress_queues[job_id] = queue
         job_entries.append({"job_id": job_id, "filename": mapping_fname, "parsed": parsed})
+        # Register as batch job so sign-off endpoints reacquire the semaphore on resume.
+        _batch_job_ids.add(job_id)
 
-    # Launch all pipelines concurrently (semaphore caps at 3 in-flight)
+    # Launch all pipelines concurrently (semaphore caps at BATCH_CONCURRENCY in-flight).
+    #
     # GAP #8 — Wrap in try/except/finally so the sentinel is always placed on the
-    # queue even when the async generator or the semaphore acquisition itself raises.
-    # Without this, an unexpected exception would leave the SSE stream hanging
-    # indefinitely and the task exception would be silently discarded by asyncio.
+    # queue even when the async generator or semaphore acquisition itself raises.
+    #
+    # v2.18.17 — Release the semaphore slot when the job hits a human review gate
+    # (awaiting_review / awaiting_security_review / awaiting_code_review) instead
+    # of holding it for the entire duration of human think-time.  The slot is
+    # reacquired by _resume_batch_job() when the reviewer approves the gate.
+    # This lets all N mappings advance to their first gate concurrently rather
+    # than serialising behind the semaphore during human review.
     async def _run_with_semaphore(j_id: str, fname: str):
+        await _batch_semaphore.acquire()
+        semaphore_held = True
         try:
-            async with _batch_semaphore:
-                async for progress in orchestrator.run_pipeline(j_id, fname):
-                    await _progress_queues[j_id].put(progress)
+            async for progress in orchestrator.run_pipeline(j_id, fname):
+                await _progress_queues[j_id].put(progress)
+                # Release the slot as soon as the job is waiting for a human —
+                # the semaphore is reacquired when the gate is approved.
+                if semaphore_held and progress.get("status") in _GATE_WAITING_STATUSES:
+                    _batch_semaphore.release()
+                    semaphore_held = False
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "Batch pipeline crashed unexpectedly: job_id=%s error=%s",
@@ -1294,6 +1377,9 @@ async def create_batch_jobs(
                  "message": f"Pipeline crashed: {exc}"}
             )
         finally:
+            # Always release the semaphore if we still hold it (normal completion or crash).
+            if semaphore_held:
+                _batch_semaphore.release()
             # Sentinel always placed — closes the SSE generator regardless of outcome.
             await _progress_queues[j_id].put(None)
 
