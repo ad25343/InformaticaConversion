@@ -9,6 +9,7 @@ from datetime import datetime as _datetime
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import time
 import uuid as _uuid_mod
@@ -1237,6 +1238,28 @@ async def create_batch_jobs(
         batch_id, file.filename, len(mapping_results),
     )
 
+    # Stamp output-folder hints so job_exporter groups all mappings under one
+    # human-readable folder instead of 17 anonymous UUID directories:
+    #   OUTPUT_DIR/batch_<short_id>/<mapping_stem>/input|output|docs|logs/
+    # This mirrors the watcher batch layout (watcher_output_dir / watcher_mapping_stem).
+    batch_dir_name = f"batch_{batch_id[:8]}"
+    for job_id, parsed in zip(job_ids, mapping_results):
+        mapping_fname = parsed.mapping_filename or file.filename
+        mapping_stem  = Path(mapping_fname).stem
+        try:
+            await db.update_job(
+                job_id, "pending", 0,
+                {
+                    "watcher_output_dir":   batch_dir_name,
+                    "watcher_mapping_stem": mapping_stem,
+                },
+            )
+        except Exception as hint_exc:  # non-fatal — missing hints just fall back to UUID path
+            logger.warning(
+                "Could not stamp output hints (non-fatal): job_id=%s error=%s",
+                job_id, hint_exc,
+            )
+
     job_entries: list[dict] = []
     for job_id, parsed in zip(job_ids, mapping_results):
         mapping_fname = parsed.mapping_filename or file.filename
@@ -1284,6 +1307,7 @@ async def create_batch_jobs(
 
     return {
         "batch_id":      batch_id,
+        "output_folder": batch_dir_name,   # e.g. "batch_a1b2c3d4" under OUTPUT_DIR
         "mapping_count": len(job_entries),
         "jobs": [{"job_id": e["job_id"], "filename": e["filename"]} for e in job_entries],
         "status":        "running",

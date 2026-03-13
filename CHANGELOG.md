@@ -10,6 +10,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.16] — 2026-03-13 — Batch output grouped under one folder per batch run
+
+### Added
+
+- **Grouped batch output directory**: UI-submitted batch jobs now stamp each job's state with `watcher_output_dir` (`batch_<8-char-id>`) and `watcher_mapping_stem` (mapping filename stem) immediately after atomic DB creation. `job_exporter.py` uses these hints to write all mappings in a batch under `OUTPUT_DIR/batch_<id>/<mapping_stem>/` instead of 17 separate UUID folders. Matches the watcher batch layout.
+- `output_folder` field added to `POST /api/jobs/batch` response so callers know the batch output directory name immediately.
+- `pathlib.Path` import added to `routes.py`.
+
+### Changed
+
+- Hint-stamping is non-fatal: a failure to write hints logs a warning and falls back to the existing UUID-folder path so the pipeline never blocks.
+
+---
+
 ## [2.18.15] — 2026-03-13 — Individual tab restricted to .xml only
 
 ### Fixed
