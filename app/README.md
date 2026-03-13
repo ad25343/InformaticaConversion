@@ -42,9 +42,7 @@ bash start.sh
 
 ## Upload Modes
 
-**📄 Individual** — single mapping, two options:
-- Drop a **Mapping XML** (`.xml`) directly. Optionally attach a Workflow XML and/or parameter file (`.txt`/`.par`) for richer extraction.
-- Drop a **single-mapping ZIP** (`.zip`) — workflow and parameter files inside are auto-detected. No need to attach them separately.
+**📄 Individual** — single mapping. Drop a **Mapping XML** (`.xml`). Optionally attach a Workflow XML and/or parameter file (`.txt`/`.par`) for richer extraction.
 
 **📦 Batch** *(v2.0)* — multiple mappings in one go. Either:
 - Click **📁 Select Folder** to pick a folder directly — the browser packages it into a ZIP automatically.
@@ -146,7 +144,7 @@ app/
 ├── backend/
 │   ├── orchestrator.py            Pipeline state machine (12 steps + 3 gates)
 │   ├── org_config_loader.py       Central config loader — lru_cache; used by all agents (v2.17)
-│   ├── routes.py                  REST API endpoints (single-file + ZIP + batch upload)
+│   ├── routes.py                  REST API endpoints (individual XML + batch upload)
 │   ├── security.py                Central security module (XXE, Zip Slip, Zip Bomb,
 │   │                              credential scan, YAML secrets scan, bandit wrapper)
 │   ├── security_knowledge.py      Security KB — standing rules loader + auto-learned
@@ -174,7 +172,7 @@ app/
 │
 ├── frontend/
 │   └── templates/
-│       ├── index.html             Main pipeline UI (individual files + ZIP + Batch tabs)
+│       ├── index.html             Main pipeline UI (Individual + Batch tabs)
 │       └── login.html             Login screen
 │
 └── sample_xml/

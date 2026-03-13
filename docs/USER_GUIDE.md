@@ -79,17 +79,16 @@ Navigate to the **Submit** tab. The left column contains the upload form; select
 
 | Mode | Use when |
 |---|---|
-| **📄 Individual** | Converting a single mapping — upload an `.xml` directly, or a `.zip` if your files are already bundled |
+| **📄 Individual** | Converting a single mapping — upload the `.xml` file directly |
 | **📦 Batch** | Converting multiple mappings at once (one subfolder per mapping) |
 
-**Individual mode** accepts `.xml` or `.zip`:
+**Individual mode** — drop a Mapping XML to get started:
 
-| File / format | Required? | Description |
+| File | Required? | Description |
 |---|---|---|
 | Mapping XML (`.xml`) | **Yes** | Informatica PowerCenter mapping export |
-| Workflow XML | No | Attach separately when using `.xml` mode — enables session-level extraction (Step 0) |
-| Parameter file | No | Attach separately when using `.xml` mode — enables `$$VARIABLE` resolution |
-| Single-mapping ZIP (`.zip`) | — | Drop a ZIP containing mapping.xml + optional workflow/params; extras are auto-detected |
+| Workflow XML | No | Enables session-level extraction (Step 0) |
+| Parameter file | No | Enables `$$VARIABLE` resolution throughout the mapping |
 
 **Batch mode** lets you convert many mappings in one go. You can either:
 - Click **📁 Select Folder** to pick a folder directly — it is packaged into a ZIP automatically in the browser.

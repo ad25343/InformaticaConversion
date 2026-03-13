@@ -10,6 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.15] — 2026-03-13 — Individual tab restricted to .xml only
+
+### Fixed
+
+- **Individual upload mode** now accepts `.xml` files only. ZIP files (single-mapping or batch) should be submitted via Batch mode. Removed ZIP accept attribute, ZIP-routing logic, `zipNote`/`zipWarnings` elements, and ZIP branch from `setFile()`. `resetSubmitForm` and SUB-05 test updated to match.
+
+---
+
 ## [2.18.13] — 2026-03-13 — Simplified Upload: Two-Tab Layout (Individual + Batch)
 
 ### Changed
