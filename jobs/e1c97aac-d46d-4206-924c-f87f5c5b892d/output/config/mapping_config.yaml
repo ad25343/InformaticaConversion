@@ -1,0 +1,28 @@
+# Configuration for m_fct_atm_transactions_load
+# All environment-specific values externalized here
+
+source:
+  database_type: oracle
+  connection_name: OLTP_ORACLE
+  schema: OLTP
+  table: ATM_TRANSACTIONS
+  
+target:
+  database_type: oracle
+  connection_name: DWH_ORACLE
+  schema: DWH
+  table: FCT_ATM_TRANSACTIONS
+  load_type: insert  # Fact table pattern - append only
+  
+processing:
+  chunk_size: 50000  # For large file processing
+  dtype_backend: pyarrow  # Memory-efficient dtypes
+  
+logging:
+  level: INFO
+  format: json
+  
+# Standard DW audit field mappings - never NULL
+audit_fields:
+  etl_batch_id_param: ETL_BATCH_ID
+  source_system_name: OLTP_ATM_SYSTEM

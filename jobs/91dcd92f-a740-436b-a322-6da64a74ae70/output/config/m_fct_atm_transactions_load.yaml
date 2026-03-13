@@ -1,0 +1,21 @@
+# etl_patterns config — auto-generated skeleton for m_fct_atm_transactions_load
+# Review all TODO fields before running.
+
+pattern:      truncate_and_load
+mapping_name: m_fct_atm_transactions_load
+
+source:
+  type:    database
+  connection_string: ${{SOURCE_CONN}}   # TODO: set env var
+  table:   ATM_TRANSACTIONS
+
+target:
+  type:       database
+  connection_string: ${{TARGET_CONN}}
+  table:      FCT_ATM_TRANSACTIONS
+  write_mode: replace   # TODO: adjust (replace | append | upsert)
+
+etl_metadata: true
+
+# Run with:
+# python run.py config/m_fct_atm_transactions_load.yaml

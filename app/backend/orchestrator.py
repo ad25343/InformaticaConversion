@@ -44,11 +44,16 @@ def _err(e: Exception) -> dict:
 async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator[dict, None]:
     """
     Run Step 0 (v1.1 session/parameter parse) then Steps 1–4 automatically,
-    then pause at Step 5 (human review).
+    then pause at Step 5 (human review) — or stop at Step 4 in docs_only mode.
     Yields progress dicts for SSE streaming to the UI.
     All steps are logged to logs/jobs/<job_id>.log.
     """
     log = JobLogger(job_id, filename)
+
+    # Read pipeline_mode once from DB state (set at job creation by routes.py).
+    # Default to "full" so existing jobs without the hint still work normally.
+    _job_rec = await _db.get_job(job_id)
+    _pipeline_mode: str = ((_job_rec or {}).get("state") or {}).get("pipeline_mode", "full")
 
     async def emit(step: int, status: JobStatus, message: str, data: dict = None):
         patch = data or {}
@@ -476,6 +481,27 @@ async def run_pipeline(job_id: str, filename: str = "unknown") -> AsyncGenerator
     yield await emit(4, JobStatus.VERIFYING,
                      f"Verification complete — {verification.overall_status}",
                      {"verification": verification.model_dump()})
+
+    # ── DOCS-ONLY MODE EXIT ────────────────────────────────────
+    # When pipeline_mode == "docs_only" we stop here and mark the job COMPLETE.
+    # The documentation, verification report, and all artefacts produced by
+    # steps 1-4 are exported to the output folder; no code conversion is run.
+    if _pipeline_mode == "docs_only":
+        log.state_change("verifying", "complete", step=4)
+        log.finalize("complete", steps_completed=4)
+        log.close()
+        # Export artefacts (docs, verification report, etc.) to output folder
+        try:
+            from .job_exporter import export_job as _export
+            _final_state = (await _db.get_job(job_id) or {}).get("state") or {}
+            await _export(job_id, {"job_id": job_id, "filename": filename,
+                                   "status": JobStatus.COMPLETE.value,
+                                   "current_step": 4}, _final_state)
+        except Exception as _exp_exc:
+            log.warning(f"Docs-only export warning (non-fatal): {_exp_exc}")
+        yield await emit(4, JobStatus.COMPLETE,
+                         "Documentation complete. Stopped after Step 4 (docs-only mode).")
+        return
 
     # ── STEP 5 — AWAIT HUMAN REVIEW ───────────────────────────
     log.state_change("verifying", "awaiting_review", step=5)

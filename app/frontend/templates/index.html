@@ -466,6 +466,10 @@
       <button id="navTests" onclick="setMainView('tests')" style="display:none;padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
         🧪 Health Check
       </button>
+      <button id="navDocs" onclick="setMainView('docs')"
+              style="padding:12px 20px;font-size:13px;font-weight:600;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer">
+        📖 How It Works
+      </button>
       <!-- Global search button -->
       <button onclick="openGlobalSearch()" title="Search jobs (⌘K)"
               style="margin-left:auto;margin-right:8px;padding:6px 12px;font-size:12px;font-weight:600;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">
@@ -621,6 +625,21 @@
             <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
           </div>
 
+          <!-- ── Pipeline mode ── -->
+          <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:14px">
+            <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px">Pipeline Mode</div>
+            <div style="display:flex;gap:6px">
+              <button id="modeFullBtn" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:7px 4px;line-height:1.3"
+                      onclick="setPipelineMode('full')">
+                🔄 Full Conversion<br/><span style="font-size:10px;font-weight:400;color:rgba(255,255,255,.7)">All 12 steps</span>
+              </button>
+              <button id="modeDocsBtn" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:7px 4px;line-height:1.3"
+                      onclick="setPipelineMode('docs_only')">
+                📋 Documentation Only<br/><span style="font-size:10px;font-weight:400;color:var(--muted)">Steps 1–4, no code</span>
+              </button>
+            </div>
+          </div>
+
           <!-- ── Submitter details ── -->
           <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:14px">
             <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px">Submitter</div>
@@ -638,25 +657,19 @@
         </div>
 
         <!-- Right: intelligence panel -->
-        <div id="submitIntelPanel" style="flex:1;padding:32px 28px;overflow-y:auto;display:flex;flex-direction:column;gap:24px">
+        <div id="submitIntelPanel" style="flex:1;padding:32px 28px;overflow-y:auto;display:flex;flex-direction:column;gap:20px">
 
-          <!-- Pipeline overview -->
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">The 12-Step Pipeline</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 1</span><span style="font-size:12px;font-weight:600">Parse Report</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Reads your XML. Extracts all mappings, sources, targets, and transformations.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 2</span><span style="font-size:12px;font-weight:600">Classify</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Rates complexity: Low / Medium / High / VeryHigh based on transformation count.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 3</span><span style="font-size:12px;font-weight:600">Document</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Auto-generates source-to-target lineage docs and a full S2T mapping matrix.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 4</span><span style="font-size:12px;font-weight:600">Verify</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Runs completeness, accuracy, and self-checks. Flags blockers and recommendations.</div></div>
-              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 5 ⏸</span><span style="font-size:12px;font-weight:600">Analysis Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Business analyst reviews docs and signs off before code generation begins.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 6</span><span style="font-size:12px;font-weight:600">Stack Assign</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Picks the best target stack: Python, PySpark, or dbt based on complexity.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 7</span><span style="font-size:12px;font-weight:600">Convert</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Generates production-ready code using AI with any manifest overrides applied.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 8</span><span style="font-size:12px;font-weight:600">Security Scan</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Scans generated code for vulnerabilities using Bandit + pattern matching.</div></div>
-              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 9 ⏸</span><span style="font-size:12px;font-weight:600">Security Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Security architect reviews scan findings and approves or requests fixes.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 10</span><span style="font-size:12px;font-weight:600">Quality Review</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Checks logic equivalence, coverage, and code quality against standards.</div></div>
-              <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 6px;border-radius:4px">Step 11</span><span style="font-size:12px;font-weight:600">Test Generation</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Generates unit tests with field-level coverage reporting.</div></div>
-              <div style="padding:10px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.25);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 6px;border-radius:4px">Step 12 ⏸</span><span style="font-size:12px;font-weight:600">Final Sign-off</span></div><div style="font-size:11px;color:var(--muted);line-height:1.4">Final human approval. Once approved, job is Complete and artifacts are exported.</div></div>
+          <!-- Pipeline mode summary card -->
+          <div id="submitModeCard" style="padding:16px 18px;background:rgba(108,99,255,.06);border:1px solid rgba(108,99,255,.25);border-radius:10px">
+            <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">🔄 Full Conversion — 12 steps</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.7">
+              Parse → Classify → Document → Verify → <span style="color:#fbbf24">⏸ Gate 1</span> →
+              Stack → Convert → Security Scan → <span style="color:#fbbf24">⏸ Gate 2</span> →
+              Quality → Tests → <span style="color:#fbbf24">⏸ Gate 3</span> → Complete
             </div>
+            <button onclick="setMainView('docs')" style="margin-top:10px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-size:11px;cursor:pointer">
+              📖 See full pipeline details →
+            </button>
           </div>
 
           <!-- Tips box -->
@@ -835,6 +848,65 @@
 
     </div>
 
+    <!-- ── How It Works panel ── -->
+    <div id="panelDocs" style="display:none;flex:1;overflow-y:auto;padding:32px 40px;flex-direction:column;gap:32px">
+
+      <div>
+        <div style="font-size:22px;font-weight:700;margin-bottom:4px">📖 How It Works</div>
+        <div style="font-size:14px;color:var(--muted)">The Informatica Conversion Tool runs your mapping XML through a 12-step AI-assisted pipeline, with human review gates at three points.</div>
+      </div>
+
+      <!-- Pipeline modes -->
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Pipeline Modes</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px;padding:14px 16px;background:rgba(108,99,255,.07);border:1px solid rgba(108,99,255,.25);border-radius:10px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">🔄 Full Conversion</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.6">Runs all 12 steps. Produces documentation, verification report, converted code, security scan, quality review, and unit tests. Three human gates (Steps 5, 9, 12) require review before the pipeline advances.</div>
+          </div>
+          <div style="flex:1;min-width:240px;padding:14px 16px;background:rgba(74,222,128,.05);border:1px solid rgba(74,222,128,.2);border-radius:10px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:6px">📋 Documentation Only</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.6">Runs Steps 1–4 only (Parse → Classify → Document → Verify), then marks the job Complete. No code is generated. Use this to generate S2T lineage docs and review the analysis before committing to full conversion.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 12-step grid -->
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">The 12-Step Pipeline</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 1</span><span style="font-size:13px;font-weight:600">Parse Report</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Reads your Informatica XML. Extracts all mappings, sources, targets, and transformations into a structured parse report.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 2</span><span style="font-size:13px;font-weight:600">Classify</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Rates complexity — Low / Medium / High / VeryHigh — based on transformation count, join depth, and conditional logic. Influences later steps.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 3</span><span style="font-size:13px;font-weight:600">Document</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Auto-generates source-to-target lineage documentation and a full S2T mapping matrix Excel workbook.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 4</span><span style="font-size:13px;font-weight:600">Verify</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Runs completeness, accuracy, and consistency checks on the documentation. Flags blockers, warnings, and recommendations.</div></div>
+          <div style="padding:12px 14px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 7px;border-radius:4px">Step 5 ⏸</span><span style="font-size:13px;font-weight:600">Analysis Sign-off</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Business analyst reviews the documentation and verification report, then approves or rejects before code generation begins.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 6</span><span style="font-size:13px;font-weight:600">Stack Assignment</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Picks the best target stack — Python, PySpark, or dbt — based on complexity and the reviewer's notes.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 7</span><span style="font-size:13px;font-weight:600">Convert</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Generates production-ready code using AI, incorporating any manifest overrides and reviewer-approved fixes.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 8</span><span style="font-size:13px;font-weight:600">Security Scan</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Scans generated code for vulnerabilities using Bandit and pattern-based checks. Clean scans auto-advance; findings pause at Gate 2.</div></div>
+          <div style="padding:12px 14px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 7px;border-radius:4px">Step 9 ⏸</span><span style="font-size:13px;font-weight:600">Security Sign-off</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Security architect reviews scan findings. Can approve, acknowledge, request a fix (re-runs Steps 7–8), or fail the job.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 10</span><span style="font-size:13px;font-weight:600">Quality Review</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Checks logic equivalence, field coverage, and code quality against conversion standards. Results feed into the final sign-off.</div></div>
+          <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,.15);padding:2px 7px;border-radius:4px">Step 11</span><span style="font-size:13px;font-weight:600">Test Generation</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Generates unit tests with field-level coverage reporting. Tests are exported alongside the converted code.</div></div>
+          <div style="padding:12px 14px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:8px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="font-size:10px;font-weight:700;color:#fbbf24;background:rgba(251,191,36,.15);padding:2px 7px;border-radius:4px">Step 12 ⏸</span><span style="font-size:13px;font-weight:600">Final Sign-off</span></div><div style="font-size:12px;color:var(--muted);line-height:1.5">Lead developer or migration architect gives final approval. Once approved the job is marked Complete and all artefacts are saved to the output folder.</div></div>
+        </div>
+      </div>
+
+      <!-- Output folder layout -->
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Output Folder Layout</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px;padding:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">📄 Individual job</div>
+            <code style="font-size:11px;color:var(--accent);line-height:1.8;display:block">OUTPUT_DIR/individual/<br/>&nbsp;&nbsp;&lt;mapping_stem&gt;_&lt;id&gt;/<br/>&nbsp;&nbsp;&nbsp;&nbsp;input/ &nbsp;output/ &nbsp;docs/ &nbsp;logs/</code>
+          </div>
+          <div style="flex:1;min-width:240px;padding:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px">📦 Batch run (17 mappings)</div>
+            <code style="font-size:11px;color:var(--accent);line-height:1.8;display:block">OUTPUT_DIR/batch_&lt;id&gt;/<br/>&nbsp;&nbsp;m_customer_load/<br/>&nbsp;&nbsp;&nbsp;&nbsp;input/ &nbsp;output/ &nbsp;docs/ &nbsp;logs/<br/>&nbsp;&nbsp;m_appraisal_rank/<br/>&nbsp;&nbsp;&nbsp;&nbsp;…</code>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
   </main>
 </div>
 
@@ -911,7 +983,47 @@ const batchWarnings = document.getElementById('batchWarnings');
 let selectedWorkflowFile = null;
 let selectedParamFile    = null;
 let selectedBatchFile    = null;
-let uploadMode = 'files';  // 'files' | 'batch'
+let uploadMode    = 'files';       // 'files' | 'batch'
+let pipelineMode  = 'full';        // 'full' | 'docs_only'
+
+function setPipelineMode(mode) {
+  pipelineMode = mode;
+  document.getElementById('modeFullBtn').className =
+    mode === 'full' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  document.getElementById('modeDocsBtn').className =
+    mode === 'docs_only' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  // Keep ghost button text visible
+  document.querySelector('#modeFullBtn span').style.color =
+    mode === 'full' ? 'rgba(255,255,255,.7)' : 'var(--muted)';
+  document.querySelector('#modeDocsBtn span').style.color =
+    mode === 'docs_only' ? 'rgba(255,255,255,.7)' : 'var(--muted)';
+  // Update mode summary card on the right panel
+  const card = document.getElementById('submitModeCard');
+  if (card) {
+    if (mode === 'docs_only') {
+      card.innerHTML = `
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">📋 Documentation Only — Steps 1–4</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7">
+          Parse → Classify → Document → Verify → <strong style="color:#4ade80">✓ Complete</strong><br/>
+          <span style="font-size:11px">No code conversion. Use this to generate documentation and review the analysis before committing to full conversion.</span>
+        </div>
+        <button onclick="setMainView('docs')" style="margin-top:10px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-size:11px;cursor:pointer">
+          📖 See full pipeline details →
+        </button>`;
+    } else {
+      card.innerHTML = `
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">🔄 Full Conversion — 12 steps</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7">
+          Parse → Classify → Document → Verify → <span style="color:#fbbf24">⏸ Gate 1</span> →
+          Stack → Convert → Security Scan → <span style="color:#fbbf24">⏸ Gate 2</span> →
+          Quality → Tests → <span style="color:#fbbf24">⏸ Gate 3</span> → Complete
+        </div>
+        <button onclick="setMainView('docs')" style="margin-top:10px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-size:11px;cursor:pointer">
+          📖 See full pipeline details →
+        </button>`;
+    }
+  }
+}
 let _mainView  = 'landing';  // 'landing' | 'dashboard' | 'history' | 'review'
 
 // ─────────────────────────────────────────────
@@ -990,7 +1102,7 @@ function initPersonaUI() {
 // ── Main view switcher (top nav tabs) ─────────
 function setMainView(view) {
   _mainView = view;
-  const views = ['landing', 'dashboard', 'history', 'review', 'tests'];
+  const views = ['landing', 'dashboard', 'history', 'review', 'tests', 'docs'];
   views.forEach(v => {
     const panel = document.getElementById('panel' + v.charAt(0).toUpperCase() + v.slice(1));
     if (panel) {
@@ -1330,7 +1442,7 @@ startBtn.addEventListener('click', async () => {
     if (!selectedBatchFile) { startBtn.disabled = false; return; }
     const fd = new FormData();
     fd.append('file', selectedBatchFile);
-    // Batch endpoint doesn't support submitter fields yet — no-op
+    fd.append('pipeline_mode', pipelineMode);
     try {
       const res  = await fetch('/api/jobs/batch', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1363,6 +1475,7 @@ startBtn.addEventListener('click', async () => {
     if (_sName)  fd.append('submitter_name',  _sName);
     if (_sTeam)  fd.append('submitter_team',  _sTeam);
     if (_sNotes) fd.append('submitter_notes', _sNotes);
+    fd.append('pipeline_mode', pipelineMode);
     try {
       const res  = await fetch('/api/jobs', { method: 'POST', body: fd });
       const data = await res.json();

@@ -155,6 +155,7 @@ async def create_job(
     submitter_name:   _Opt[str] = Form(default=None),
     submitter_team:   _Opt[str] = Form(default=None),
     submitter_notes:  _Opt[str] = Form(default=None),
+    pipeline_mode:    str = Form(default="full"),   # "full" | "docs_only"
     _rl:              None = Depends(jobs_limiter),
 ):
     """Upload files and start the conversion pipeline.
@@ -201,6 +202,11 @@ async def create_job(
         logger.info("Parameter file uploaded: filename=%s size=%d bytes",
                     parameter_file.filename, len(pf_content))
 
+    # Normalise and validate pipeline_mode
+    _pm = (pipeline_mode or "full").strip().lower()
+    if _pm not in ("full", "docs_only"):
+        _pm = "full"
+
     job_id = await db.create_job(
         file.filename,
         xml_str,
@@ -211,10 +217,18 @@ async def create_job(
         submitter_notes=submitter_notes or None,
     )
 
-    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s submitter=%s",
+    # Stamp pipeline_mode + readable output-folder hints immediately after creation
+    mapping_stem  = Path(file.filename).stem
+    await db.update_job(job_id, "pending", 0, {
+        "pipeline_mode":       _pm,
+        "watcher_output_dir":  "individual",
+        "watcher_mapping_stem": f"{mapping_stem}_{job_id[:8]}",
+    })
+
+    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s submitter=%s mode=%s",
                 job_id, file.filename, len(mapping_content),
                 workflow_str is not None, param_str is not None,
-                submitter_name or "(anonymous)")
+                submitter_name or "(anonymous)", _pm)
 
     queue: asyncio.Queue = asyncio.Queue()
     _progress_queues[job_id] = queue
@@ -1322,8 +1336,9 @@ def _compute_batch_status(job_statuses: list[str]) -> str:
 
 @router.post("/jobs/batch")
 async def create_batch_jobs(
-    file: UploadFile = File(...),
-    _rl:  None = Depends(jobs_limiter),
+    file:          UploadFile = File(...),
+    pipeline_mode: str = Form(default="full"),   # "full" | "docs_only"
+    _rl:           None = Depends(jobs_limiter),
 ):
     """
     Upload a batch ZIP archive and start a parallel conversion pipeline for
@@ -1356,6 +1371,11 @@ async def create_batch_jobs(
 
     if not mapping_results:
         raise HTTPException(400, "No valid mapping folders found in the batch ZIP.")
+
+    # Normalise pipeline_mode
+    _batch_pm = (pipeline_mode or "full").strip().lower()
+    if _batch_pm not in ("full", "docs_only"):
+        _batch_pm = "full"
 
     # GAP #4 — Create batch record + all jobs atomically in one transaction.
     # If any insertion fails, the whole batch is rolled back — no orphaned jobs.
@@ -1393,6 +1413,7 @@ async def create_batch_jobs(
                 {
                     "watcher_output_dir":   batch_dir_name,
                     "watcher_mapping_stem": mapping_stem,
+                    "pipeline_mode":        _batch_pm,
                 },
             )
         except Exception as hint_exc:  # non-fatal — missing hints just fall back to UUID path

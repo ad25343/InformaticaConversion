@@ -1,0 +1,27 @@
+# Customer Feed Load Pipeline Configuration
+# All environment-specific values externalized here
+
+source:
+  file_directory: "/data/in/customers"
+  file_name: "customers_daily.csv"
+  delimiter: "|"
+  encoding: "utf-8"
+  has_header: true
+  chunk_size: 50000
+
+target:
+  database_type: "oracle"
+  schema: "DWH"
+  table_name: "STG_CUSTOMER_FEED"
+  load_type: "INSERT"
+
+logging:
+  level: "INFO"
+  format: "json"
+
+# Database connection will use environment variables:
+# ORACLE_USER
+# ORACLE_PASSWORD
+# ORACLE_HOST
+# ORACLE_PORT
+# ORACLE_SERVICE_NAME

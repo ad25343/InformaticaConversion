@@ -1,0 +1,28 @@
+# etl_patterns config — auto-generated skeleton for m_stg_customer_file_load
+# Review all TODO fields before running.
+
+pattern:      truncate_and_load
+mapping_name: m_stg_customer_file_load
+
+source:
+  type:       flat_file
+  name:       CUSTOMER_FEED
+  path:       /data/in/customers/customers_daily.csv
+  delimiter:  "|"
+  has_header: true
+  encoding:   utf-8   # TODO: confirm encoding
+  file_lifecycle:
+    archive_dir:   /data/archive   # TODO: set archive path
+    archive_dated: true
+    reject_dir:    /data/rejects   # TODO: set reject path
+
+target:
+  type:       database
+  connection_string: ${{TARGET_CONN}}
+  table:      STG_CUSTOMER_FEED
+  write_mode: replace   # TODO: adjust (replace | append | upsert)
+
+etl_metadata: true
+
+# Run with:
+# python run.py config/m_stg_customer_file_load.yaml

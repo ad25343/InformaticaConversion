@@ -1,0 +1,23 @@
+# Configuration for m_fct_atm_transactions_load
+# All environment-specific values externalized here
+
+source:
+  connection_name: SOURCE_ORACLE_OLTP
+  schema: OLTP
+  table: ATM_TRANSACTIONS
+  
+target:
+  connection_name: TARGET_ORACLE_DWH
+  schema: DWH
+  table: FCT_ATM_TRANSACTIONS
+  
+processing:
+  chunk_size: 50000
+  
+logging:
+  level: INFO
+  format: json
+  
+# Runtime parameters (set via environment variables)
+# ETL_BATCH_ID - required, no default
+# SOURCE_SYSTEM_NAME - required, no default

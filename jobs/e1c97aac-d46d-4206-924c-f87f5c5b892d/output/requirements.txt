@@ -1,0 +1,14 @@
+# Python dependencies for m_fct_atm_transactions_load
+
+# Core data processing
+pandas>=2.0.0
+pyarrow>=12.0.0
+
+# Oracle database connectivity
+cx-Oracle>=8.3.0
+
+# Configuration management
+PyYAML>=6.0
+
+# Note: Requires Oracle Instant Client installed on system
+# Download from: https://www.oracle.com/database/technologies/instant-client/downloads.html

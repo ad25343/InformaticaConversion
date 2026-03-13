@@ -10,6 +10,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.21] — 2026-03-13 — Pipeline mode selector + How It Works panel + readable output folders
+
+### Added
+
+- **Pipeline Mode selector** on the Submit screen (works for both Individual and Batch): "🔄 Full Conversion" (all 12 steps) or "📋 Documentation Only" (Steps 1–4, no code). The right-hand panel updates to show what each mode produces.
+- **Docs-only early exit** in orchestrator: after Step 4 (Verify), if `pipeline_mode == "docs_only"`, exports artefacts and marks the job COMPLETE — no Gate 1, no code conversion.
+- **📖 How It Works** nav item and panel: contains the 12-step pipeline grid, pipeline mode descriptions, and output folder layout. Removed from the Submit screen to reduce clutter.
+- **Readable output folders for individual jobs**: every individual upload now stamps `watcher_output_dir = "individual"` and `watcher_mapping_stem = "<stem>_<id[:8]>"` so output goes to `OUTPUT_DIR/individual/<stem>_<id>/` instead of a bare UUID directory.
+- `pipeline_mode` Form field accepted by both `POST /api/jobs` and `POST /api/jobs/batch`.
+
+---
+
 ## [2.18.20] — 2026-03-13 — Batch-level delete from History
 
 ### Added
