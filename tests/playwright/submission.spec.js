@@ -51,10 +51,6 @@ test.describe('File Submission', () => {
     await page.click('#tabFiles');
     await expect(page.locator('#startBtn')).toBeDisabled();
 
-    // ZIP tab
-    await page.click('#tabZip');
-    await expect(page.locator('#startBtn')).toBeDisabled();
-
     // Batch tab
     await page.click('#tabBatch');
     await expect(page.locator('#startBtn')).toBeDisabled();
@@ -116,22 +112,22 @@ test.describe('File Submission', () => {
     expect(data.job_id).toBeTruthy();
   });
 
-  // ─── SUB-05: ZIP upload mode ───────────────────────────────────────────────
-  test('SUB-05: ZIP upload mode tab visible and file input accepts .zip', async ({ page }) => {
+  // ─── SUB-05: Individual tab accepts .zip ──────────────────────────────────
+  test('SUB-05: Individual tab file input accepts both .xml and .zip', async ({ page }) => {
     await login(page, 'Asin D');
     await goToView(page, 'dashboard');
 
-    await page.click('#tabZip');
-    await expect(page.locator('#panelZip')).toBeVisible();
-    await expect(page.locator('#panelFiles')).not.toBeVisible();
+    await page.click('#tabFiles');
+    await expect(page.locator('#panelFiles')).toBeVisible();
     await expect(page.locator('#panelBatch')).not.toBeVisible();
 
-    // Verify the input accepts .zip
-    const accept = await page.locator('#zipInput').getAttribute('accept');
+    // Verify the input accepts both .xml and .zip
+    const accept = await page.locator('#fileInput').getAttribute('accept');
+    expect(accept).toContain('.xml');
     expect(accept).toContain('.zip');
   });
 
-  // ─── SUB-06: Batch ZIP mode ────────────────────────────────────────────────
+  // ─── SUB-06: Batch mode ────────────────────────────────────────────────────
   test('SUB-06: batch upload mode tab visible and file input accepts .zip', async ({ page }) => {
     await login(page, 'Asin D');
     await goToView(page, 'dashboard');
@@ -139,7 +135,6 @@ test.describe('File Submission', () => {
     await page.click('#tabBatch');
     await expect(page.locator('#panelBatch')).toBeVisible();
     await expect(page.locator('#panelFiles')).not.toBeVisible();
-    await expect(page.locator('#panelZip')).not.toBeVisible();
 
     const accept = await page.locator('#batchInput').getAttribute('accept');
     expect(accept).toContain('.zip');
@@ -152,7 +147,6 @@ test.describe('File Submission', () => {
 
     const modes = [
       { tab: '#tabFiles', panel: '#panelFiles' },
-      { tab: '#tabZip',   panel: '#panelZip'   },
       { tab: '#tabBatch', panel: '#panelBatch' },
     ];
 

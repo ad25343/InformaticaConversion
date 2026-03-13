@@ -547,44 +547,41 @@
           <div style="display:flex;gap:4px;background:var(--surface);border-radius:8px;padding:3px;margin-bottom:14px">
             <button id="tabFiles" class="btn btn-sm btn-primary" style="flex:1;font-size:12px;padding:5px 0"
                     onclick="setUploadMode('files')">📄 Individual</button>
-            <button id="tabZip" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
-                    onclick="setUploadMode('zip')">🗜 ZIP</button>
             <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                     onclick="setUploadMode('batch')">📦 Batch</button>
           </div>
 
           <!-- ── Individual files panel ── -->
           <div id="panelFiles">
+            <!-- Main dropzone accepts .xml or .zip -->
             <div class="upload-zone" id="dropzone">
-              <input type="file" id="fileInput" accept=".xml"/>
+              <input type="file" id="fileInput" accept=".xml,.zip"/>
               <div class="upload-icon">📂</div>
-              <div class="upload-label" id="fileLabel">Mapping XML (required)<br/>Drop .xml here or click to browse</div>
-            </div>
-            <div style="margin-top:10px">
-              <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Workflow XML <span style="font-weight:400">(optional)</span></label>
-              <div class="upload-zone" id="dropzoneWF" style="padding:10px">
-                <input type="file" id="workflowInput" accept=".xml"/>
-                <div class="upload-label" id="workflowLabel" style="font-size:11px">Drop Workflow .xml or click</div>
+              <div class="upload-label" id="fileLabel">
+                Mapping XML or ZIP<br/>
+                <span style="font-size:11px;color:var(--muted)">Drop .xml or .zip here, or click to browse</span>
               </div>
             </div>
-            <div style="margin-top:10px">
-              <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
-              <div class="upload-zone" id="dropzonePF" style="padding:10px">
-                <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
-                <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
+            <!-- Optional extras — hidden when a ZIP is selected (bundled inside) -->
+            <div id="individualExtras">
+              <div style="margin-top:10px">
+                <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Workflow XML <span style="font-weight:400">(optional)</span></label>
+                <div class="upload-zone" id="dropzoneWF" style="padding:10px">
+                  <input type="file" id="workflowInput" accept=".xml"/>
+                  <div class="upload-label" id="workflowLabel" style="font-size:11px">Drop Workflow .xml or click</div>
+                </div>
+              </div>
+              <div style="margin-top:10px">
+                <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
+                <div class="upload-zone" id="dropzonePF" style="padding:10px">
+                  <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
+                  <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
+                </div>
               </div>
             </div>
-          </div>
-
-          <!-- ── ZIP archive panel ── -->
-          <div id="panelZip" style="display:none">
-            <div class="upload-zone" id="dropzoneZip">
-              <input type="file" id="zipInput" accept=".zip"/>
-              <div class="upload-icon">🗜</div>
-              <div class="upload-label" id="zipLabel">
-                Drop .zip archive here or click<br/>
-                <span style="font-size:11px;color:var(--muted)">Mapping XML required — Workflow &amp; params auto-detected</span>
-              </div>
+            <!-- Shown instead of extras when a ZIP is loaded -->
+            <div id="zipNote" style="display:none;margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:6px;font-size:11px;color:var(--muted)">
+              🗜 Workflow &amp; parameter files auto-detected from ZIP.
             </div>
             <div id="zipWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
           </div>
@@ -919,11 +916,6 @@ const dropzonePF    = document.getElementById('dropzonePF');
 const paramInput    = document.getElementById('paramInput');
 const paramLabel    = document.getElementById('paramLabel');
 
-const dropzoneZip   = document.getElementById('dropzoneZip');
-const zipInput      = document.getElementById('zipInput');
-const zipLabel      = document.getElementById('zipLabel');
-const zipWarnings   = document.getElementById('zipWarnings');
-
 // v2.0 batch elements
 const dropzoneBatch = document.getElementById('dropzoneBatch');
 const batchInput    = document.getElementById('batchInput');
@@ -932,9 +924,8 @@ const batchWarnings = document.getElementById('batchWarnings');
 
 let selectedWorkflowFile = null;
 let selectedParamFile    = null;
-let selectedZipFile      = null;
-let selectedBatchFile    = null;          // v2.0
-let uploadMode = 'files';  // 'files' | 'zip' | 'batch'
+let selectedBatchFile    = null;
+let uploadMode = 'files';  // 'files' | 'batch'
 let _mainView  = 'landing';  // 'landing' | 'dashboard' | 'history' | 'review'
 
 // ─────────────────────────────────────────────
@@ -1069,33 +1060,25 @@ async function loadLandingStats() {
   } catch(e) { /* silent */ }
 }
 
-// ── Upload mode toggle (sidebar only) ─────────
+// ── Upload mode toggle ─────────────────────────
 function setUploadMode(mode) {
   uploadMode = mode;
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
-  document.getElementById('panelZip').style.display   = mode === 'zip'   ? '' : 'none';
   document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
   const tabFiles = document.getElementById('tabFiles');
-  const tabZip   = document.getElementById('tabZip');
   const tabBatch = document.getElementById('tabBatch');
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-  tabZip.className   = mode === 'zip'   ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
-  if (mode === 'zip')    startBtn.disabled = !selectedZipFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
   // Update tips box based on mode
   const tips = document.getElementById('submitTipsBox');
   if (!tips) return;
   const tipsMap = {
     files: `<strong style="color:var(--text)">💡 Individual mode tips:</strong><br/>
-      • Use <strong>Individual</strong> for a single mapping XML export from Informatica Designer.<br/>
-      • Optionally attach the matching <strong>Workflow XML</strong> to extract session-level metadata.<br/>
-      • <strong>Parameter files</strong> (.txt/.par) provide runtime variable values used in the mapping.`,
-    zip: `<strong style="color:var(--text)">💡 ZIP mode tips:</strong><br/>
-      • Drop a <strong>.zip archive</strong> containing your mapping XML plus optional workflow and parameter files.<br/>
-      • The tool auto-detects <code>workflow.xml</code> and <code>*.par</code> / <code>*.txt</code> parameter files.<br/>
-      • Saves time when your mapping, workflow, and params live in the same directory.`,
+      • Drop a <strong>mapping .xml</strong> or a <strong>.zip</strong> containing your mapping files.<br/>
+      • For .xml: optionally attach a <strong>Workflow XML</strong> and/or a <strong>parameter file</strong>.<br/>
+      • For .zip: workflow &amp; parameter files are auto-detected — no extra steps needed.`,
     batch: `<strong style="color:var(--text)">💡 Batch mode tips:</strong><br/>
       • <strong>Select Folder</strong> — pick a folder directly; it's auto-packaged into a ZIP for you.<br/>
       • <strong>Select ZIP</strong> — or supply your own ZIP with one subfolder per mapping.<br/>
@@ -1313,40 +1296,30 @@ function setParamFile(f) {
   dropzonePF.style.borderColor = 'var(--success)';
 }
 
-// Mapping XML dropzone wiring
+// Individual dropzone wiring — accepts .xml or .zip
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', e => {
   e.preventDefault(); dropzone.classList.remove('drag');
   const f = e.dataTransfer.files[0];
-  if (f && f.name.endsWith('.xml')) setFile(f);
+  if (f && (f.name.endsWith('.xml') || f.name.endsWith('.zip'))) setFile(f);
 });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
 
 function setFile(f) {
   selectedFile = f;
-  fileLabel.textContent = f.name;
+  const isZip = f.name.endsWith('.zip');
+  fileLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024/1024).toFixed(2)} MB)</span>`;
+  dropzone.style.borderColor = 'var(--success)';
+  // Show/hide optional XML extras based on file type
+  const extras  = document.getElementById('individualExtras');
+  const zipNote = document.getElementById('zipNote');
+  const zipWarn = document.getElementById('zipWarnings');
+  if (extras)  extras.style.display  = isZip ? 'none' : '';
+  if (zipNote) zipNote.style.display = isZip ? ''     : 'none';
+  if (zipWarn) zipWarn.style.display = 'none';
   if (uploadMode === 'files') startBtn.disabled = false;
-}
-
-// ZIP dropzone wiring
-dropzoneZip.addEventListener('click', () => zipInput.click());
-dropzoneZip.addEventListener('dragover', e => { e.preventDefault(); dropzoneZip.classList.add('drag'); });
-dropzoneZip.addEventListener('dragleave', () => dropzoneZip.classList.remove('drag'));
-dropzoneZip.addEventListener('drop', e => {
-  e.preventDefault(); dropzoneZip.classList.remove('drag');
-  const f = e.dataTransfer.files[0];
-  if (f && f.name.endsWith('.zip')) setZipFile(f);
-});
-zipInput.addEventListener('change', () => { if (zipInput.files[0]) setZipFile(zipInput.files[0]); });
-
-function setZipFile(f) {
-  selectedZipFile = f;
-  zipLabel.innerHTML = `✅ ${f.name} <span style="color:var(--muted);font-weight:400">(${(f.size/1024/1024).toFixed(2)} MB)</span>`;
-  dropzoneZip.style.borderColor = 'var(--success)';
-  zipWarnings.style.display = 'none';
-  if (uploadMode === 'zip') startBtn.disabled = false;
 }
 
 // Batch ZIP dropzone wiring (v2.0)
@@ -1442,52 +1415,30 @@ startBtn.addEventListener('click', async () => {
       alert('Batch upload error: ' + e.message);
       startBtn.disabled = false;
     }
-  } else if (uploadMode === 'zip') {
-    // ── ZIP upload path ──────────────────────
-    if (!selectedZipFile) { startBtn.disabled = false; return; }
-    const fd = new FormData();
-    fd.append('file', selectedZipFile);
-    if (_sName)  fd.append('submitter_name',  _sName);
-    if (_sTeam)  fd.append('submitter_team',  _sTeam);
-    if (_sNotes) fd.append('submitter_notes', _sNotes);
-    try {
-      const res  = await fetch('/api/jobs/zip', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.job_id) {
-        if (data.warnings && data.warnings.length) {
-          zipWarnings.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ ');
-          zipWarnings.style.display = 'block';
-        }
-        const _zfname = selectedZipFile.name;
-        showToast('✓ ZIP queued', `${_zfname} is processing — live insights below.`, 'ok', 4000);
-        resetSubmitForm();
-        await loadJobs();
-        if (_mainView === 'history') loadHistory();
-        loadSubmitRecentJobs();
-        showJobInsights(data.job_id, _zfname);
-      } else {
-        alert('ZIP upload failed: ' + JSON.stringify(data));
-        startBtn.disabled = false;
-      }
-    } catch(e) {
-      alert('ZIP upload error: ' + e.message);
-      startBtn.disabled = false;
-    }
   } else {
-    // ── Individual files path ────────────────
+    // ── Individual files path (XML or ZIP auto-detected) ────────────────
     if (!selectedFile) { startBtn.disabled = false; return; }
+    const isZipUpload = selectedFile.name.endsWith('.zip');
     const fd = new FormData();
     fd.append('file', selectedFile);
-    if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
-    if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
+    if (!isZipUpload) {
+      // Only attach extras for plain XML uploads
+      if (selectedWorkflowFile) fd.append('workflow_file', selectedWorkflowFile);
+      if (selectedParamFile)    fd.append('parameter_file', selectedParamFile);
+    }
     if (_sName)  fd.append('submitter_name',  _sName);
     if (_sTeam)  fd.append('submitter_team',  _sTeam);
     if (_sNotes) fd.append('submitter_notes', _sNotes);
+    const endpoint = isZipUpload ? '/api/jobs/zip' : '/api/jobs';
     try {
-      const res  = await fetch('/api/jobs', { method: 'POST', body: fd });
+      const res  = await fetch(endpoint, { method: 'POST', body: fd });
       const data = await res.json();
       if (data.job_id) {
-        const fname = selectedFile ? selectedFile.name : 'file';
+        if (isZipUpload && data.warnings && data.warnings.length) {
+          const zipWarn = document.getElementById('zipWarnings');
+          if (zipWarn) { zipWarn.innerHTML = '⚠️ ' + data.warnings.map(esc).join('<br/>⚠️ '); zipWarn.style.display = 'block'; }
+        }
+        const fname = selectedFile.name;
         showToast('✓ Job queued', `${fname} is processing — live insights below.`, 'ok', 4000);
         resetSubmitForm();
         await loadJobs();
@@ -1521,26 +1472,32 @@ const _JOB_PAGE_SIZE = 30;
 function resetSubmitForm() {
   // Clear all file selections
   selectedFile         = null;
-  selectedZipFile      = null;
   selectedBatchFile    = null;
   selectedWorkflowFile = null;
   selectedParamFile    = null;
 
-  // Reset dropzone labels
-  const xmlLabel   = document.getElementById('xmlLabel');
-  const zipLabel   = document.getElementById('zipLabel');
+  // Reset Individual dropzone
+  const fileLabel  = document.getElementById('fileLabel');
   const batchLabel = document.getElementById('batchLabel');
-  if (xmlLabel)   xmlLabel.textContent   = 'Drop Mapping .xml or click';
-  if (zipLabel)   zipLabel.textContent   = 'Drop ZIP or click';
-  if (batchLabel) batchLabel.textContent = 'Drop batch ZIP or click';
+  if (fileLabel) fileLabel.innerHTML = 'Mapping XML or ZIP<br/><span style="font-size:11px;color:var(--muted)">Drop .xml or .zip here, or click to browse</span>';
+  if (batchLabel) batchLabel.textContent = 'Or drag a batch .zip here';
 
-  const wfLabel = document.getElementById('wfLabel');
-  const pfLabel = document.getElementById('pfLabel');
+  // Restore optional extras visibility
+  const extras  = document.getElementById('individualExtras');
+  const zipNote = document.getElementById('zipNote');
+  const zipWarn = document.getElementById('zipWarnings');
+  if (extras)  extras.style.display  = '';
+  if (zipNote) zipNote.style.display = 'none';
+  if (zipWarn) zipWarn.style.display = 'none';
+
+  // Reset labels for workflow/param zones
+  const wfLabel = document.getElementById('workflowLabel');
+  const pfLabel = document.getElementById('paramLabel');
   if (wfLabel) wfLabel.textContent = 'Drop Workflow .xml or click';
   if (pfLabel) pfLabel.textContent = 'Drop parameter file or click';
 
   // Reset dropzone borders
-  ['dropzoneXML','dropzoneZIP','dropzoneBatch','dropzoneWF','dropzonePF'].forEach(id => {
+  ['dropzone','dropzoneBatch','dropzoneWF','dropzonePF'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.borderColor = '';
   });
