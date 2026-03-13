@@ -121,10 +121,10 @@ test.describe('File Submission', () => {
     await expect(page.locator('#panelFiles')).toBeVisible();
     await expect(page.locator('#panelBatch')).not.toBeVisible();
 
-    // Verify the input accepts both .xml and .zip
+    // Individual only accepts .xml (ZIP goes via Batch)
     const accept = await page.locator('#fileInput').getAttribute('accept');
     expect(accept).toContain('.xml');
-    expect(accept).toContain('.zip');
+    expect(accept).not.toContain('.zip');
   });
 
   // ─── SUB-06: Batch mode ────────────────────────────────────────────────────
