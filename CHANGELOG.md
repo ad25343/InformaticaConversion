@@ -10,6 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.19] — 2026-03-13 — Batch flat-folder mode (all XMLs in one folder → one job each)
+
+### Fixed
+
+- **Batch ZIP flat-folder support**: When a user selects a folder containing 17 mapping XMLs directly (no subfolders), the browser's `webkitdirectory` picker produces a ZIP where all XMLs live under one top-level folder. Previously the extractor treated that entire folder as one mapping and picked only the first XML, creating 1 job instead of 17. Now, when a folder contains multiple Mapping XMLs and no workflow/params files, it enters **flat-folder mode** and expands each XML into its own independent job.
+- Standard subfolder-per-mapping mode is unchanged.
+- Error message updated to mention flat-folder support.
+
+---
+
 ## [2.18.18] — 2026-03-13 — Batch startup recovery (re-queue pending, restore gate tracking)
 
 ### Fixed

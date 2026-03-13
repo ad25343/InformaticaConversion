@@ -256,58 +256,93 @@ def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
 
     for folder_name in sorted(folders.keys()):
         entries = folders[folder_name]
-        folder_result = ZipParseResult()
-        folder_result.warnings = []  # reset
 
-        for rel_path, content_bytes in entries.items():
+        # First pass: decode everything and bucket by file type.
+        mapping_xmls:   dict[str, str] = {}   # rel_path → text
+        workflow_xmls:  dict[str, str] = {}
+        parameter_files: dict[str, str] = {}
+        skipped_in_folder: list[str] = []
+
+        for rel_path, content_bytes in sorted(entries.items()):
             try:
                 text = content_bytes.decode("utf-8", errors="replace")
             except Exception:
                 log.warning("Could not decode '%s/%s' as UTF-8, skipping", folder_name, rel_path)
-                folder_result.skipped.append(f"{folder_name}/{rel_path}")
+                skipped_in_folder.append(f"{folder_name}/{rel_path}")
                 continue
 
             detected = _detect_type(text)
             log.debug("Batch entry '%s/%s' detected as %s", folder_name, rel_path, detected.value)
 
             if detected == FileType.MAPPING:
-                if folder_result.mapping_xml is not None:
-                    folder_result.warnings.append(
-                        f"Folder '{folder_name}': multiple Mapping XMLs found — "
-                        f"using '{folder_result.mapping_filename}', ignoring '{rel_path}'."
-                    )
-                else:
-                    folder_result.mapping_xml = text
-                    folder_result.mapping_filename = f"{folder_name}/{rel_path}"
-
+                mapping_xmls[rel_path] = text
             elif detected == FileType.WORKFLOW:
-                if folder_result.workflow_xml is not None:
-                    folder_result.warnings.append(
-                        f"Folder '{folder_name}': multiple Workflow XMLs found — "
-                        f"using '{folder_result.workflow_filename}', ignoring '{rel_path}'."
-                    )
-                else:
-                    folder_result.workflow_xml = text
-                    folder_result.workflow_filename = f"{folder_name}/{rel_path}"
-
+                workflow_xmls[rel_path] = text
             elif detected == FileType.PARAMETER:
-                if folder_result.parameter_file is not None:
-                    folder_result.warnings.append(
-                        f"Folder '{folder_name}': multiple parameter files found — "
-                        f"using '{folder_result.param_filename}', ignoring '{rel_path}'."
-                    )
-                else:
-                    folder_result.parameter_file = text
-                    folder_result.param_filename = f"{folder_name}/{rel_path}"
-
+                parameter_files[rel_path] = text
             else:
-                folder_result.skipped.append(f"{folder_name}/{rel_path}")
+                skipped_in_folder.append(f"{folder_name}/{rel_path}")
 
-        if folder_result.mapping_xml is None:
-            log.warning(
-                "Batch ZIP: folder '%s' has no Mapping XML — skipping", folder_name
-            )
+        if not mapping_xmls:
+            log.warning("Batch ZIP: folder '%s' has no Mapping XML — skipping", folder_name)
             continue
+
+        # ── Flat-folder mode ────────────────────────────────────────────────
+        # When a folder contains MULTIPLE mapping XMLs and no workflow/params
+        # files (i.e. the user dropped a flat directory of XMLs rather than
+        # one subfolder-per-mapping), expand each XML into its own job.
+        # This is the common case when selecting a folder via the browser's
+        # webkitdirectory picker.
+        if len(mapping_xmls) > 1 and not workflow_xmls and not parameter_files:
+            log.info(
+                "Batch folder '%s': flat-folder mode — %d mapping XML(s) → %d job(s)",
+                folder_name, len(mapping_xmls), len(mapping_xmls),
+            )
+            for rel_path, text in mapping_xmls.items():
+                r = ZipParseResult()
+                r.mapping_xml      = text
+                r.mapping_filename = f"{folder_name}/{rel_path}"
+                r.warnings         = []
+                r.skipped          = []
+                results.append(r)
+            continue
+
+        # ── Standard one-mapping-per-folder mode ────────────────────────────
+        folder_result = ZipParseResult()
+        folder_result.warnings = []
+        folder_result.skipped  = list(skipped_in_folder)
+
+        # Pick the first (alphabetically) mapping XML; warn about extras.
+        for idx, (rel_path, text) in enumerate(mapping_xmls.items()):
+            if idx == 0:
+                folder_result.mapping_xml      = text
+                folder_result.mapping_filename = f"{folder_name}/{rel_path}"
+            else:
+                folder_result.warnings.append(
+                    f"Folder '{folder_name}': multiple Mapping XMLs found — "
+                    f"using '{folder_result.mapping_filename}', ignoring '{rel_path}'."
+                )
+
+        # Pick first workflow / parameter file; warn about extras.
+        for idx, (rel_path, text) in enumerate(workflow_xmls.items()):
+            if idx == 0:
+                folder_result.workflow_xml      = text
+                folder_result.workflow_filename = f"{folder_name}/{rel_path}"
+            else:
+                folder_result.warnings.append(
+                    f"Folder '{folder_name}': multiple Workflow XMLs found — "
+                    f"using '{folder_result.workflow_filename}', ignoring '{rel_path}'."
+                )
+
+        for idx, (rel_path, text) in enumerate(parameter_files.items()):
+            if idx == 0:
+                folder_result.parameter_file = text
+                folder_result.param_filename = f"{folder_name}/{rel_path}"
+            else:
+                folder_result.warnings.append(
+                    f"Folder '{folder_name}': multiple parameter files found — "
+                    f"using '{folder_result.param_filename}', ignoring '{rel_path}'."
+                )
 
         log.info(
             "Batch folder '%s': mapping=%s workflow=%s params=%s",
@@ -321,7 +356,8 @@ def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
     if not results:
         raise ZipExtractionError(
             "No valid mapping folders found in the batch ZIP. "
-            "Each subfolder must contain an Informatica Mapping XML (<MAPPING> element)."
+            "Each subfolder must contain an Informatica Mapping XML (<MAPPING> element), "
+            "or select a flat folder of .xml files."
         )
 
     log.info("Batch ZIP classification complete: %d mapping(s) found", len(results))
