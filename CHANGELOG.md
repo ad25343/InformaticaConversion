@@ -10,6 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.20] — 2026-03-13 — Batch-level delete from History
+
+### Added
+
+- **"🗑 Delete batch" button** on every batch group header row in History. One click soft-deletes all jobs in the batch, removes the group from the DOM immediately, and refreshes the job counter — no page reload needed.
+- `DELETE /api/batches/{batch_id}` endpoint — soft-deletes all non-deleted jobs in a batch atomically, cleans up any S2T Excel artefacts, and returns the count of jobs deleted.
+- `db.delete_batch_jobs(batch_id)` — bulk soft-delete helper.
+
+---
+
 ## [2.18.19] — 2026-03-13 — Batch flat-folder mode (all XMLs in one folder → one job each)
 
 ### Fixed

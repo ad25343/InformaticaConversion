@@ -356,6 +356,33 @@ async def delete_job(job_id: str):
     return {"flagged_deleted": True, "job_id": job_id, "cleaned": cleaned}
 
 
+@router.delete("/batches/{batch_id}")
+async def delete_batch(batch_id: str):
+    """Soft-delete every non-deleted job in a batch in one operation.
+    Preserves DB records and log files for the audit trail."""
+    from .agents.s2t_agent import s2t_excel_path
+
+    count = await db.delete_batch_jobs(batch_id)
+    if count == 0:
+        raise HTTPException(404, "Batch not found or all jobs already deleted")
+
+    # Clean up any S2T artefacts for each batch job
+    batch_jobs = await db.get_batch_jobs(batch_id)
+    cleaned_s2t = 0
+    for j in batch_jobs:
+        s2t_path = s2t_excel_path(j["job_id"])
+        if s2t_path and s2t_path.exists():
+            try:
+                s2t_path.unlink()
+                cleaned_s2t += 1
+            except OSError:
+                pass
+
+    logger.info("Batch soft-deleted: batch_id=%s jobs_deleted=%d s2t_cleaned=%d",
+                batch_id, count, cleaned_s2t)
+    return {"flagged_deleted": True, "batch_id": batch_id, "jobs_deleted": count}
+
+
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     job = await db.get_job(job_id)

@@ -1697,6 +1697,10 @@ function _histBatchGroup(batchId, jobs) {
         <span style="font-size:11px;color:var(--muted)">${total} mapping${total!==1?'s':''}</span>
         <span class="badge ${overallCls}">${overallLbl}</span>
         <span style="font-size:11px;color:var(--muted)">${dt}</span>
+        <button class="btn btn-sm btn-ghost" id="delBatch_${batchKey}"
+                style="font-size:11px;padding:3px 8px;color:var(--error,#f87171);margin-left:4px"
+                onclick="event.stopPropagation();deleteBatch('${esc(batchId)}','${batchKey}')"
+                title="Remove entire batch from history">🗑 Delete batch</button>
       </div>
     </td>
   </tr>
@@ -1734,6 +1738,32 @@ async function deleteHistJob(jobId, btn) {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = '🗑';
+    showToast('Delete failed', e.message, 'error', 4000);
+  }
+}
+
+// ── Soft-delete an entire batch from History ──────────────────────────────
+async function deleteBatch(batchId, batchKey) {
+  if (!confirm(`Remove all jobs in this batch from history?\nRecords are kept for audit purposes.`)) return;
+  const btn = document.getElementById(`delBatch_${batchKey}`);
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const res = await fetch(`/api/batches/${encodeURIComponent(batchId)}`, { method: 'DELETE' });
+    if (res.ok) {
+      // Remove the header row + children wrapper from the DOM
+      const headerRow  = btn?.closest('tr');
+      if (headerRow) {
+        const next = headerRow.nextElementSibling;
+        if (next && next.id && next.id.startsWith('batchChildren_')) next.remove();
+        headerRow.remove();
+      }
+      await loadJobs();
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '🗑 Delete batch'; }
+      showToast('Delete failed', `Server returned ${res.status}`, 'error', 4000);
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Delete batch'; }
     showToast('Delete failed', e.message, 'error', 4000);
   }
 }

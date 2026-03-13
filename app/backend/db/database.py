@@ -452,6 +452,20 @@ async def delete_job(job_id: str) -> bool:
         return db.total_changes > 0
 
 
+async def delete_batch_jobs(batch_id: str) -> int:
+    """Soft-delete all non-deleted jobs belonging to *batch_id*.
+    Returns the number of rows updated."""
+    now = datetime.utcnow().isoformat()
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE jobs SET deleted_at = ?, updated_at = ? "
+            "WHERE batch_id = ? AND deleted_at IS NULL",
+            (now, now, batch_id),
+        )
+        await db.commit()
+        return db.total_changes
+
+
 async def list_deleted_jobs() -> List[dict]:
     """Return soft-deleted jobs, newest first, for the Log Archive sidebar."""
     async with _connect() as db:
