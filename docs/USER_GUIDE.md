@@ -75,28 +75,34 @@ Every job displays a short **tracking ID** (`#XXXXXXXX`) — an 8-character code
 
 ### Step 1 — Upload your files
 
-Navigate to the **Submit** tab. The left column contains the upload form; select your upload mode using the tabs at the top:
+Navigate to the **Submit** tab. The left column contains the upload form; select your upload mode using the two tabs at the top:
 
 | Mode | Use when |
 |---|---|
-| **📄 Individual** | You have separate mapping, workflow, and/or parameter files |
-| **🗜 ZIP** | Your files are already zipped together |
-| **📦 Batch** | You want to convert multiple mappings at once (one subfolder per mapping) |
+| **📄 Individual** | Converting a single mapping — upload an `.xml` directly, or a `.zip` if your files are already bundled |
+| **📦 Batch** | Converting multiple mappings at once (one subfolder per mapping) |
 
-For Individual mode, provide:
+**Individual mode** accepts `.xml` or `.zip`:
 
-| File | Required? | Description |
+| File / format | Required? | Description |
 |---|---|---|
-| Mapping XML | **Yes** | Informatica PowerCenter mapping export (`.xml`) |
-| Workflow XML | No | Enables session-level extraction (Step 0) |
-| Parameter file | No | Enables `$$VARIABLE` resolution throughout the mapping |
+| Mapping XML (`.xml`) | **Yes** | Informatica PowerCenter mapping export |
+| Workflow XML | No | Attach separately when using `.xml` mode — enables session-level extraction (Step 0) |
+| Parameter file | No | Attach separately when using `.xml` mode — enables `$$VARIABLE` resolution |
+| Single-mapping ZIP (`.zip`) | — | Drop a ZIP containing mapping.xml + optional workflow/params; extras are auto-detected |
 
-For Batch ZIP mode, package your files as one subfolder per mapping:
+**Batch mode** lets you convert many mappings in one go. You can either:
+- Click **📁 Select Folder** to pick a folder directly — it is packaged into a ZIP automatically in the browser.
+- Click **📦 Select ZIP** if you already have a ZIP prepared.
+
+Structure your folder (or ZIP) with one subfolder per mapping:
 
 ```
-batch.zip/
+my_batch_folder/   (or batch.zip/)
   mapping_a/mapping.xml
-  mapping_b/mapping.xml  workflow.xml  params.txt
+  mapping_b/mapping.xml
+  mapping_b/workflow.xml    ← optional
+  mapping_b/params.txt      ← optional
 ```
 
 The tool processes all mappings concurrently up to `BATCH_CONCURRENCY` (default: 3).
@@ -679,7 +685,7 @@ The tool detects and inline-expands mapplet definitions automatically (v2.12). I
 Not directly in the current version. If the assigned stack (Step 6) is wrong, reject at Gate 3 and re-upload — the tool will reassign on the next run. A manual override UI is planned for a future version.
 
 **Q: How do I convert multiple mappings at once?**
-Create a ZIP file containing all your mapping XMLs (you can include workflow and parameter files too) and upload the ZIP instead of a single XML. The tool processes all mappings concurrently.
+Use **Batch mode** on the Submit tab. Click **📁 Select Folder** to pick a folder (the browser packages it into a ZIP automatically), or click **📦 Select ZIP** if you already have one. Structure it with one subfolder per mapping. The tool processes all mappings concurrently.
 
 **Q: My gate review was rejected — how do I retry?**
 Fix the underlying issue in Informatica, re-export the mapping XML, and upload the file again as a new job. Deleted jobs retain their logs in the archive for reference.

@@ -42,17 +42,18 @@ bash start.sh
 
 ## Upload Modes
 
-**Individual files** — upload up to three files separately:
-- Mapping XML (required)
-- Workflow XML (optional — enables session config extraction and $$VAR cross-referencing)
-- Parameter file `.txt` or `.param` (optional — resolves all `$$VARIABLE` references)
+**📄 Individual** — single mapping, two options:
+- Drop a **Mapping XML** (`.xml`) directly. Optionally attach a Workflow XML and/or parameter file (`.txt`/`.par`) for richer extraction.
+- Drop a **single-mapping ZIP** (`.zip`) — workflow and parameter files inside are auto-detected. No need to attach them separately.
 
-**ZIP archive** — drop a ZIP containing any combination of the above; file types are auto-detected from XML structure (not filename).
+**📦 Batch** *(v2.0)* — multiple mappings in one go. Either:
+- Click **📁 Select Folder** to pick a folder directly — the browser packages it into a ZIP automatically.
+- Click **📦 Select ZIP** if you already have one prepared.
 
-**Batch ZIP** *(v2.0)* — drop a ZIP with one subfolder per mapping; all mappings are converted concurrently (up to 3 at a time). Each mapping runs through the full 12-step pipeline with independent review gates.
+All mappings run concurrently (up to 3 at a time), each through the full 12-step pipeline with independent review gates.
 
 ```
-batch.zip/
+my_batch_folder/   (or batch.zip/)
   mapping_a/
     mapping.xml       ← required
     workflow.xml      ← optional

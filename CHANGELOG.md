@@ -10,6 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.13] — 2026-03-13 — Simplified Upload: Two-Tab Layout (Individual + Batch)
+
+### Changed
+
+- **Upload tabs reduced from three to two.** The separate 🗜 ZIP tab has been removed. Individual mode now accepts both `.xml` and `.zip` in the same dropzone and auto-routes to the correct API endpoint (`/api/jobs` for XML, `/api/jobs/zip` for ZIP). When a ZIP is selected, the optional Workflow XML and parameter file zones are hidden and replaced with an "auto-detected" note.
+- **Batch mode folder select.** The 📁 Select Folder button packages the chosen folder into a ZIP client-side (via JSZip) before submitting, so users never need to create a ZIP manually.
+- Updated `docs/USER_GUIDE.md` and `app/README.md` to reflect the two-tab layout and folder-select batch option.
+- Updated SUB-02, SUB-05, SUB-06, SUB-07 Playwright tests to match the new layout.
+
+---
+
 ## [2.18.10] — 2026-03-13 — Test Suite Reliability: Auth-Last Ordering & Login Warmup Fix
 
 ### Fixed
