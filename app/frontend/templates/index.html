@@ -558,8 +558,7 @@
               <input type="file" id="fileInput" accept=".xml,.zip"/>
               <div class="upload-icon">📂</div>
               <div class="upload-label" id="fileLabel">
-                Mapping XML or ZIP<br/>
-                <span style="font-size:11px;color:var(--muted)">Drop .xml or .zip here, or click to browse</span>
+                Drop mapping .xml or .zip here, or click to browse
               </div>
             </div>
             <!-- Optional extras — hidden when a ZIP is selected (bundled inside) -->
@@ -1479,7 +1478,7 @@ function resetSubmitForm() {
   // Reset Individual dropzone
   const fileLabel  = document.getElementById('fileLabel');
   const batchLabel = document.getElementById('batchLabel');
-  if (fileLabel) fileLabel.innerHTML = 'Mapping XML or ZIP<br/><span style="font-size:11px;color:var(--muted)">Drop .xml or .zip here, or click to browse</span>';
+  if (fileLabel) fileLabel.textContent = 'Drop mapping .xml or .zip here, or click to browse';
   if (batchLabel) batchLabel.textContent = 'Or drag a batch .zip here';
 
   // Restore optional extras visibility
