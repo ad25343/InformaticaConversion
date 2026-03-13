@@ -591,19 +591,41 @@
 
           <!-- ── Batch ZIP panel ── -->
           <div id="panelBatch" style="display:none">
-            <div class="upload-zone" id="dropzoneBatch">
-              <input type="file" id="batchInput" accept=".zip"/>
-              <div class="upload-icon">📦</div>
-              <div class="upload-label" id="batchLabel">
-                Drop batch .zip here or click<br/>
+            <!-- Hidden inputs — triggered by buttons/dropzone below -->
+            <input type="file" id="batchInput" accept=".zip" style="display:none"/>
+            <input type="file" id="batchFolderInput" webkitdirectory multiple style="display:none"/>
+
+            <!-- Two-button picker row -->
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+              <button type="button" onclick="document.getElementById('batchFolderInput').click()"
+                      style="flex:1;padding:10px 8px;border-radius:8px;border:1px dashed var(--accent);background:var(--surface);color:var(--accent);font-size:12px;font-weight:600;cursor:pointer">
+                📁 Select Folder
+              </button>
+              <button type="button" onclick="document.getElementById('batchInput').click()"
+                      style="flex:1;padding:10px 8px;border-radius:8px;border:1px dashed var(--border);background:var(--surface);color:var(--muted);font-size:12px;font-weight:600;cursor:pointer">
+                📦 Select ZIP
+              </button>
+            </div>
+
+            <!-- Drag-and-drop zone (ZIP only) -->
+            <div class="upload-zone" id="dropzoneBatch" style="padding:12px 10px">
+              <div class="upload-icon" style="font-size:20px">📦</div>
+              <div class="upload-label" id="batchLabel" style="font-size:12px">
+                Or drag a batch .zip here<br/>
                 <span style="font-size:11px;color:var(--muted)">One subfolder per mapping — up to 3 run concurrently</span>
               </div>
             </div>
+
+            <!-- Packaging progress (shown while building ZIP from folder) -->
+            <div id="batchPackaging" style="display:none;margin-top:6px;font-size:11px;color:var(--accent);text-align:center">
+              ⏳ Packaging folder into ZIP…
+            </div>
+
             <div style="margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.6">
-              <strong style="color:var(--text)">ZIP structure:</strong><br/>
-              batch.zip / mapping_a / mapping.xml<br/>
-              batch.zip / mapping_a / workflow.xml <em>(optional)</em><br/>
-              batch.zip / mapping_b / mapping.xml …
+              <strong style="color:var(--text)">Folder or ZIP structure:</strong><br/>
+              my_batch_folder / mapping_a / mapping.xml<br/>
+              my_batch_folder / mapping_a / workflow.xml <em>(optional)</em><br/>
+              my_batch_folder / mapping_b / mapping.xml …
             </div>
             <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
           </div>
@@ -832,6 +854,9 @@
 
   </main>
 </div>
+
+<!-- JSZip — used to package a selected folder into a ZIP for batch submission -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
 <script>
 // ─────────────────────────────────────────────
@@ -1072,7 +1097,8 @@ function setUploadMode(mode) {
       • The tool auto-detects <code>workflow.xml</code> and <code>*.par</code> / <code>*.txt</code> parameter files.<br/>
       • Saves time when your mapping, workflow, and params live in the same directory.`,
     batch: `<strong style="color:var(--text)">💡 Batch mode tips:</strong><br/>
-      • Package multiple mappings as <strong>one subfolder per mapping</strong> inside the ZIP.<br/>
+      • <strong>Select Folder</strong> — pick a folder directly; it's auto-packaged into a ZIP for you.<br/>
+      • <strong>Select ZIP</strong> — or supply your own ZIP with one subfolder per mapping.<br/>
       • Up to 3 jobs run concurrently. Large batches are queued automatically.<br/>
       • Track each child job individually in Job History once submitted.`,
   };
@@ -1324,7 +1350,7 @@ function setZipFile(f) {
 }
 
 // Batch ZIP dropzone wiring (v2.0)
-dropzoneBatch.addEventListener('click', () => batchInput.click());
+// Note: click is now handled by the "Select ZIP" button; dropzone is drag-only
 dropzoneBatch.addEventListener('dragover', e => { e.preventDefault(); dropzoneBatch.classList.add('drag'); });
 dropzoneBatch.addEventListener('dragleave', () => dropzoneBatch.classList.remove('drag'));
 dropzoneBatch.addEventListener('drop', e => {
@@ -1333,6 +1359,42 @@ dropzoneBatch.addEventListener('drop', e => {
   if (f && f.name.endsWith('.zip')) setBatchFile(f);
 });
 batchInput.addEventListener('change', () => { if (batchInput.files[0]) setBatchFile(batchInput.files[0]); });
+
+// Folder selection — package into a ZIP client-side using JSZip, then treat as batch file
+document.getElementById('batchFolderInput').addEventListener('change', async function () {
+  const files = Array.from(this.files);
+  if (!files.length) return;
+
+  // Determine the top-level folder name (first path component)
+  const rootName = (files[0].webkitRelativePath || files[0].name).split('/')[0] || 'batch';
+
+  // Show packaging indicator, disable start button while building
+  const packagingEl = document.getElementById('batchPackaging');
+  packagingEl.style.display = 'block';
+  startBtn.disabled = true;
+  batchLabel.innerHTML = `⏳ Packaging <strong>${rootName}</strong>…`;
+  dropzoneBatch.style.borderColor = 'var(--accent)';
+
+  try {
+    const zip = new JSZip();
+    for (const f of files) {
+      // webkitRelativePath: "rootFolder/subfolder/file.xml"
+      // We want to preserve the full relative path inside the ZIP
+      const relativePath = f.webkitRelativePath || f.name;
+      zip.file(relativePath, await f.arrayBuffer());
+    }
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const zipFile = new File([blob], rootName + '.zip', { type: 'application/zip' });
+    setBatchFile(zipFile);
+  } catch (err) {
+    batchLabel.innerHTML = `❌ Failed to package folder: ${err.message}`;
+    dropzoneBatch.style.borderColor = 'var(--error)';
+  } finally {
+    packagingEl.style.display = 'none';
+    // Reset the input so the same folder can be re-selected if needed
+    this.value = '';
+  }
+});
 
 function setBatchFile(f) {
   selectedBatchFile = f;
