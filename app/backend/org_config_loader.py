@@ -7,22 +7,60 @@ All agents import from here. Missing files / keys fall back to built-in defaults
 """
 from __future__ import annotations
 import os
+import time
 import yaml
 from pathlib import Path
-from functools import lru_cache
 
 _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
+# ── TTL cache for YAML files ──────────────────────────────────────────────────
+# Replaces @lru_cache(maxsize=1) so that runtime edits to org_config.yaml or
+# warehouse_registry.yaml are picked up within _TTL_SECS without a restart.
+#
+# Strategy:
+#   - On every call, check if _TTL_SECS have elapsed since the last mtime check.
+#   - If yes, stat the file; if the mtime changed, reload it.
+#   - If the mtime is unchanged (or the stat interval hasn't elapsed), return cached data.
+#
+# No external dependencies (watchdog, inotify) required.
 
-@lru_cache(maxsize=1)
+_TTL_SECS = 60.0          # seconds between mtime checks
+_yaml_cache: dict[Path, tuple[float, float, dict]] = {}
+# _yaml_cache[path] = (last_mtime, last_check_monotonic, data_dict)
+
+
 def _load_yaml(path: Path) -> dict:
+    """Load a YAML file with a TTL-based mtime cache. Thread-safe for asyncio."""
+    now = time.monotonic()
+    if path in _yaml_cache:
+        last_mtime, last_check, data = _yaml_cache[path]
+        if now - last_check < _TTL_SECS:
+            return data          # within TTL window — return cached
+        try:
+            current_mtime = os.path.getmtime(path)
+        except OSError:
+            _yaml_cache[path] = (last_mtime, now, data)   # file gone — extend TTL
+            return data
+        if current_mtime == last_mtime:
+            _yaml_cache[path] = (last_mtime, now, data)   # unchanged — extend TTL
+            return data
+        # mtime changed — fall through to reload
+
+    # Fresh load (first call or file changed)
     if not path.exists():
+        _yaml_cache[path] = (0.0, now, {})
         return {}
     try:
         with open(path) as f:
-            return yaml.safe_load(f) or {}
+            data = yaml.safe_load(f) or {}
     except Exception:
-        return {}
+        data = {}
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    _yaml_cache[path] = (mtime, now, data)
+    return data
 
 
 def get_org_config() -> dict:

@@ -37,11 +37,23 @@ def _encode_state(state: dict) -> str:
     return _COMPRESS_PREFIX + base64.b64encode(compressed).decode()
 
 
+class _CorruptedState(dict):
+    """
+    Empty dict subclass returned by _decode_state() when deserialization fails.
+
+    Being a dict subclass means all existing callers that do ``state.get()``,
+    ``state.update()``, etc. continue to work without modification.  Callers
+    that care about corruption (update_job, get_job) use ``isinstance`` to
+    detect it and set the ``state_corrupted`` column in the DB.
+    """
+
+
 def _decode_state(stored: str) -> dict:
     """Deserialize state — handles both compressed and legacy plain-JSON formats.
 
-    Returns an empty dict rather than raising on corrupted data so a single
-    bad row cannot crash a list-jobs call or pipeline query.
+    Returns a plain dict on success, or a _CorruptedState (empty dict subclass)
+    when deserialization fails.  Callers that write to the DB should check
+    ``isinstance(result, _CorruptedState)`` and set state_corrupted=1.
     """
     if not stored:
         return {}
@@ -52,11 +64,11 @@ def _decode_state(stored: str) -> dict:
         return json.loads(stored)   # legacy plain JSON
     except Exception as exc:
         _db_log.error(
-            "State deserialization failed (returning {}). "
+            "State deserialization failed — row is corrupted. "
             "Stored value prefix: %.80r — error: %s",
             stored, exc,
         )
-        return {}
+        return _CorruptedState()   # detectable sentinel; behaves as empty dict
 
 import os  # noqa: F401  kept for backward-compat imports elsewhere
 from ..config import settings as _cfg
@@ -95,7 +107,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     complexity_tier         TEXT,
     submitter_name          TEXT,
     submitter_team          TEXT,
-    submitter_notes         TEXT
+    submitter_notes         TEXT,
+    state_corrupted         INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -227,6 +240,13 @@ async def init_db():
                 await db.execute(sql)
             except Exception:
                 pass  # column already present
+        # v2.19.0 — state_corrupted flag (detectable data loss sentinel)
+        try:
+            await db.execute(
+                "ALTER TABLE jobs ADD COLUMN state_corrupted INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass  # column already present
         await db.commit()
 
 
@@ -264,7 +284,17 @@ async def get_job(job_id: str) -> Optional[dict]:
             if not row:
                 return None
             d = dict(row)
-            d["state"] = _decode_state(d["state_json"])
+            raw_state = _decode_state(d["state_json"])
+            if isinstance(raw_state, _CorruptedState):
+                # Flag the row so the UI can surface a warning; idempotent write.
+                await db.execute(
+                    "UPDATE jobs SET state_corrupted=1 WHERE job_id=? AND state_corrupted=0",
+                    (job_id,),
+                )
+                await db.commit()
+                _db_log.error("Job %s has corrupted state_json — flagged state_corrupted=1", job_id)
+                d["state_corrupted"] = 1
+            d["state"] = dict(raw_state)  # strip subclass, return plain dict
             return d
 
 
@@ -325,19 +355,29 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
                 "SELECT state_json FROM jobs WHERE job_id = ?", (job_id,)
             ) as cur:
                 row = await cur.fetchone()
-                current = _decode_state(row[0]) if row else {}
+                raw = _decode_state(row[0]) if row else {}
+            _corrupted = isinstance(raw, _CorruptedState)
+            if _corrupted:
+                _db_log.error(
+                    "update_job(): corrupted state detected for job=%s — "
+                    "resetting to patch-only and flagging state_corrupted=1",
+                    job_id,
+                )
+            current = dict(raw)   # plain dict; _CorruptedState is an empty dict subclass
             current.update(state_patch)
             if _tier:
                 await db.execute(
                     "UPDATE jobs SET status=?, current_step=?, state_json=?, "
-                    "updated_at=?, complexity_tier=? WHERE job_id=?",
-                    (status, step, _encode_state(current), now, _tier, job_id),
+                    "updated_at=?, complexity_tier=?, state_corrupted=? WHERE job_id=?",
+                    (status, step, _encode_state(current), now, _tier,
+                     1 if _corrupted else 0, job_id),
                 )
             else:
                 await db.execute(
-                    "UPDATE jobs SET status=?, current_step=?, state_json=?, updated_at=?"
-                    " WHERE job_id=?",
-                    (status, step, _encode_state(current), now, job_id),
+                    "UPDATE jobs SET status=?, current_step=?, state_json=?, "
+                    "updated_at=?, state_corrupted=? WHERE job_id=?",
+                    (status, step, _encode_state(current), now,
+                     1 if _corrupted else 0, job_id),
                 )
             await db.execute("COMMIT")
         except Exception:

@@ -18,6 +18,7 @@ from ..models.schemas import (
 )
 from .classifier_agent import _build_pattern_yaml_skeleton
 from ._client import make_client
+from .base import BaseAgent
 from ..security_knowledge import build_security_context_block
 from ..org_config_loader import build_dw_audit_rules, get_warehouse_registry, get_warehouse_cred_overrides
 
@@ -103,6 +104,7 @@ def _is_sql_friendly(trans_types: list[str]) -> bool:
 
 async def _get_stack_rationale(stack: TargetStack, complexity: ComplexityReport,
                                 trans_types: list) -> str:
+    from ._client import call_claude_with_retry
     client = make_client()
     prompt = (
         f"A mapping has been assigned to {stack.value}.\n"
@@ -114,7 +116,8 @@ async def _get_stack_rationale(stack: TargetStack, complexity: ComplexityReport,
         "Be concrete. No fluff."
     )
     try:
-        msg = await client.messages.create(
+        msg = await call_claude_with_retry(
+            client,
             model=MODEL, max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -1009,7 +1012,28 @@ def _build_yaml_artifacts(spr: SessionParseReport) -> dict[str, str]:
     return artifacts
 
 
-async def convert(
+class ConversionAgent(BaseAgent):
+
+    async def convert(
+        self,
+        stack_assignment: StackAssignment,
+        documentation_md: str,
+        graph: dict,
+        accepted_fixes: list[str] | None = None,
+        security_findings: list[dict] | None = None,
+        session_parse_report: Optional[SessionParseReport] = None,
+        verification_flags: list[dict] | None = None,
+        manifest_overrides: list[dict] | None = None,
+        complexity_report: Optional["ComplexityReport"] = None,
+    ) -> ConversionOutput:
+        return await _convert_impl(
+            stack_assignment, documentation_md, graph,
+            accepted_fixes, security_findings, session_parse_report,
+            verification_flags, manifest_overrides, complexity_report,
+        )
+
+
+async def _convert_impl(
     stack_assignment: StackAssignment,
     documentation_md: str,
     graph: dict,
@@ -1033,6 +1057,7 @@ async def convert(
                           these take precedence over tool-inferred connections for any
                           ambiguous or unmapped items
     """
+    from ._client import call_claude_with_retry
     client = make_client()
     stack = stack_assignment.assigned_stack
 
@@ -1109,7 +1134,8 @@ async def convert(
         documentation_md=documentation_md[:30_000],
     )
 
-    message = await client.messages.create(
+    message = await call_claude_with_retry(
+        client,
         model=MODEL,
         max_tokens=32000,
         system=system_map.get(stack, PYSPARK_SYSTEM),
@@ -1246,4 +1272,23 @@ async def convert(
         files=files,
         notes=notes,
         parse_ok=parsed_ok,
+    )
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+async def convert(
+    stack_assignment: StackAssignment,
+    documentation_md: str,
+    graph: dict,
+    accepted_fixes: list[str] | None = None,
+    security_findings: list[dict] | None = None,
+    session_parse_report: Optional[SessionParseReport] = None,
+    verification_flags: list[dict] | None = None,
+    manifest_overrides: list[dict] | None = None,
+    complexity_report: Optional["ComplexityReport"] = None,
+) -> ConversionOutput:
+    return await ConversionAgent().convert(
+        stack_assignment, documentation_md, graph,
+        accepted_fixes, security_findings, session_parse_report,
+        verification_flags, manifest_overrides, complexity_report,
     )

@@ -20,6 +20,7 @@ from ..models.schemas import (
     ComplexityTier, ComplexityReport, ParseReport, SessionParseReport,
 )
 from ._client import make_client
+from .base import BaseAgent
 from ..org_config_loader import get_verification_policy, get_unsupported_types
 
 from ..config import settings as _cfg
@@ -234,7 +235,21 @@ def _make_flag(
     )
 
 
-async def verify(
+class VerificationAgent(BaseAgent):
+
+    async def verify(
+        self,
+        parse_report: ParseReport,
+        complexity: ComplexityReport,
+        documentation_md: str,
+        graph: dict,
+        session_parse_report: Optional[SessionParseReport] = None,
+    ) -> VerificationReport:
+        """Run all verification checks and return a complete VerificationReport."""
+        return await _verify_impl(parse_report, complexity, documentation_md, graph, session_parse_report)
+
+
+async def _verify_impl(
     parse_report: ParseReport,
     complexity: ComplexityReport,
     documentation_md: str,
@@ -700,6 +715,17 @@ async def verify(
         blocked_reasons=[f.description for f in blocking_flags],
         recommendation=recommendation,
     )
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+async def verify(
+    parse_report: ParseReport,
+    complexity: ComplexityReport,
+    documentation_md: str,
+    graph: dict,
+    session_parse_report: Optional[SessionParseReport] = None,
+) -> VerificationReport:
+    return await VerificationAgent().verify(parse_report, complexity, documentation_md, graph, session_parse_report)
 
 
 def _build_graph_summary(graph: dict) -> str:

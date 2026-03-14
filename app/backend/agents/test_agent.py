@@ -41,13 +41,26 @@ from ..models.schemas import (
     FilterCoverageCheck, TargetStack,
 )
 from .golden_compare import generate_comparison_script
+from .base import BaseAgent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_tests(
+class TestAgent(BaseAgent):
+
+    def generate_tests(
+        self,
+        conversion_output: ConversionOutput,
+        s2t: dict,
+        verification: dict,
+        graph: dict,
+    ) -> TestReport:
+        return _generate_tests_impl(conversion_output, s2t, verification, graph)
+
+
+def _generate_tests_impl(
     conversion_output: ConversionOutput,
     s2t: dict,
     verification: dict,
@@ -151,6 +164,16 @@ def generate_tests(
         filters_missing=filters_missing,
         notes=notes,
     )
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+def generate_tests(
+    conversion_output: ConversionOutput,
+    s2t: dict,
+    verification: dict,
+    graph: dict,
+) -> TestReport:
+    return TestAgent().generate_tests(conversion_output, s2t, verification, graph)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

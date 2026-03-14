@@ -40,6 +40,7 @@ from ..models.schemas import (
 )
 from ..security import scan_python_with_bandit, scan_yaml_for_secrets
 from ._client import make_sync_client
+from .base import BaseAgent
 
 log = logging.getLogger("conversion.security_agent")
 
@@ -262,9 +263,21 @@ If no issues are found return an empty findings list and "APPROVED".
 """
 
 
+# ── Agent class ──────────────────────────────────────────────────────────────
+
+class SecurityAgent(BaseAgent):
+
+    async def scan(
+        self,
+        conversion: ConversionOutput,
+        mapping_name: Optional[str] = None,
+    ) -> SecurityScanReport:
+        return await _scan_impl(conversion, mapping_name)
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 
-async def scan(
+async def _scan_impl(
     conversion: ConversionOutput,
     mapping_name: Optional[str] = None,
 ) -> SecurityScanReport:
@@ -511,3 +524,11 @@ def _extract_json(text: str) -> dict:
 
     log.warning("security_agent: could not parse Claude JSON response")
     return {"findings": [], "summary": "Parse error", "recommendation": "REVIEW_RECOMMENDED"}
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+async def scan(
+    conversion: ConversionOutput,
+    mapping_name: Optional[str] = None,
+) -> SecurityScanReport:
+    return await SecurityAgent().scan(conversion, mapping_name)

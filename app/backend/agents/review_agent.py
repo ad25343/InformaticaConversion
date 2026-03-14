@@ -37,7 +37,8 @@ from ..models.schemas import (
     PerfReviewCheck, PerfReviewReport,
     ConversionOutput, ParseReport, VerificationReport,
 )
-from ._client import make_client
+from ._client import make_client, call_claude_with_retry
+from .base import BaseAgent
 
 from ..config import settings as _cfg
 MODEL = _cfg.claude_model
@@ -253,7 +254,8 @@ async def _run_equivalence_check(
         code_files=_format_code(files),
     )
 
-    message = await client.messages.create(
+    message = await call_claude_with_retry(
+        client,
         model=MODEL,
         max_tokens=4096,
         system=EQUIVALENCE_SYSTEM,
@@ -297,7 +299,8 @@ async def _run_quality_check(
         code_files=_format_code(conversion_output.files),
     )
 
-    message = await client.messages.create(
+    message = await call_claude_with_retry(
+        client,
         model=MODEL,
         max_tokens=4096,
         system=REVIEW_SYSTEM,
@@ -381,7 +384,8 @@ async def run_perf_review(
         code_files = code_files[:8000] + f"\n... [truncated]"
 
     prompt = PERF_REVIEW_PROMPT.format(stack=stack, code_files=code_files)
-    msg = await client.messages.create(
+    msg = await call_claude_with_retry(
+        client,
         model=MODEL, max_tokens=2000,
         system=PERF_REVIEW_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
@@ -395,9 +399,27 @@ async def run_perf_review(
     )
 
 
+# ── Agent class ───────────────────────────────────────────────────────────────
+
+class ReviewAgent(BaseAgent):
+
+    async def review(
+        self,
+        conversion_output: ConversionOutput,
+        documentation_md: str,
+        verification: dict,
+        s2t: dict,
+        parse_report: ParseReport,
+        xml_content: str = "",
+    ) -> CodeReviewReport:
+        return await _review_impl(
+            conversion_output, documentation_md, verification, s2t, parse_report, xml_content,
+        )
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def review(
+async def _review_impl(
     conversion_output: ConversionOutput,
     documentation_md: str,
     verification: dict,
@@ -480,4 +502,18 @@ async def review(
         parse_degraded=not conversion_output.parse_ok,
         equivalence_report=equivalence_report,
         perf_review=perf_report,
+    )
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+async def review(
+    conversion_output: ConversionOutput,
+    documentation_md: str,
+    verification: dict,
+    s2t: dict,
+    parse_report: ParseReport,
+    xml_content: str = "",
+) -> CodeReviewReport:
+    return await ReviewAgent().review(
+        conversion_output, documentation_md, verification, s2t, parse_report, xml_content,
     )

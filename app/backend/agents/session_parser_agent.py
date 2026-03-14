@@ -36,13 +36,25 @@ from ..models.schemas import (
     UploadedFile,
 )
 from datetime import datetime, timezone
+from .base import BaseAgent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
+# Agent class + public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def parse(
+class SessionParserAgent(BaseAgent):
+
+    def parse(
+        self,
+        mapping_xml:    Optional[str],
+        workflow_xml:   Optional[str] = None,
+        parameter_file: Optional[str] = None,
+    ) -> SessionParseReport:
+        return _parse_impl(mapping_xml, workflow_xml, parameter_file)
+
+
+def _parse_impl(
     mapping_xml:    Optional[str],
     workflow_xml:   Optional[str] = None,
     parameter_file: Optional[str] = None,
@@ -156,6 +168,15 @@ def parse(
         parse_status=parse_status,
         notes=notes,
     )
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+def parse(
+    mapping_xml:    Optional[str],
+    workflow_xml:   Optional[str] = None,
+    parameter_file: Optional[str] = None,
+) -> SessionParseReport:
+    return SessionParserAgent().parse(mapping_xml, workflow_xml, parameter_file)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
