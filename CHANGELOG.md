@@ -10,6 +10,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.26] — 2026-03-14 — Sample-data full audit and repair (all 662 files)
+
+### Fixed
+
+- **Deep type-aware audit** run across all 662 XML files in the four test projects (apex_insurance, firstbank, meridian_am, nexus_scm) — mappings, parameter files, and workflows each checked against their own structural rules.
+- **34 mapping XMLs missing `<INSTANCE>` elements** (9 unique templates × 2 copies each in `mappings/` and `all_mappings/`) — `<INSTANCE>` entries derived from `CONNECTOR` `FROMINSTANCE`/`TOINSTANCE` pairs and injected into each `<MAPPING>` block.
+- **3 firstbank parameter files** (`params_firstbank_dev/prod/uat.xml`) used a non-standard `<PARAMETERFILE>/<SESFOLDER>/<SESSION>/<PARAMETER>` schema instead of the correct Informatica PowerCenter `<POWERMART>/<REPOSITORY>/<PARAMFILE>/<PARAM>` format. All three rewritten to the correct format with all parameter values (`$$SRC_DB`, `$$TGT_DB`, `$$ETL_DATE`, `$$LOAD_TYPE`, `$$LOG_LEVEL`, `$$REJECT_ROW_THRESHOLD`) preserved and `$$ENVIRONMENT` added per-env.
+- Final state: **662 / 662 files clean** — 434 mapping XMLs, 12 parameter files, 216 workflow files.
+
+### Chore
+
+- `jobs.db`, `jobs.db-wal`, `jobs.db-shm`, and `jobs/` added to `.gitignore` — these are runtime artifacts that must never be committed.
+
+---
+
+## [2.18.25] — 2026-03-14 — Performance rules in prompts + Stage C perf review
+
+### Added
+
+- **`## Performance Rules` blocks** added to all three conversion system prompts:
+  - *PySpark*: partition strategy, broadcast joins for Lookup transformations, UDF ban, `collect()` avoidance, partition pruning, shuffle minimisation, `persist()` checkpoints, `spark.sql.shuffle.partitions` config.
+  - *dbt*: materialisation selection guide (view / incremental / table), incremental strategy per warehouse (BigQuery, Snowflake/Redshift, Spark), partition/cluster key config, explicit column lists, early filter pushdown.
+  - *Python/Pandas*: mandatory `chunksize` on all file reads, `iterrows()` ban, hash-map joins for single-column lookups, chunk-pipeline pattern (no accumulate-then-write).
+- **Stage C — Performance Review** added to `review_agent.py` — advisory-only anti-pattern scan that runs after Stage B (never blocks on logic issues). Checks for `collect()` on large DataFrames, Python UDFs, missing partition hints, cartesian joins, `view` materialisation on final mart models, `SELECT *`, `read_csv` without `chunksize`, and `iterrows()`. Result stored as `perf_review` on `CodeReviewReport`.
+- **`PerfReviewCheck` / `PerfReviewReport`** Pydantic models added to `schemas.py`.
+- **Scale anti-pattern scan** added to `_validate_conversion_files()` as a 7th non-blocking `ℹ️ SCALE:` check — flags `collect()`, `read_csv` without `chunksize`, and `iterrows()` in generated files.
+
+---
+
+## [2.18.24] — 2026-03-14 — Sample-data connector completeness (433 mapping XMLs)
+
+### Fixed
+
+- **Systematic connector gap** across all 217 tiered mappings + 216 `all_mappings/` copies in all 4 test projects: only the primary key field was wired end-to-end; all other target fields were declared as `TARGETFIELD` elements but had no `CONNECTOR` reaching them, causing the S2T extractor to report them as unmapped.
+- Fix script applied to 433 files (400 changed, 33 already clean):
+  1. `CONNECTOR` elements added for every unconnected `TARGETFIELD` following the existing transformation chain pattern.
+  2. `TRANSFORMFIELD` output ports added to the last transformation for any derived target fields missing as ports.
+  3. `INSTANCE` elements added inside every `MAPPING` block for all referenced transformations.
+- `sample_data/firstbank/all_mappings/m_stg_customer_file_load.xml` added — was missing from `all_mappings/` while present in the tiered folder.
+
+---
+
+## [2.18.23] — 2026-03-14 — Batch expand/collapse fix + batch sample XML repairs
+
+### Fixed
+
+- **Batch group expand/collapse collapsing on live refresh**: The 5-second polling timer (`_histLiveTimer`) called `loadHistory()` → `applyHistoryFilter()` which rebuilt `tbody.innerHTML` from scratch, resetting every batch group to `display:none`. Fix: introduced `_expandedBatches Set` updated by `toggleBatchGroup()` on every click; `_histBatchGroup()` now reads the Set when rendering initial `display` and arrow `transform` values, so expanded groups survive re-renders.
+- **4 batch sample XMLs** (`app/sample_xml/batch/03–06`) rewritten in correct Informatica PowerCenter export format. Previous versions used non-standard schemas (`<FIELD>`, `<SOURCEFIELD>`, `<METAINFO>` blocks; one had no `<MAPPING>` block at all). All four now have `SOURCE`/`TARGET` at `FOLDER` level, complete `TRANSFORMFIELD` port lists, `INSTANCE` references, and a `CONNECTOR` for every field at every hop.
+
+---
+
 ## [2.18.22] — 2026-03-13 — In-browser User Guide (marked.js)
 
 ### Added
