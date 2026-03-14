@@ -359,3 +359,21 @@ def generate_expression_boundary_tests(
 
 # Private alias for backward compat
 _generate_expression_boundary_tests = generate_expression_boundary_tests
+
+
+def generate_boundary_tests(graph: dict, mapping_name: str) -> str:
+    """
+    Backward-compat wrapper (originally in golden_compare.py Component A).
+    Returns the boundary test file content as a string (not dict/notes).
+    """
+    test_files, _ = generate_expression_boundary_tests(
+        graph=graph,
+        mapping_name=mapping_name,
+        stack=_DefaultStack(),
+    )
+    return next(iter(test_files.values()), "")
+
+
+class _DefaultStack:
+    """Minimal TargetStack stand-in for generate_boundary_tests callers."""
+    value = "python"

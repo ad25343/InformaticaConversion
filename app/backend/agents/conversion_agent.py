@@ -13,4 +13,8 @@ All logic has been moved into app/backend/agents/conversion/:
 
 Existing import sites (orchestrator.py, tests, etc.) require no changes.
 """
-from .conversion import assign_stack, convert, ConversionAgent  # noqa: F401
+from .conversion import (  # noqa: F401
+    assign_stack, convert, ConversionAgent,
+    _is_sql_friendly, _validate_conversion_files,
+    _build_dbt_runtime_artifacts, _build_flag_handling_section,
+)
