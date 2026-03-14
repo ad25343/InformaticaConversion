@@ -5,6 +5,10 @@ app/.env
 # ── Runtime data — machine-specific, regenerated on each run ─────────────────
 app/data/
 app/logs/
+app/jobs.db
+app/jobs.db-wal
+app/jobs.db-shm
+jobs/
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
