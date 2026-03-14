@@ -370,6 +370,7 @@ class CodeReviewReport(BaseModel):
     summary:            str
     parse_degraded:     bool = False   # True if Step 7 output was degraded
     equivalence_report: Optional[LogicEquivalenceReport] = None  # v1.3 — XML-grounded check
+    perf_review:        Optional["PerfReviewReport"]     = None  # v2.5.0 — Stage C perf scan
 
 
 # ─────────────────────────────────────────────
@@ -574,3 +575,23 @@ class BatchCreateResponse(BaseModel):
     mapping_count: int
     jobs:          List[dict]   # [{job_id, filename}]
     status:        str = "running"
+
+
+# ── v2.5.0 — Performance review models ───────────────────────────────────────
+
+class PerfReviewCheck(BaseModel):
+    """A single performance anti-pattern finding from Stage C review."""
+    check_id:     str
+    stack:        str
+    anti_pattern: str
+    severity:     str   # HIGH | MEDIUM | LOW
+    location:     str
+    detail:       str
+    suggestion:   str
+
+
+class PerfReviewReport(BaseModel):
+    """Output of the Stage C performance review pass."""
+    checks:  List[PerfReviewCheck]
+    clean:   bool
+    summary: str

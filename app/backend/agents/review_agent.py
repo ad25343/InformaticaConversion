@@ -1,9 +1,9 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-STEP 10 — Code Quality Review Agent (v1.3: Logic Equivalence Check added)
+STEP 10 — Code Quality Review Agent (v2.5.0: Stage C Performance Review added)
 
-Two-stage review:
+Three-stage review:
 
 Stage A — Logic Equivalence (v1.3):
   Goes back to the original Informatica XML as ground truth and verifies
@@ -19,7 +19,12 @@ Stage B — Code Quality (existing):
     - The parse report (Step 1)
   Produces a structured pass/fail checklist + overall recommendation.
 
-No execution needed — both stages are static reviews.
+Stage C — Performance Review (v2.5.0):
+  Advisory-only scan for anti-patterns that cause correctness problems or
+  extreme slowness at millions-of-rows scale. Runs after Stage B (never
+  blocks on logic issues). Results stored under "perf_review" in state_json.
+
+No execution needed — all stages are static reviews.
 """
 from __future__ import annotations
 import json
@@ -29,6 +34,7 @@ import anthropic
 from ..models.schemas import (
     CodeReviewReport, CodeReviewCheck,
     LogicEquivalenceCheck, LogicEquivalenceReport,
+    PerfReviewCheck, PerfReviewReport,
     ConversionOutput, ParseReport, VerificationReport,
 )
 from ._client import make_client
@@ -303,6 +309,92 @@ async def _run_quality_check(
     return checks, data.get("recommendation", "REVIEW_RECOMMENDED"), data.get("summary", "")
 
 
+# ── Stage C — Performance Review ─────────────────────────────────────────────
+
+PERF_REVIEW_SYSTEM = """You are a performance-focused data engineering reviewer.
+Your job is to identify anti-patterns in generated data pipeline code that will cause
+correctness problems or extreme slowness at millions-of-rows scale.
+Be specific — cite the exact line or code pattern you found."""
+
+PERF_REVIEW_PROMPT = """Review the generated {stack} code below for performance anti-patterns
+at scale (assume the source data may contain millions of rows).
+
+## Generated Code Files
+{code_files}
+
+## Stack
+{stack}
+
+Check for these anti-patterns (only flag ones that are actually present):
+
+PySpark:
+- collect() / toPandas() called on a large DataFrame (not just a .count())
+- Python UDF or pandas_udf where a native Spark function exists
+- No partition hint on the initial DataFrame read
+- Cartesian join or join without explicit join condition
+- .count() or .show() inside a loop
+
+dbt:
+- Final mart model using materialized='view' (should be incremental or table)
+- Missing unique_key on an incremental model
+- SELECT * in a final model
+- Filter / WHERE pushed after a large join instead of before
+
+Python/Pandas:
+- pd.read_csv() without chunksize on a file source
+- df.iterrows() or df.apply(axis=1) on a potentially large DataFrame
+- Full DataFrame loaded into memory before any filtering
+
+For each issue found, produce one check entry.
+For clean code, return an empty checks list.
+
+Return ONLY this JSON (no markdown):
+{{
+  "checks": [
+    {{
+      "check_id": "PERF_01",
+      "stack": "{stack}",
+      "anti_pattern": "short name, e.g. collect_on_large_df",
+      "severity": "HIGH|MEDIUM|LOW",
+      "location": "filename:line or function name",
+      "detail": "what the code does and why it is a problem at scale",
+      "suggestion": "concrete fix, one sentence"
+    }}
+  ],
+  "clean": true,
+  "summary": "1-2 sentence summary of performance posture."
+}}"""
+
+
+async def run_perf_review(
+    conversion: ConversionOutput,
+    stack: str,
+) -> PerfReviewReport:
+    """Stage C — advisory performance anti-pattern scan. Non-blocking."""
+    client = make_client()
+    code_files = "\n\n".join(
+        f"=== {fname} ===\n{content}"
+        for fname, content in conversion.files.items()
+    )
+    # Cap total code sent to 8000 chars to avoid blowing context
+    if len(code_files) > 8000:
+        code_files = code_files[:8000] + f"\n... [truncated]"
+
+    prompt = PERF_REVIEW_PROMPT.format(stack=stack, code_files=code_files)
+    msg = await client.messages.create(
+        model=MODEL, max_tokens=2000,
+        system=PERF_REVIEW_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = _parse_json(msg.content[0].text)
+    checks = [PerfReviewCheck(**c) for c in raw.get("checks", [])]
+    return PerfReviewReport(
+        checks=checks,
+        clean=raw.get("clean", len(checks) == 0),
+        summary=raw.get("summary", ""),
+    )
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 async def review(
@@ -363,6 +455,20 @@ async def review(
     if not conversion_output.parse_ok and recommendation == "APPROVED":
         recommendation = "REVIEW_RECOMMENDED"
 
+    # Stage C — Performance Review (advisory, non-blocking — runs after Stage B)
+    perf_report: PerfReviewReport | None = None
+    try:
+        perf_report = await run_perf_review(
+            conversion=conversion_output,
+            stack=conversion_output.target_stack.value,
+        )
+    except Exception as e:
+        perf_report = PerfReviewReport(
+            checks=[],
+            clean=True,
+            summary=f"Performance review could not complete: {e}. Review code manually for scale patterns.",
+        )
+
     return CodeReviewReport(
         mapping_name=conversion_output.mapping_name,
         target_stack=conversion_output.target_stack.value,
@@ -373,4 +479,5 @@ async def review(
         summary=summary,
         parse_degraded=not conversion_output.parse_ok,
         equivalence_report=equivalence_report,
+        perf_review=perf_report,
     )

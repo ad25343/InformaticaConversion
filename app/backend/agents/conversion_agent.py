@@ -157,6 +157,27 @@ Informatica-to-PySpark pattern guide (apply where relevant):
 - Sequence generator → use F.monotonically_increasing_id() or row_number() over an ordered window
 
 - Output complete, runnable Python files
+
+## Performance Rules — apply to ALL PySpark conversions
+- Partition strategy: call .repartition(n, partition_col) or .coalesce(n) immediately after
+  reading source data. Choose partition_col from the join/filter keys documented in the mapping.
+  Aim for ~200 MB per partition; default to 200 partitions when volume is unknown.
+- Broadcast joins: for every Lookup transformation where the lookup table is classified as
+  SMALL/MEDIUM, use broadcast(lookup_df). Only skip broadcast when the lookup source is
+  itself a large fact table.
+- UDF ban: NEVER generate Python UDFs or pandas_udf unless absolutely no native Spark
+  function exists. When a UDF is unavoidable, add a comment:
+  # PERFORMANCE: Python UDF used — consider replacing with native Spark SQL function.
+- Avoid .collect(): never call .collect() or .toPandas() inside a loop or on a large DataFrame.
+  Only collect row counts (df.count()) for logging, and only after major checkpoints.
+- Partition pruning: when reading from partitioned sources, add .filter() conditions on the
+  partition column(s) BEFORE any joins. Document the pruning condition in a comment.
+- Shuffle minimisation: co-locate join keys — if two large DataFrames share the same partition
+  key, use .sortWithinPartitions() before the join to avoid a full shuffle.
+- Persist checkpoints: after an expensive multi-join or aggregation that is consumed more than
+  once, call .cache() or .persist(StorageLevel.MEMORY_AND_DISK). Add df.unpersist() at the end.
+- spark.sql.shuffle.partitions: set spark.conf.set("spark.sql.shuffle.partitions", "200")
+  (or the appropriate value) at the top of every generated script.
 """ + _DW_AUDIT_RULES
 
 DBT_SYSTEM = """You are a senior analytics engineer converting Informatica PowerCenter mappings to dbt.
@@ -184,6 +205,25 @@ Informatica-to-dbt pattern guide (apply where relevant):
 - Reusable expression logic → extract to a dbt macro in macros/
 
 - Output complete, runnable SQL model files
+
+## Performance Rules — apply to ALL dbt conversions
+- Materialisation selection:
+  * Staging / intermediate models that feed further transforms: materialized='view'
+  * Final mart / fact / dimension models with > ~100k estimated rows: materialized='incremental'
+  * Small lookup / reference models: materialized='table'
+  * Never default all models to 'view' — unmaterialised chains force full re-scan on every run.
+- Incremental strategy: use unique_key on the primary key column(s). Choose the correct
+  strategy for the warehouse:
+    BigQuery → strategy='insert_overwrite', partition_by the date/event column
+    Snowflake / Redshift → strategy='merge', unique_key=[pk]
+    Spark/Databricks → strategy='insert_overwrite', partition_by the date/event column
+- Partition / cluster keys: for warehouse-native partitioning (BigQuery partition_by,
+  Snowflake cluster_by, Redshift sortkey/distkey), add the config block when the target
+  table has a clear date or high-cardinality join column.
+- Avoid SELECT *: always list columns explicitly in the final SELECT to avoid schema drift
+  and unnecessary column scans.
+- Filter early: push WHERE / QUALIFY predicates as close to the source CTE as possible,
+  before joins, to minimise the rows that flow through the pipeline.
 
 ## Execution-Ready Requirements — REQUIRED for all dbt conversions
 
@@ -231,7 +271,16 @@ Rules:
 - Externalize ALL config — no hardcoded values; use a CONFIG dict or config file
 - Use context managers for all DB/file connections (with statement — ensures cleanup)
 - Use try/finally blocks around any resource acquisition not covered by context managers
-- Use chunked reading for large files: pd.read_csv(..., chunksize=50_000)
+- Chunked I/O: ALWAYS use pd.read_csv(..., chunksize=100_000) or equivalent for any file
+  source. Never read an entire file into a single DataFrame unless the mapping documentation
+  explicitly confirms the source is a small reference table (< 50k rows).
+- No iterrows on large data: NEVER use df.iterrows() or df.itertuples() for row-by-row
+  processing on a DataFrame with unknown or large row counts. Use vectorised operations
+  (np.where, df.assign, df.apply with axis=1 only for small helper maps).
+- Memory-efficient joins: use pd.merge() instead of looping. For very large lookups, use
+  hash-map dictionaries instead of merged DataFrames when only one or two columns are needed.
+- Chunk pipeline: when the transformation chain reads → transforms → writes, keep the
+  chunk loop intact through the full pipeline — do not accumulate all chunks before writing.
 - Use pyarrow-backed dtypes where available for memory efficiency (dtype_backend="pyarrow")
 
 Informatica-to-Pandas pattern guide (apply where relevant):
@@ -527,6 +576,20 @@ def _validate_conversion_files(
                     "⚠️ VALIDATION: 'run_pipeline.py' does not reference dbt — "
                     "orchestration wrapper may be incomplete."
                 )
+
+        # 7. Scale anti-pattern scan (INFO — non-blocking)
+        import re as _re
+        _SCALE_PATTERNS = [
+            (r'\.collect\(\)',         "collect() called — may OOM on large DataFrames"),
+            (r'pd\.read_csv\([^)]+\)', "pd.read_csv() without chunksize — check for large sources"),
+            (r'\.iterrows\(\)',        "iterrows() found — use vectorised operations for large data"),
+        ]
+        for pattern, msg in _SCALE_PATTERNS:
+            if _re.search(pattern, content):
+                # Only warn for pd.read_csv if chunksize is absent from the file
+                if "read_csv" in pattern and "chunksize" in content:
+                    continue
+                file_issues.append(f"ℹ️ SCALE: '{fname}': {msg}")
 
         _cache[_key] = file_issues
         issues.extend(file_issues)
