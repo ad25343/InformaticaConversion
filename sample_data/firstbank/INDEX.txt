@@ -8,7 +8,7 @@ REPOSITORY: FIRSTBANK_DWH (Oracle, PowerCenter v112)
 LOCATION: /sessions/ecstatic-nice-albattani/mnt/InformaticaConversion/sample_data/firstbank/
 
 ================================================================================
-SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
+SIMPLE MAPPINGS (17) — Single Source, Minimal Transformations
 ================================================================================
 
 1.  m_dim_customer_load
@@ -84,6 +84,11 @@ SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
 15. m_ref_exchange_rates
     Source: FX_RATE_DAILY → Target: REF_EXCHANGE_RATES
     Fields: 6 (Daily FX reference)
+    Pattern: SQ → EXP → Target
+
+16. m_stg_customer_file_load
+    Source: CUSTOMER_FILE_LOAD → Target: STG_CUSTOMER_FILE
+    Fields: 8 (Customer flat-file bulk load passthru)
     Pattern: SQ → EXP → Target
 
 ================================================================================
@@ -409,12 +414,12 @@ References & Dimensions:         m_dim_branch_load, m_dim_product_load, m_dim_da
 STATISTICS
 ================================================================================
 
-Total Mappings:              50
-  Simple (1-source):         15
-  Medium (multi-transform):  20
+Total Mappings:              55
+  Simple (1-source):         17
+  Medium (multi-transform):  23
   Complex (multi-source):    15
 
-Total Workflows:             50 (one per mapping)
+Total Workflows:             55 (one per mapping)
 Total Transformation Types:  8 (SQ, EXP, LKP, AGG, JNR, RTR, FIL, UNI)
 Total Source Tables:         50+ distinct
 Total Target Tables:         60+ (some mappings have multiple targets)

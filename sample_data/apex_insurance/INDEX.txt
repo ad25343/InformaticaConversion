@@ -8,7 +8,7 @@ REPOSITORY: APEX_INS_DWH (Oracle, PowerCenter v112)
 LOCATION: /sessions/ecstatic-nice-albattani/mnt/InformaticaConversion/sample_data/apex_insurance/
 
 ================================================================================
-SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
+SIMPLE MAPPINGS (16) — Single Source, Minimal Transformations
 ================================================================================
  1.  m_dim_policyholder_load
     Policyholder master dimension
@@ -40,9 +40,11 @@ SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
     Peril cause-of-loss code reference
 15.  m_fct_premium_earned
     Earned premium daily fact
+16.  m_stg_raw_quote_passthru
+    Raw quote passthrough staging (passthru scenario)
 
 ================================================================================
-MEDIUM MAPPINGS (20) — Lookups, Aggregations, SCD2
+MEDIUM MAPPINGS (23) — Lookups, Aggregations, SCD2
 ================================================================================
 16.  m_dim_policy_scd2
     Policy dimension SCD Type 2 tracking
@@ -84,6 +86,12 @@ MEDIUM MAPPINGS (20) — Lookups, Aggregations, SCD2
     Motor premium rating and loadings
 35.  m_bridge_policy_coverage
     Policy-coverage bridge table
+36.  m_fct_claim_feed_incremental
+    Incremental claim feed load with SQL override extract
+37.  m_fct_claim_severity_route3
+    3-way claim severity routing: LOW/MEDIUM/HIGH (Router scenario)
+38.  m_fct_premium_union_load
+    Multi-source premium union load (Union scenario)
 
 ================================================================================
 COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Union
@@ -138,9 +146,9 @@ COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Union
 STATISTICS
 ================================================================================
 
-Total Mappings: 50
-  Simple: 15
-  Medium: 20
+Total Mappings: 54
+  Simple: 16
+  Medium: 23
   Complex: 15
 
 Domain: Property & Casualty Insurance
