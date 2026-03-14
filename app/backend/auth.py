@@ -32,6 +32,15 @@ _APP_PASSWORD_HASH: bytes | None = (
     if APP_PASSWORD else None
 )
 
+# Enforce that the default secret_key is replaced when authentication is active.
+# A weak signing key allows session tokens to be forged.
+_DEFAULT_SECRET = "change-me-in-production-please"
+if APP_PASSWORD and SECRET_KEY == _DEFAULT_SECRET:
+    raise RuntimeError(
+        "SECRET_KEY is still set to the default value. "
+        "Set a strong SECRET_KEY in your .env file before enabling authentication."
+    )
+
 # Public paths that don't require auth
 PUBLIC_PATHS = {"/login", "/static", "/favicon.ico"}
 
