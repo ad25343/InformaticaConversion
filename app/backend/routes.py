@@ -9,6 +9,7 @@ from .routers.batch import router as _batch_router
 from .routers.logs import router as _logs_router
 from .routers.exports import router as _exports_router
 from .routers.misc import router as _misc_router
+from .routers.patterns import router as _patterns_router
 
 # Re-export shared state so main.py and watcher.py can still import them directly:
 #   from backend.routes import _active_tasks
@@ -25,3 +26,4 @@ router.include_router(_batch_router)
 router.include_router(_logs_router)
 router.include_router(_exports_router)
 router.include_router(_misc_router)
+router.include_router(_patterns_router)

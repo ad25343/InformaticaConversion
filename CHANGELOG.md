@@ -10,6 +10,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.22.0] — 2026-03-14 — Bidirectional migration / greenfield authoring
+
+### Added
+
+- **✨ New Mapping tab** in the UI — generate Informatica PowerCenter XML from an ETL pattern config without touching Informatica Designer. Choose a pattern, fill in the YAML config, click "Generate Informatica XML", and download the result.
+- **`GET /api/patterns`** — lists all 10 ETL patterns with their names, descriptions, and Pydantic config schemas (JSON Schema format).
+- **`POST /api/patterns/{name}/generate-xml`** — accepts a YAML pattern config + mapping name, validates against the Pydantic schema, calls Claude to generate a well-formed Informatica PowerCenter XML, validates the result with `xml.etree.ElementTree`, and returns the XML.
+- **`etl_patterns/schemas.py`** — Pydantic v2 config models for all 10 patterns: `TruncateAndLoadConfig`, `IncrementalAppendConfig`, `UpsertConfig`, `Scd2Config`, `LookupEnrichConfig`, `AggregationLoadConfig`, `FilterAndRouteConfig`, `UnionConsolidateConfig`, `ExpressionTransformConfig`, `PassThroughConfig`. Exports `PATTERN_SCHEMAS` and `PATTERN_DESCRIPTIONS` registries.
+- **`app/backend/agents/xml_generator.py`** — `XmlGeneratorAgent(BaseAgent)` with few-shot Informatica XML examples embedded in the prompt; validates output is parseable before returning.
+- **`app/backend/routers/patterns.py`** — new sub-router mounted at `/api`.
+- **`pattern_generation_log`** table in DB — records every XML generation call (pattern name, mapping name, duration, success/failure, XML length).
+
+---
+
+## [2.21.0] — 2026-03-14 — Data equivalence validation
+
+### Added
+
+- **Expression boundary tests** (`tests/test_expressions_{mapping}.py`) — auto-generated pytest stubs (with `TODO` fill-in comments) for every Expression transformation detected in the mapping. Covers IIF NULL/TRUE/FALSE branches, DECODE exact/default/NULL, date function boundary values (leap year, month end), string function edge cases (empty string, NULL, boundary index), and aggregation NULL exclusion behavior.
+- **Golden CSV comparison script** (`tests/compare_golden.py`) — standalone self-contained Python script (stdlib + pandas). CLI: `python compare_golden.py --expected informatica_output.csv --actual generated.csv [--threshold 99.5] [--sample 20] [--ignore-row-count]`. Outputs: row count diff, schema diff, field-by-field match rates, mismatch sample, heuristics (float rounding, date format, trim/case differences). Embeds the expected target field list from the S2T workbook as reference comments.
+- Both files are written automatically during Step 11 (test generation) and downloadable via `GET /api/jobs/{id}/tests/download/tests/{filename}`.
+
+---
+
+## [2.20.0] — 2026-03-14 — Checkpoint-based resume at gate rejection
+
+### Added
+
+- **Restart-from-step dropdown** on the Gate 1 and Gate 3 rejection forms. Instead of always blocking the job, reviewers can restart from a specific prior step without re-uploading the XML.
+  - Gate 1 options: Step 1 (re-parse), Step 2 (re-classify), Step 3 (re-document), or Full restart (block job)
+  - Gate 3 options: Step 6 (re-assign stack), Step 7 (re-convert), Step 10 (re-review equivalence), or Full restart
+- **`resume_from_step(job_id, filename, step_number, state)`** async generator in `orchestrator.py` — reconstructs `_PipelineCtx` from the persisted state and dispatches to the correct `_step_N()` function.
+- **`VALID_RESTART_STEPS_GATE1`** and **`VALID_RESTART_STEPS_GATE3`** constants in `models/schemas.py`.
+- Audit log records `restart_from_step` in `extra_json` for every checkpoint restart.
+
+### Changed
+
+- `SignOffRequest` and `CodeSignOffRequest` schemas gain optional `restart_from_step: int` field.
+- Gate 1 REJECT with no `restart_from_step` → existing BLOCKED behavior (unchanged).
+- Gate 3 REJECT with no `restart_from_step` → existing BLOCKED behavior (unchanged).
+
+---
+
 ## [2.6.0] — 2026-03-14 — Architecture hardening (P0/P1/P2)
 
 ### Added

@@ -1,30 +1,387 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-golden_compare.py — Component B of v2.13 Data-Level Equivalence Testing
-========================================================================
+golden_compare.py — Phase 2 Data-Level Equivalence Testing
+===========================================================
 
-Generates a self-contained Python comparison script (`tests/compare_golden.py`)
-that is included in every conversion job's test output.
+Two public functions:
 
-The generated script requires only stdlib + pandas and runs entirely outside
-the conversion tool. Data engineers run it after:
-  1. Capturing Informatica's output as a CSV (golden reference)
-  2. Running the generated code against the same input rows and capturing output
+  generate_boundary_tests(graph, mapping_name) -> str
+      Scans Expression transformations in the parsed graph for high-risk
+      Informatica function categories and emits a pytest file with
+      @pytest.mark.parametrize stubs.  Run with: pytest tests/test_expressions_*.py
 
-Usage of the generated script:
-  python tests/compare_golden.py \\
-    --expected informatica_output.csv \\
-    --actual   generated_code_output.csv \\
-    [--threshold 99.5] \\
-    [--key-columns ACCOUNT_ID,LOAD_DATE] \\
-    [--ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID]
+  generate_comparison_script(mapping_name, s2t_records) -> str
+      Returns a self-contained compare_golden.py script (stdlib + pandas).
+      Run it OUTSIDE the tool after capturing Informatica output and generated
+      code output as CSVs:
+        python tests/compare_golden.py \\
+          --expected informatica_output.csv \\
+          --actual   generated_code_output.csv \\
+          [--threshold 99.5] \\
+          [--key-columns ACCOUNT_ID,LOAD_DATE] \\
+          [--ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID]
 """
 from __future__ import annotations
+import re
 from datetime import datetime, timezone
 
 
-def generate_comparison_script(mapping_name: str) -> str:
+# ─────────────────────────────────────────────────────────────────────────────
+# Detection patterns for high-risk Informatica expression categories
+# (mirrors _EXPR_PATTERNS in test_agent.py — keep in sync)
+# ─────────────────────────────────────────────────────────────────────────────
+_EXPR_PATTERNS = [
+    ("iif",         re.compile(r"\bIIF\s*\(",        re.IGNORECASE)),
+    ("decode",      re.compile(r"\bDECODE\s*\(",     re.IGNORECASE)),
+    ("date",        re.compile(
+        r"\b(ADD_TO_DATE|DATE_DIFF|TO_DATE|TRUNC)\s*\(", re.IGNORECASE)),
+    ("string",      re.compile(
+        r"\b(SUBSTR|INSTR|LTRIM|RTRIM|LPAD|RPAD|UPPER|LOWER)\s*\(", re.IGNORECASE)),
+    ("aggregation", re.compile(
+        r"\b(SUM|AVG|COUNT|MAX|MIN)\s*\(",           re.IGNORECASE)),
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Component A — Expression boundary tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_boundary_tests(graph: dict, mapping_name: str) -> str:
+    """
+    Scan Expression transformations in *graph* for high-risk Informatica
+    function categories and generate a pytest file with parametrize stubs.
+
+    Parameters
+    ----------
+    graph : dict
+        Parsed Informatica graph.  ``graph["mappings"]`` is a list of mapping
+        dicts, each with a ``"transformations"`` list.  Each transformation has
+        ``"type"`` (str) and ``"expressions"`` (list of
+        ``{"field_name": str, "expression": str}`` **or**
+        ``{"port": str, "expression": str}`` dicts).
+    mapping_name : str
+        Human-readable mapping name used in headers and the output filename.
+
+    Returns
+    -------
+    str
+        Complete content of a pytest ``.py`` file ready to write to disk.
+    """
+    ts        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_name = re.sub(r"[^A-Za-z0-9_]", "_", mapping_name).lower()
+
+    # ── Scan graph for expression strings ────────────────────────────────────
+    detected: dict[str, list[str]] = {}   # category → [example expr strings]
+    for m in graph.get("mappings", []):
+        for t in m.get("transformations", []):
+            if t.get("type", "") != "Expression":
+                continue
+            for expr_entry in t.get("expressions", []):
+                if isinstance(expr_entry, dict):
+                    expr_str = (
+                        expr_entry.get("expression", "")
+                        or expr_entry.get("expr", "")
+                    )
+                elif isinstance(expr_entry, str):
+                    expr_str = expr_entry
+                else:
+                    continue
+                if not expr_str:
+                    continue
+                for cat, pattern in _EXPR_PATTERNS:
+                    if pattern.search(expr_str):
+                        detected.setdefault(cat, [])
+                        if len(detected[cat]) < 2:
+                            detected[cat].append(expr_str[:80])
+
+    # ── Minimal file when nothing detected ───────────────────────────────────
+    if not detected:
+        return "\n".join([
+            f'"""',
+            f"Expression Boundary Tests — {mapping_name}",
+            f"Auto-generated by Informatica Conversion Tool (Phase 2)",
+            f"Generated: {ts}",
+            f"",
+            f"No high-risk expression categories (IIF, DECODE, date functions,",
+            f"string functions, aggregations) were detected in Expression",
+            f"transformations for this mapping.  Add tests here if expressions",
+            f"are added during implementation.",
+            f'"""',
+            f"import pytest",
+            f"",
+            f"",
+            f"def test_placeholder():",
+            f'    """Placeholder — replace with real expression tests."""',
+            f"    # TODO: add boundary tests once expressions are implemented.",
+            f"    pass",
+        ])
+
+    # ── Build the test file ───────────────────────────────────────────────────
+    lines: list[str] = [
+        '"""',
+        f"Expression Boundary Tests — {mapping_name}",
+        f"Auto-generated by Informatica Conversion Tool (Phase 2)",
+        f"Generated: {ts}",
+        "",
+        "PURPOSE",
+        "-------",
+        "These tests verify that high-risk Informatica expression categories",
+        "behave correctly at boundary / edge-case inputs after translation.",
+        "They run in isolation — no database or Informatica environment needed.",
+        "",
+        "HOW TO RUN",
+        "----------",
+        f"  pip install pytest",
+        f"  pytest tests/test_expressions_{safe_name}.py -v",
+        "",
+        "FILL IN THE HELPER FUNCTIONS",
+        "-----------------------------",
+        "Each test calls a helper that wraps the translated expression.",
+        "Search for 'FILL IN' comments and replace each stub with a call to",
+        "the actual translated function from your generated code.",
+        "",
+        f"Detected risk categories: {', '.join(detected.keys())}",
+        '"""',
+        "from __future__ import annotations",
+        "import pytest",
+        "",
+        "",
+    ]
+
+    sep = "# " + "─" * 75
+
+    # ── IIF ──────────────────────────────────────────────────────────────────
+    if "iif" in detected:
+        examples = detected["iif"]
+        ex_lines = [f"#   {e}" for e in examples]
+        lines += [
+            sep,
+            "# IIF — Informatica evaluates a NULL condition as FALSE (not NULL propagation).",
+            "# Detected example(s):",
+            *ex_lines,
+            sep,
+            "",
+            "def _iif_helper(value):",
+            '    """',
+            "    FILL IN: call the translated IIF expression from your generated code.",
+            "    Example: return generated_module.iif_expression(value)",
+            "    Replace this stub with the real call.",
+            '    """',
+            "    raise NotImplementedError('FILL IN: call translated IIF expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('input_val,expected', [",
+            "    (100.0,  100.0),   # TRUE branch — positive value",
+            "    (-5.0,   0.0),     # FALSE branch — negative value",
+            "    (0.0,    0.0),     # boundary — exactly zero, condition evaluates FALSE",
+            "    (None,   0.0),     # NULL input: Informatica treats NULL condition as FALSE",
+            "])",
+            "def test_iif_null_branch_semantics(input_val, expected):",
+            '    """',
+            "    IIF NULL handling: Informatica evaluates NULL condition as FALSE,",
+            "    taking the FALSE branch — not NULL propagation as in SQL CASE WHEN.",
+            "    Verify your translated code matches this behaviour.",
+            '    """',
+            "    # TODO: call your translated IIF function and assert the result.",
+            "    result = _iif_helper(input_val)",
+            "    assert result == expected, (",
+            "        f'IIF mismatch: input={input_val!r}, got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── DECODE ───────────────────────────────────────────────────────────────
+    if "decode" in detected:
+        examples = detected["decode"]
+        ex_lines = [f"#   {e}" for e in examples]
+        lines += [
+            sep,
+            "# DECODE — case-sensitive matching; NULL input falls through to default.",
+            "# Detected example(s):",
+            *ex_lines,
+            sep,
+            "",
+            "def _decode_helper(status):",
+            '    """',
+            "    FILL IN: call the translated DECODE expression from your generated code.",
+            "    Example: return generated_module.decode_status(status)",
+            '    """',
+            "    raise NotImplementedError('FILL IN: call translated DECODE expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('status,expected', [",
+            "    ('A',  'Active'),    # first exact match",
+            "    ('I',  'Inactive'),  # second exact match",
+            "    ('X',  'Unknown'),   # default — no match",
+            "    (None, 'Unknown'),   # NULL → Informatica DECODE falls through to default",
+            "    ('a',  'Unknown'),   # case-sensitive: lowercase 'a' != 'A'",
+            "])",
+            "def test_decode_case_sensitivity_and_null(status, expected):",
+            '    """',
+            "    DECODE: case-sensitive matching; NULL input falls through to the default.",
+            "    Python dict lookups are case-sensitive, but verify None/NULL → default.",
+            '    """',
+            "    # TODO: call your translated DECODE function and assert the result.",
+            "    result = _decode_helper(status)",
+            "    assert result == expected, (",
+            "        f'DECODE mismatch: input={status!r}, got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── Date functions ────────────────────────────────────────────────────────
+    if "date" in detected:
+        examples = detected["date"]
+        ex_lines = [f"#   {e}" for e in examples]
+        lines += [
+            sep,
+            "# Date functions — month-end rollover and NULL propagation.",
+            "# Detected example(s):",
+            *ex_lines,
+            sep,
+            "from datetime import date",
+            "",
+            "",
+            "def _add_to_date_helper(load_date, unit, amount):",
+            '    """',
+            "    FILL IN: call the translated ADD_TO_DATE expression.",
+            "    Example: return generated_module.add_to_date(load_date, unit, amount)",
+            '    """',
+            "    raise NotImplementedError('FILL IN: call translated ADD_TO_DATE expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('load_date,unit,amount,expected', [",
+            "    (date(2024, 1, 15), 'MM', 1,  date(2024, 2, 15)),   # normal case",
+            "    (date(2024, 1, 31), 'MM', 1,  date(2024, 2, 29)),   # month-end rollover (leap year)",
+            "    (date(2023, 1, 31), 'MM', 1,  date(2023, 2, 28)),   # month-end rollover (non-leap)",
+            "    (date(2024, 12, 31),'MM', 1,  date(2025, 1, 31)),   # year boundary",
+            "    (None,              'MM', 1,  None),                 # NULL propagation",
+            "])",
+            "def test_add_to_date_month_rollover(load_date, unit, amount, expected):",
+            '    """',
+            "    ADD_TO_DATE: verify month-end rollover matches Informatica semantics.",
+            "    NULL input must propagate to NULL output (not raise).",
+            '    """',
+            "    # TODO: call your translated date function and assert the result.",
+            "    result = _add_to_date_helper(load_date, unit, amount)",
+            "    assert result == expected, (",
+            "        f'ADD_TO_DATE mismatch: input={load_date}, +{amount}{unit}, '",
+            "        f'got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── String functions ──────────────────────────────────────────────────────
+    if "string" in detected:
+        examples = detected["string"]
+        ex_lines = [f"#   {e}" for e in examples]
+        lines += [
+            sep,
+            "# String functions — SUBSTR is 1-indexed in Informatica, 0-indexed in Python.",
+            "# Detected example(s):",
+            *ex_lines,
+            sep,
+            "",
+            "",
+            "def _substr_helper(value, start, length):",
+            '    """',
+            "    FILL IN: call the translated SUBSTR expression.",
+            "    CRITICAL: Informatica SUBSTR is 1-indexed; Python slicing is 0-indexed.",
+            "    Example: return generated_module.substr(value, start, length)",
+            '    """',
+            "    raise NotImplementedError('FILL IN: call translated SUBSTR expression')",
+            "",
+            "",
+            "@pytest.mark.parametrize('value,start,length,expected', [",
+            "    ('ABCDEF', 1, 3, 'ABC'),   # 1-indexed: positions 1,2,3 → 'ABC'",
+            "    ('ABCDEF', 2, 3, 'BCD'),   # offset check",
+            "    ('AB',     1, 5, 'AB'),    # length exceeds string — return available chars",
+            "    ('',       1, 3, ''),      # empty string boundary",
+            "    (None,     1, 3, None),    # NULL propagation",
+            "])",
+            "def test_substr_one_based_indexing(value, start, length, expected):",
+            '    """',
+            "    SUBSTR: Informatica is 1-indexed.  The most common mistranslation is",
+            "    Python code using str[start:start+length] without subtracting 1 from start.",
+            "    SUBSTR('ABCDEF', 1, 3) must return 'ABC', not 'BCD'.",
+            '    """',
+            "    # TODO: call your translated SUBSTR function and assert the result.",
+            "    result = _substr_helper(value, start, length)",
+            "    assert result == expected, (",
+            "        f'SUBSTR mismatch: ({value!r},{start},{length}), '",
+            "        f'got={result!r}, expected={expected!r}'",
+            "    )",
+            "",
+        ]
+
+    # ── Aggregation ───────────────────────────────────────────────────────────
+    if "aggregation" in detected:
+        examples = detected["aggregation"]
+        ex_lines = [f"#   {e}" for e in examples]
+        lines += [
+            sep,
+            "# Aggregation — empty partition must return NULL (not 0) to match Informatica.",
+            "# COUNT(*) excludes NULL values in Informatica.",
+            "# Detected example(s):",
+            *ex_lines,
+            sep,
+            "import pandas as pd",
+            "",
+            "",
+            "def test_aggregation_empty_partition_returns_null():",
+            '    """',
+            "    SUM/AVG over an empty partition must return NULL (NaN in pandas),",
+            "    never 0.  Use min_count=1 in pandas groupby.sum() to match Informatica.",
+            '    """',
+            "    # TODO: replace with a call to your translated aggregation expression.",
+            "    df = pd.DataFrame({'ACCOUNT_ID': pd.Series([], dtype=str),",
+            "                       'AMOUNT':     pd.Series([], dtype=float)})",
+            "    result = df.groupby('ACCOUNT_ID')['AMOUNT'].sum(min_count=1).reset_index()",
+            "    if not result.empty:",
+            "        assert result['AMOUNT'].isna().all(), (",
+            "            'Expected NaN/NULL for SUM over empty partition. '",
+            "            'Use min_count=1 in pandas groupby.sum().'",
+            "        )",
+            "",
+            "",
+            "@pytest.mark.parametrize('values,expected_count', [",
+            "    ([1.0, 2.0, None], 2),   # NULL excluded from COUNT(*)",
+            "    ([None, None],     0),   # all NULL → COUNT returns 0",
+            "    ([],               0),   # empty group → COUNT returns 0",
+            "])",
+            "def test_count_excludes_nulls(values, expected_count):",
+            '    """',
+            "    Informatica COUNT(*) excludes NULL values.",
+            "    Verify the translated COUNT expression matches this behaviour.",
+            '    """',
+            "    # TODO: call your translated COUNT expression.",
+            "    s = pd.Series(values, dtype=float)",
+            "    result = int(s.count())  # pandas .count() excludes NaN — matches Informatica",
+            "    assert result == expected_count, (",
+            "        f'COUNT mismatch: values={values}, got={result}, expected={expected_count}'",
+            "    )",
+            "",
+        ]
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    lines += [
+        sep,
+        "# See docs/TESTING_GUIDE.md for full instructions on running these tests.",
+        sep,
+    ]
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Component B — Golden CSV comparison script
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_comparison_script(
+    mapping_name: str,
+    s2t_records: list | None = None,
+) -> str:
     """
     Return the full source code of a self-contained compare_golden.py script
     customised for the given mapping.
@@ -33,20 +390,48 @@ def generate_comparison_script(mapping_name: str) -> str:
     ----------
     mapping_name : str
         The Informatica mapping name (used in report headers and default filenames).
+    s2t_records : list, optional
+        S2T records from the s2t_agent output.  Each record is a dict with at
+        least a ``"target_field"`` key.  When provided the target field list is
+        embedded as comments at the top of the script so reviewers know which
+        columns to expect in the CSVs.
 
     Returns
     -------
     str
         Complete Python script content ready to be written as tests/compare_golden.py.
     """
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     safe_name = mapping_name.replace('"', '\\"')
 
+    # Build the target-field comment block from s2t_records
+    if s2t_records:
+        target_fields = sorted({
+            r["target_field"]
+            for r in s2t_records
+            if isinstance(r, dict) and r.get("target_field")
+        })
+        field_comment_lines = [
+            "# Expected target fields (from S2T mapping):",
+            *[f"#   {f}" for f in target_fields],
+            "#",
+        ]
+    else:
+        field_comment_lines = [
+            "# Expected target fields: (s2t_records not provided — "
+            "check the S2T workbook for the full field list)",
+            "#",
+        ]
+    field_comment_block = "\n".join(field_comment_lines)
+
     return f'''#!/usr/bin/env python3
+# Mapping : {safe_name}
+# Generated: {ts}
+{field_comment_block}
 """
 compare_golden.py — Golden Output Comparison Script
 =====================================================
-Auto-generated by Informatica Conversion Tool v2.13.0
+Auto-generated by Informatica Conversion Tool (Phase 2 Data-Level Equivalence)
 Mapping : {safe_name}
 Generated: {ts}
 
@@ -65,16 +450,20 @@ USAGE
     --expected informatica_output.csv \\
     --actual   generated_code_output.csv \\
     [--threshold 99.5] \\
+    [--sample 20] \\
     [--key-columns ACCOUNT_ID,LOAD_DATE] \\
-    [--ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID]
+    [--ignore-columns AUDIT_TIMESTAMP,ETL_RUN_ID] \\
+    [--ignore-row-count]
 
 ARGUMENTS
 ---------
-  --expected        Path to the Informatica golden-output CSV  (required)
-  --actual          Path to the generated-code output CSV      (required)
-  --threshold       Minimum row-match % to pass (default: 100.0)
-  --key-columns     Comma-separated columns for row-level join (auto-detected if omitted)
-  --ignore-columns  Comma-separated columns to skip entirely   (e.g. audit timestamps)
+  --expected          Path to the Informatica golden-output CSV  (required)
+  --actual            Path to the generated-code output CSV      (required)
+  --threshold         Minimum per-column match % to PASS (default: 99.5)
+  --sample            Max mismatch rows to print per column (default: 20)
+  --key-columns       Comma-separated columns for row-level join (auto-detected if omitted)
+  --ignore-columns    Comma-separated columns to skip entirely (e.g. audit timestamps)
+  --ignore-row-count  Skip the row-count equality check
 
 EXIT CODES
 ----------
@@ -84,12 +473,11 @@ EXIT CODES
 REQUIREMENTS
 ------------
   pip install pandas
-  (No other dependencies — this script is self-contained)
+  (No other third-party dependencies — stdlib + pandas only)
 """
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 from typing import Optional
 
@@ -104,10 +492,9 @@ except ImportError:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAPPING_NAME   = "{safe_name}"
-FLOAT_RTOL     = 1e-5   # relative tolerance for float comparisons
-FLOAT_ATOL     = 1e-8   # absolute tolerance for float comparisons
-MISMATCH_LIMIT = 20     # max mismatch rows shown in report
+MAPPING_NAME = "{safe_name}"
+FLOAT_RTOL   = 1e-5   # relative tolerance for float comparisons
+FLOAT_ATOL   = 1e-8   # absolute tolerance for float comparisons
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +535,7 @@ def main() -> None:
     key_cols       = [c.upper() for c in key_cols]
     ignore_cols    = [c.upper() for c in ignore_cols]
 
+    mismatch_limit = args.sample
     all_pass = True
 
     # ── Row count ─────────────────────────────────────────────────────────────
@@ -158,6 +546,10 @@ def main() -> None:
     print(f"  Actual (Generated code): {{act_rows:,}} rows")
     if count_match:
         print("  Match                  : ✓ Equal")
+    elif args.ignore_row_count:
+        diff = act_rows - exp_rows
+        direction = "more" if diff > 0 else "fewer"
+        print(f"  Match                  : ⚠ {{abs(diff):,}} {{direction}} rows in actual (ignored via --ignore-row-count)")
     else:
         diff = act_rows - exp_rows
         direction = "more" if diff > 0 else "fewer"
@@ -275,21 +667,20 @@ def main() -> None:
     # ── Mismatch sample ───────────────────────────────────────────────────────
     mismatch_cols = [r for r in field_results if r["mismatches"] > 0]
     if mismatch_cols:
-        print(_section(f"MISMATCH SAMPLE (up to {{MISMATCH_LIMIT}} rows per column)"))
+        print(_section(f"MISMATCH SAMPLE (up to {{mismatch_limit}} rows per column)"))
         for r in mismatch_cols[:5]:  # show up to 5 columns
             col      = r["col"]
             s_exp    = r["exp"]
             s_act    = r["act"]
             bad_mask = s_exp.fillna("__NULL__") != s_act.fillna("__NULL__")
-            sample   = merged[bad_mask].head(MISMATCH_LIMIT)
+            sample   = merged[bad_mask].head(mismatch_limit)
             print(f"  Column: {{col}}  ({{r['mismatches']}} total mismatches)")
             if r["heuristic"]:
                 print(f"  Likely cause: {{r['heuristic']}}")
-            # Print key + differing values
-            display_keys = [k + "__exp" for k in valid_keys] if valid_keys else []
+            # Print expected vs actual values for mismatched rows
             exp_vals = sample[col + "__exp"].tolist()
             act_vals = sample[col + "__act"].tolist()
-            for i, (ev, av) in enumerate(zip(exp_vals[:MISMATCH_LIMIT], act_vals[:MISMATCH_LIMIT])):
+            for i, (ev, av) in enumerate(zip(exp_vals[:mismatch_limit], act_vals[:mismatch_limit])):
                 print(f"    Row {{i+1:>3}}:  expected={{repr(ev):<20}}  actual={{repr(av)}}")
             print()
 
@@ -330,14 +721,18 @@ def _parse_args() -> argparse.Namespace:
         description="Compare Informatica golden output CSV against generated-code output CSV.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--expected",       required=True,  help="Informatica golden-output CSV")
-    p.add_argument("--actual",         required=True,  help="Generated-code output CSV")
-    p.add_argument("--threshold",      type=float, default=100.0,
-                   help="Minimum match %% to pass (default: 100.0)")
-    p.add_argument("--key-columns",    default="",
+    p.add_argument("--expected",         required=True,  help="Informatica golden-output CSV")
+    p.add_argument("--actual",           required=True,  help="Generated-code output CSV")
+    p.add_argument("--threshold",        type=float, default=99.5,
+                   help="Minimum per-column match %% to PASS (default: 99.5)")
+    p.add_argument("--sample",           type=int,   default=20,
+                   help="Max mismatch rows to print per column (default: 20)")
+    p.add_argument("--key-columns",      default="",
                    help="Comma-separated key columns for row join")
-    p.add_argument("--ignore-columns", default="",
+    p.add_argument("--ignore-columns",   default="",
                    help="Comma-separated columns to exclude from comparison")
+    p.add_argument("--ignore-row-count", action="store_true",
+                   help="Skip the row-count equality check")
     return p.parse_args()
 
 

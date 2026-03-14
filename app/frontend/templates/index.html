@@ -553,6 +553,8 @@
                     onclick="setUploadMode('files')">📄 Individual</button>
             <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                     onclick="setUploadMode('batch')">📦 Batch</button>
+            <button id="tabNewMapping" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
+                    onclick="setUploadMode('new_mapping')">✨ New Mapping</button>
           </div>
 
           <!-- ── Individual files panel ── -->
@@ -623,6 +625,42 @@
               my_batch_folder / mapping_b / mapping.xml …
             </div>
             <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
+          </div>
+
+          <!-- ── New Mapping (Phase 3 greenfield authoring) panel ── -->
+          <div id="panelNewMapping" style="display:none">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+              Author a new Informatica mapping from a pattern template and generate a PowerCenter XML export.
+            </div>
+
+            <div class="form-group" style="margin-bottom:10px">
+              <label>Pattern</label>
+              <select id="newMappingPattern" style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none">
+                <option value="">Loading patterns…</option>
+              </select>
+            </div>
+
+            <div class="form-group" style="margin-bottom:10px">
+              <label>Mapping Name</label>
+              <input id="newMappingName" type="text" placeholder="m_dim_customer_load"
+                     style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none"/>
+            </div>
+
+            <div class="form-group" style="margin-bottom:10px">
+              <label>Config YAML</label>
+              <textarea id="newMappingYaml" rows="12"
+                        style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;font-family:'JetBrains Mono','Fira Code',monospace;outline:none;resize:vertical;line-height:1.5"></textarea>
+            </div>
+
+            <button id="btnGenerateXml" class="btn btn-primary" onclick="generateXml()"
+                    style="width:100%;margin-bottom:8px">Generate Informatica XML</button>
+
+            <pre id="newMappingOutput"
+                 style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:11px;max-height:320px;overflow:auto;white-space:pre;word-break:break-all;margin-bottom:8px"></pre>
+
+            <a id="btnDownloadXml" class="btn btn-success btn-sm" style="display:none;text-decoration:none">
+              ⬇ Download XML
+            </a>
           </div>
 
           <!-- ── Pipeline mode ── -->
@@ -1158,12 +1196,19 @@ function setUploadMode(mode) {
   uploadMode = mode;
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
   document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
+  document.getElementById('panelNewMapping').style.display = mode === 'new_mapping' ? '' : 'none';
   const tabFiles = document.getElementById('tabFiles');
   const tabBatch = document.getElementById('tabBatch');
+  const tabNewMapping = document.getElementById('tabNewMapping');
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+  tabNewMapping.className = mode === 'new_mapping' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
+  if (mode === 'new_mapping') {
+    startBtn.disabled = true;
+    loadPatternsForTab();
+  }
   // Update tips box based on mode
   const tips = document.getElementById('submitTipsBox');
   if (!tips) return;
@@ -1177,8 +1222,100 @@ function setUploadMode(mode) {
       • <strong>Select ZIP</strong> — or supply your own ZIP with one subfolder per mapping.<br/>
       • Up to 3 jobs run concurrently. Large batches are queued automatically.<br/>
       • Track each child job individually in Job History once submitted.`,
+    new_mapping: `<strong style="color:var(--text)">💡 New Mapping tips:</strong><br/>
+      • Pick a <strong>pattern</strong> — the YAML template is pre-filled with the required fields.<br/>
+      • Edit the YAML to match your source and target connections.<br/>
+      • Click <strong>Generate Informatica XML</strong> to produce a PowerCenter-compatible XML export.`,
   };
   tips.innerHTML = tipsMap[mode] || tipsMap.files;
+}
+
+// ── Phase 3: New Mapping / greenfield authoring ───────────────────────────
+let _patternsLoaded = false;
+let _patternsData = [];
+
+async function loadPatternsForTab() {
+  if (_patternsLoaded) return;
+  const sel = document.getElementById('newMappingPattern');
+  try {
+    const res = await fetch('/api/patterns');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    _patternsData = data.patterns || [];
+    sel.innerHTML = '';
+    _patternsData.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name + ' — ' + p.description;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => prefillYamlTemplate(_patternsData, sel.value));
+    if (_patternsData.length > 0) prefillYamlTemplate(_patternsData, _patternsData[0].name);
+    _patternsLoaded = true;
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load patterns — ' + e.message + '</option>';
+  }
+}
+
+function prefillYamlTemplate(patterns, selectedName) {
+  const p = patterns.find(x => x.name === selectedName);
+  if (!p) return;
+  const textarea = document.getElementById('newMappingYaml');
+  textarea.value = buildYamlTemplate(selectedName, p.schema);
+}
+
+function buildYamlTemplate(patternName, schema) {
+  const base = `pattern: ${patternName}\nmapping_name: m_example\nsource:\n  type: database\n  connection_string: oracle://user:pass@host/db\n  table: SOURCE_TABLE\ntarget:\n  type: database\n  connection_string: oracle://user:pass@host/dw\n  table: TARGET_TABLE\n`;
+  const extras = {
+    incremental_append: `watermark:\n  column: UPDATED_AT\n  data_type: datetime\n  initial: "1900-01-01 00:00:00"\n`,
+    upsert:             `unique_key:\n  - ID\n`,
+    scd2:               `scd2:\n  business_key:\n    - CUSTOMER_ID\n  tracked_cols:\n    - NAME\n    - EMAIL\n  effective_from: EFF_FROM\n  effective_to: EFF_TO\n  is_current: IS_CURRENT\n`,
+    lookup_enrich:      `lookup:\n  table: REF_TABLE\n  join_key:\n    - ID\n  select_cols:\n    - DESCRIPTION\n`,
+    aggregation_load:   `aggregation:\n  group_by:\n    - REGION\n  aggregates:\n    total_sales: "SUM(AMOUNT)"\n    cnt: "COUNT(*)"\n`,
+    filter_and_route:   `routes:\n  - condition: "STATUS = 'ACTIVE'"\n    target:\n      type: database\n      connection_string: oracle://user:pass@host/dw\n      table: ACTIVE_TABLE\n`,
+    union_consolidate:  `union_sources:\n  - type: database\n    connection_string: oracle://user:pass@host/db2\n    table: SOURCE_TABLE_2\n`,
+    expression_transform: `column_map:\n  - target_col: FULL_NAME\n    expression: "FIRST_NAME || ' ' || LAST_NAME"\n`,
+  };
+  return base + (extras[patternName] || '');
+}
+
+async function generateXml() {
+  const patternName = document.getElementById('newMappingPattern').value;
+  const mappingName = document.getElementById('newMappingName').value.trim() || 'm_generated';
+  const configYaml = document.getElementById('newMappingYaml').value;
+
+  if (!patternName) { alert('Please select a pattern first.'); return; }
+
+  const btn = document.getElementById('btnGenerateXml');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+
+  try {
+    const res = await fetch(`/api/patterns/${encodeURIComponent(patternName)}/generate-xml`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({config_yaml: configYaml, mapping_name: mappingName}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(JSON.stringify(data.detail || data));
+
+    const outputEl = document.getElementById('newMappingOutput');
+    outputEl.textContent = data.xml_content;
+    outputEl.style.display = 'block';
+
+    // Enable download
+    const blob = new Blob([data.xml_content], {type: 'application/xml'});
+    const url = URL.createObjectURL(blob);
+    const dl = document.getElementById('btnDownloadXml');
+    dl.href = url;
+    dl.download = mappingName + '.xml';
+    dl.style.display = 'inline-block';
+  } catch (e) {
+    alert('Generation failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Informatica XML';
+  }
 }
 
 // ── Show submit panel (form + intelligence) ──────────────────────────────
@@ -2598,7 +2735,17 @@ function renderJobPanel(job) {
         </div>
         <div class="form-actions">
           <button class="btn btn-success" onclick="submitSignoff('${job.job_id}', 'APPROVED', ${JSON.stringify(sortedFlags).replace(/"/g,'&quot;')})">✓ Approve — Proceed to Conversion</button>
-          <button class="btn btn-danger"  onclick="submitSignoff('${job.job_id}', 'REJECTED', [])">✗ Reject — Needs Remediation</button>
+          <button class="btn btn-danger"  onclick="showGate1RestartOptions()">✗ Reject — Needs Remediation</button>
+        </div>
+        <div id="gate1RestartRow" style="display:none;margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Optional: restart pipeline from a checkpoint (skip re-upload)</div>
+          <select id="gate1RestartStep" style="font-size:13px;padding:5px 8px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;width:100%;margin-bottom:8px">
+            <option value="">— block job (no restart) —</option>
+            <option value="1">Step 1 — Re-parse XML &amp; re-run all</option>
+            <option value="2">Step 2 — Re-classify &amp; re-document</option>
+            <option value="3">Step 3 — Re-generate documentation only</option>
+          </select>
+          <button class="btn btn-danger" style="width:100%" onclick="submitSignoff('${job.job_id}', 'REJECTED', [])">Confirm Reject</button>
         </div>
       </div>
       </div>
@@ -3163,7 +3310,17 @@ function renderJobPanel(job) {
           </div>
           <div class="form-actions">
             <button class="btn btn-success" onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','APPROVED')">✅ Approve — Mark Complete</button>
-            <button class="btn btn-danger"  onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','REJECTED')">❌ Reject — Block &amp; Start Over</button>
+            <button class="btn btn-danger"  onclick="event.stopPropagation();showGate3RestartOptions()">❌ Reject — Block &amp; Start Over</button>
+          </div>
+          <div id="gate3RestartRow" style="display:none;margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Optional: restart pipeline from a checkpoint (skip re-upload)</div>
+            <select id="gate3RestartStep" style="font-size:13px;padding:5px 8px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;width:100%;margin-bottom:8px">
+              <option value="">— block job (no restart) —</option>
+              <option value="6">Step 6 — Re-assign stack &amp; re-convert</option>
+              <option value="7">Step 7 — Re-generate code only</option>
+              <option value="10">Step 10 — Re-run code review &amp; tests</option>
+            </select>
+            <button class="btn btn-danger" style="width:100%" onclick="event.stopPropagation();submitCodeSignoff('${job.job_id}','REJECTED')">Confirm Reject</button>
           </div>
         </div>
       </div>`;
@@ -3492,12 +3649,28 @@ function reuploadForJob() {
 // ─────────────────────────────────────────────
 // Sign-off submission
 // ─────────────────────────────────────────────
+
+// Show/hide the Gate 1 checkpoint restart dropdown when the Reject button is clicked
+function showGate1RestartOptions() {
+  const row = document.getElementById('gate1RestartRow');
+  if (row) row.style.display = row.style.display === 'none' ? 'block' : 'none';
+}
+
 async function submitSignoff(jobId, decision, flags) {
   const name  = document.getElementById('reviewerName')?.value?.trim();
   const role  = document.getElementById('reviewerRole')?.value;
   const notes = document.getElementById('reviewNotes')?.value?.trim();
 
   if (!name) { alert('Please enter your name.'); return; }
+
+  // For REJECTED decisions: check if a checkpoint restart step is selected
+  let restart_from_step = null;
+  if (decision === 'REJECTED') {
+    const restartEl = document.getElementById('gate1RestartStep');
+    if (restartEl && restartEl.value) {
+      restart_from_step = parseInt(restartEl.value, 10);
+    }
+  }
 
   const flagResolutions = flags.map((f, i) => {
     const applyFixEl = document.getElementById(`flag_apply_fix_${i}`);
@@ -3512,7 +3685,14 @@ async function submitSignoff(jobId, decision, flags) {
     };
   });
 
-  const payload = { reviewer_name: name, reviewer_role: role, decision, flag_resolutions: flagResolutions, notes };
+  const payload = {
+    reviewer_name: name,
+    reviewer_role: role,
+    decision,
+    flag_resolutions: flagResolutions,
+    notes,
+    restart_from_step,
+  };
 
   try {
     const res = await fetch(`/api/jobs/${jobId}/sign-off`, {
@@ -3571,6 +3751,13 @@ async function submitSecurityReview(jobId, decision) {
 // ─────────────────────────────────────────────
 // Code review sign-off submission (Step 12)
 // ─────────────────────────────────────────────
+
+// Show/hide the Gate 3 checkpoint restart dropdown when the Reject button is clicked
+function showGate3RestartOptions() {
+  const row = document.getElementById('gate3RestartRow');
+  if (row) row.style.display = row.style.display === 'none' ? 'block' : 'none';
+}
+
 async function submitCodeSignoff(jobId, decision) {
   const name  = document.getElementById('codeReviewerName')?.value?.trim();
   const role  = document.getElementById('codeReviewerRole')?.value;
@@ -3578,12 +3765,29 @@ async function submitCodeSignoff(jobId, decision) {
 
   if (!name) { alert('Please enter your name.'); return; }
 
+  // For REJECTED decisions: check if a checkpoint restart step is selected
+  let restart_from_step = null;
+  if (decision === 'REJECTED') {
+    const restartEl = document.getElementById('gate3RestartStep');
+    if (restartEl && restartEl.value) {
+      restart_from_step = parseInt(restartEl.value, 10);
+    }
+  }
+
   const label = decision === 'APPROVED'
     ? 'approve and mark this job complete'
-    : 'reject and block this job — you will need to re-upload the mapping to start over';
+    : restart_from_step
+      ? `reject and restart from Step ${restart_from_step}`
+      : 'reject and block this job — you will need to re-upload the mapping to start over';
   if (!confirm(`Are you sure you want to ${label}?`)) return;
 
-  const payload = { reviewer_name: name, reviewer_role: role, decision, notes: notes || null };
+  const payload = {
+    reviewer_name: name,
+    reviewer_role: role,
+    decision,
+    notes: notes || null,
+    restart_from_step,
+  };
 
   try {
     const res = await fetch(`/api/jobs/${jobId}/code-signoff`, {

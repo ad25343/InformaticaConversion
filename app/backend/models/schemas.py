@@ -450,12 +450,17 @@ class ConversionJob(BaseModel):
 # API Request/Response helpers
 # ─────────────────────────────────────────────
 
+VALID_RESTART_STEPS_GATE1: frozenset = frozenset({1, 2, 3})
+VALID_RESTART_STEPS_GATE3: frozenset = frozenset({6, 7, 10})
+
+
 class SignOffRequest(BaseModel):
-    reviewer_name:     str
-    reviewer_role:     str
-    decision:          ReviewDecision
-    flag_resolutions:  List[FlagResolution] = []
-    notes:             Optional[str] = None
+    reviewer_name:      str
+    reviewer_role:      str
+    decision:           ReviewDecision
+    flag_resolutions:   List[FlagResolution] = []
+    notes:              Optional[str] = None
+    restart_from_step:  Optional[int] = None
 
 class SecuritySignOffRecord(BaseModel):
     """Stored on the job after security review gate (Step 9)."""
@@ -475,10 +480,11 @@ class SecuritySignOffRequest(BaseModel):
     notes:         Optional[str] = None
 
 class CodeSignOffRequest(BaseModel):
-    reviewer_name: str
-    reviewer_role: str
-    decision:      CodeReviewDecision   # APPROVED | REGENERATE | REJECTED
-    notes:         Optional[str] = None
+    reviewer_name:      str
+    reviewer_role:      str
+    decision:           CodeReviewDecision   # APPROVED | REGENERATE | REJECTED
+    notes:              Optional[str] = None
+    restart_from_step:  Optional[int] = None
 
 class JobSummary(BaseModel):
     job_id:       str

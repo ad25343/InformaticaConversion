@@ -173,6 +173,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON job_audit_log(created_at DESC);
 """
 
 
+CREATE_PATTERN_GENERATION_LOG = """
+CREATE TABLE IF NOT EXISTS pattern_generation_log (
+    gen_id          TEXT PRIMARY KEY,
+    pattern_name    TEXT NOT NULL,
+    mapping_name    TEXT NOT NULL,
+    requested_at    TEXT NOT NULL,
+    duration_ms     INTEGER NOT NULL DEFAULT 0,
+    success         INTEGER NOT NULL DEFAULT 1,
+    error_message   TEXT NOT NULL DEFAULT '',
+    xml_length      INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
 async def init_db():
     async with _connect() as db:
         # ── v2.6.0: WAL mode — persistent on the file, set once here ─────
@@ -247,6 +261,8 @@ async def init_db():
             )
         except Exception:
             pass  # column already present
+        # Phase 3 — pattern_generation_log (greenfield authoring audit log)
+        await db.execute(CREATE_PATTERN_GENERATION_LOG)
         await db.commit()
 
 
@@ -716,3 +732,28 @@ async def get_audit_log(job_id: str) -> List[dict]:
         del d["extra_json"]
         result.append(d)
     return result
+
+
+# ── Phase 3: Pattern generation log ──────────────────────────────────────────
+
+async def log_pattern_generation(
+    pattern_name: str,
+    mapping_name: str,
+    duration_ms: int,
+    success: bool,
+    xml_length: int = 0,
+    error_message: str = "",
+) -> None:
+    """Insert one record into pattern_generation_log (best-effort audit trail)."""
+    import uuid as _uuid_mod
+    import datetime as _datetime_mod
+    gen_id = str(_uuid_mod.uuid4())
+    requested_at = _datetime_mod.datetime.utcnow().isoformat()
+    async with _connect() as conn:
+        await conn.execute(
+            """INSERT INTO pattern_generation_log
+               (gen_id, pattern_name, mapping_name, requested_at, duration_ms, success, error_message, xml_length)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (gen_id, pattern_name, mapping_name, requested_at, duration_ms, 1 if success else 0, error_message, xml_length),
+        )
+        await conn.commit()

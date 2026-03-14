@@ -170,7 +170,18 @@ There are three points where a named reviewer must act before the pipeline conti
 
 Triggered after Step 4. The reviewer sees all verification flags with their severity (CRITICAL / HIGH / MEDIUM / LOW), blocking status, and recommended actions. For each flag they can either accept it (acknowledge the risk and proceed) or note it as resolved (the issue has been addressed in the source mapping).
 
-Actions: **Approve** (proceed to code generation) or **Reject** (stop — the mapping needs to be fixed and re-uploaded).
+Actions: **Approve** (proceed to code generation) or **Reject**.
+
+When rejecting at Gate 1 you choose what happens next:
+
+| Restart option | What reruns |
+|---|---|
+| **Full restart** (default) | Job is blocked — fix in Informatica, re-export, re-upload |
+| **Restart from Step 3** | Re-generate documentation with fresh context |
+| **Restart from Step 2** | Re-classify complexity + re-generate S2T + re-document |
+| **Restart from Step 1** | Re-parse the XML + all downstream steps |
+
+Choose the lightest restart that addresses the issue. Step 3 is sufficient for most documentation quality issues. Step 1 is needed only when the XML itself must change.
 
 ### Gate 2 — Security review
 
@@ -182,7 +193,18 @@ Actions: **Approved** · **Acknowledged** (accept risk) · **Request fix** (loop
 
 Triggered after Step 11. The reviewer sees the generated code (syntax-highlighted), the quality reconciliation report, and the test coverage summary.
 
-Actions: **Approved** (pipeline complete — outputs written to disk, PR opened if configured) · **Regenerate** (re-run conversion from Step 6) · **Rejected** (hard stop).
+Actions: **Approved** (pipeline complete — outputs written to disk, PR opened if configured) · **Regenerate** (re-run conversion from Step 6) · **Rejected**.
+
+When rejecting at Gate 3 you choose what happens next:
+
+| Restart option | What reruns |
+|---|---|
+| **Full restart** (default) | Job is blocked — fix in Informatica, re-export, re-upload |
+| **Restart from Step 10** | Re-run equivalence review + tests only |
+| **Restart from Step 7** | Re-convert code + smoke test + security scan + review + tests |
+| **Restart from Step 6** | Re-assign stack + all conversion steps |
+
+Use "Restart from Step 7" when the code itself needs to be regenerated. Use "Restart from Step 10" when the code is acceptable but the review or test artifacts need refreshing.
 
 ---
 
@@ -699,7 +721,7 @@ Export with *Include Dependencies* enabled so that any reusable transformations 
 The tool detects and inline-expands mapplet definitions automatically. If a mapplet instance is found but its definition is not in the export, a HIGH severity flag is raised at Gate 1.
 
 **Q: Can I override the target stack assigned by the tool?**
-Not directly in the current version. If the assigned stack (Step 6) is wrong, reject at Gate 3 and re-upload — the tool will reassign on the next run.
+If the assigned stack (Step 6) is wrong, reject at Gate 3 and choose **"Restart from Step 6"** — the tool will re-assign the stack on the next run without requiring a re-upload.
 
 **Q: How do I convert multiple mappings at once?**
 Use **Batch mode** on the Submit tab. Click **📁 Select Folder** to pick a folder (the browser packages it automatically), or click **📦 Select ZIP** if you already have one. Both flat folders and structured subfolders are supported.
@@ -711,7 +733,7 @@ No. If all XMLs are in the same directory with no subfolders, the tool automatic
 It runs Steps 1–4 only (parse, classify, S2T, verify) and exits cleanly after producing the Source-to-Target Excel and technical docs. No code is generated, no gates are triggered. Use it to catalogue your mapping inventory before committing to full conversion.
 
 **Q: My gate review was rejected — how do I retry?**
-Fix the underlying issue in Informatica, re-export the mapping XML, and upload it again as a new job. Deleted jobs retain their logs in the archive for reference.
+At Gate 1 and Gate 3, the rejection form includes a **"Restart from Step"** dropdown. Select the lightest step that addresses the issue — the pipeline resumes from that point without re-uploading the XML. If the underlying mapping XML must change, choose "Full restart", fix in Informatica, re-export, and upload as a new job.
 
 **Q: Does the tool ever automatically execute the generated code or tests?**
 No. The tool generates code and test artifacts but never runs them. Execution is the data engineering team's responsibility in their own environment.
@@ -726,3 +748,54 @@ Batch jobs that were queued but hadn't started are automatically re-queued on st
 Individual jobs: `OUTPUT_DIR/individual/<mapping_stem>_<short_id>/`
 Batch jobs: `OUTPUT_DIR/batch_<short_batch_id>/<mapping_stem>/`
 See the **Output folders** section above for the full directory layout.
+
+---
+
+## Authoring new mappings (✨ New Mapping tab)
+
+The **✨ New Mapping** tab lets you generate an Informatica PowerCenter XML mapping from scratch using one of the 10 built-in ETL patterns. This is the reverse of the normal conversion flow — instead of converting Informatica XML to code, you describe the desired ETL pattern and the tool produces the Informatica XML for you.
+
+### When to use this
+
+- Your team is still on Informatica but wants to author new mappings to a standard pattern rather than free-forming them
+- You need to round-trip validate: generate the Informatica XML, run it in your environment, capture the output as a golden CSV, then run the conversion tool and compare
+- You want a quick XML stub to start from when building a new mapping in Informatica Designer
+
+### How it works
+
+1. Open the **✨ New Mapping** tab on the Submit screen
+2. Choose a pattern from the dropdown — the YAML editor pre-fills with the minimum required fields for that pattern
+3. Fill in your source/target connection strings, table names, and any pattern-specific config (e.g. `unique_key` for upsert, `watermark.column` for incremental append)
+4. Enter a mapping name (e.g. `m_dim_customer_load`)
+5. Click **Generate Informatica XML**
+6. The generated XML appears in the panel — review it, then click **Download XML** to save it as `<mapping_name>.xml`
+
+### Supported patterns
+
+| Pattern | Use case |
+|---|---|
+| `truncate_and_load` | Full-refresh: truncate and reload every run |
+| `incremental_append` | Watermark-driven append of new rows |
+| `upsert` | Merge on key columns (SCD Type 1) |
+| `scd2` | Slowly Changing Dimension Type 2 with full history |
+| `lookup_enrich` | Enrich source rows by joining to a reference table |
+| `aggregation_load` | GROUP BY aggregation into a summary table |
+| `filter_and_route` | Route rows to different targets based on conditions |
+| `union_consolidate` | Consolidate multiple sources into one target |
+| `expression_transform` | Column-level expression transformations |
+| `pass_through` | Direct extract with no transformation |
+
+### API access
+
+```bash
+# List all patterns with their config schemas
+curl http://localhost:8000/api/patterns
+
+# Generate XML from a pattern config
+curl -X POST http://localhost:8000/api/patterns/upsert/generate-xml \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config_yaml": "pattern: upsert\nmapping_name: m_dim_branch\nsource:\n  type: database\n  connection_string: oracle://user:pass@host/db\n  table: SRC_BRANCH\ntarget:\n  type: database\n  connection_string: oracle://user:pass@host/dw\n  table: DIM_BRANCH\n  write_mode: upsert\nunique_key: [BRANCH_ID]",
+    "mapping_name": "m_dim_branch"
+  }'
+```

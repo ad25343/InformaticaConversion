@@ -1666,6 +1666,184 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         yield e.event
 
 
+async def resume_from_step(
+    job_id: str,
+    filename: str,
+    step_number: int,
+    state: dict,
+) -> AsyncGenerator[dict, None]:
+    """
+    Checkpoint-based resume: restart the pipeline from a specific step without
+    re-uploading the mapping XML.  Called after a Gate 1 or Gate 3 REJECTED
+    decision that includes a ``restart_from_step`` value.
+
+    Supported restart points:
+      Gate 1 (REJECTED):
+        1 — re-run Steps 1 → 1b → 2 → 2b → 3 → 4 → 5
+        2 — re-run Steps 2 → 2b → 3 → 4 → 5
+        3 — re-run Steps 3 → 4 → 5
+      Gate 3 (REJECTED):
+        6  — re-run Steps 6 → 7 → 7b → 8  (includes Gate 2 pause if findings)
+        7  — re-run Steps 7 → 7b → 8
+        10 — re-run Steps 10 → 10b → 11 → 11b → 12
+    """
+    log = JobLogger(job_id, filename)
+
+    async def emit(step: int, status: JobStatus, message: str, data: dict = None):
+        patch = data or {}
+        patch["pipeline_log"] = log.get_buffer()
+        _failure_event = {
+            "step": step,
+            "status": JobStatus.FAILED.value,
+            "message": f"Database write failure — pipeline stopped at step {step}.",
+        }
+        for _attempt in range(3):
+            try:
+                await update_job(job_id, status.value, step, patch)
+                break
+            except Exception as _db_exc:
+                if _attempt == 2:
+                    _orch_log.error(
+                        "emit() DB write failed after 3 attempts "
+                        "(job=%s step=%d status=%s): %s — terminating pipeline.",
+                        job_id, step, status.value, _db_exc,
+                    )
+                    raise EmitError(_failure_event) from _db_exc
+                _orch_log.warning(
+                    "emit() DB write attempt %d failed (job=%s step=%d): %s — retrying.",
+                    _attempt + 1, job_id, step, _db_exc,
+                )
+                await asyncio.sleep(0.5)
+        return {"step": step, "status": status.value, "message": message}
+
+    import copy
+    from .models.schemas import (
+        ComplexityReport, ParseReport, VerificationReport,
+        SessionParseReport, StackAssignment, ConversionOutput, SecurityScanReport,
+    )
+
+    state = copy.deepcopy(state)
+
+    log.info(
+        f"Checkpoint resume requested — step_number={step_number}",
+        step=step_number,
+    )
+
+    # Validate step_number early
+    _valid_steps = {1, 2, 3, 6, 7, 10}
+    if step_number not in _valid_steps:
+        msg = (
+            f"Invalid restart step {step_number}. "
+            f"Valid restart steps are: {sorted(_valid_steps)}."
+        )
+        log.step_failed(step_number, "Checkpoint resume", msg)
+        log.close()
+        yield await emit(step_number, JobStatus.FAILED, msg, {"error": msg})
+        return
+
+    # ── Reconstruct shared pipeline context ──────────────────────────────────
+    try:
+        _pr = state.get("parse_report")
+        parse_report = ParseReport(**_pr) if _pr else None
+        _cx = state.get("complexity")
+        complexity = ComplexityReport(**_cx) if _cx else None
+        documentation_md = state.get("documentation_md", "")
+        graph = state.get("graph", {})
+        _v = state.get("verification")
+        verification = VerificationReport(**_v) if _v else None
+        _spr = state.get("session_parse_report")
+        session_parse_report = SessionParseReport(**_spr) if _spr else None
+        s2t_state = state.get("s2t", {})
+        _sa = state.get("stack_assignment")
+        stack_assignment = StackAssignment(**_sa) if _sa else None
+        _co = state.get("conversion") or state.get("conversion_output")
+        conversion_output = ConversionOutput(**_co) if _co else None
+        _sec = state.get("security_scan")
+        security_scan = SecurityScanReport(**_sec) if _sec else None
+        pipeline_mode = state.get("pipeline_mode", "full")
+    except Exception as e:
+        log.step_failed(step_number, "State reconstruction", str(e), exc_info=True)
+        log.close()
+        yield await emit(step_number, JobStatus.FAILED,
+                         f"State reconstruction failed: {e}", _err(e))
+        return
+
+    # Load original XML so review step can do logic equivalence checks
+    xml_content_for_review = await get_xml(job_id) or ""
+
+    ctx = _PipelineCtx(
+        job_id=job_id,
+        filename=filename,
+        emit=emit,
+        log=log,
+        pipeline_mode=pipeline_mode,
+        parse_report=parse_report,
+        complexity=complexity,
+        documentation_md=documentation_md,
+        graph=graph,
+        verification=verification,
+        s2t_state=s2t_state,
+        session_parse_report=session_parse_report,
+        stack_assignment=stack_assignment,
+        conversion_output=conversion_output,
+        security_scan=security_scan,
+        xml_content=xml_content_for_review,
+    )
+
+    try:
+        if step_number == 1:
+            # Re-run parse → manifest → classify → s2t → document → verify → gate1
+            async for event in _step_1_parse_xml(ctx): yield event
+            if ctx.parse_report is None: return
+            async for event in _step_1b_manifest(ctx): yield event
+            async for event in _step_2_classify(ctx): yield event
+            async for event in _step_2b_s2t(ctx): yield event
+            async for event in _step_3_document(ctx): yield event
+            async for event in _step_4_verify(ctx): yield event
+            async for event in _step_5_gate1(ctx): yield event
+
+        elif step_number == 2:
+            # Re-run classify → s2t → document → verify → gate1
+            async for event in _step_2_classify(ctx): yield event
+            async for event in _step_2b_s2t(ctx): yield event
+            async for event in _step_3_document(ctx): yield event
+            async for event in _step_4_verify(ctx): yield event
+            async for event in _step_5_gate1(ctx): yield event
+
+        elif step_number == 3:
+            # Re-run document → verify → gate1
+            async for event in _step_3_document(ctx): yield event
+            async for event in _step_4_verify(ctx): yield event
+            async for event in _step_5_gate1(ctx): yield event
+
+        elif step_number == 6:
+            # Re-run assign_stack → convert → smoke → sec_scan (includes Gate 2 pause)
+            async for event in _step_6_assign_stack(ctx): yield event
+            if ctx.stack_assignment is None: return
+            async for event in _step_7_convert(ctx, state): yield event
+            if ctx.conversion_output is None: return
+            async for event in _step_7b_smoke(ctx): yield event
+            async for event in _step_8_sec_scan(ctx): yield event
+
+        elif step_number == 7:
+            # Re-run convert → smoke → sec_scan
+            async for event in _step_7_convert(ctx, state): yield event
+            if ctx.conversion_output is None: return
+            async for event in _step_7b_smoke(ctx): yield event
+            async for event in _step_8_sec_scan(ctx): yield event
+
+        elif step_number == 10:
+            # Re-run code review → reconcile → tests → sec_test → gate3
+            async for event in _step_10_review(ctx): yield event
+            async for event in _step_10b_reconcile(ctx): yield event
+            async for event in _step_11_tests(ctx, state): yield event
+            async for event in _step_11b_sec_test(ctx): yield event
+            async for event in _step_12_gate3(ctx): yield event
+
+    except EmitError as e:
+        yield e.event
+
+
 async def resume_after_code_signoff(job_id: str, state: dict, filename: str = "unknown") -> AsyncGenerator[dict, None]:
     """
     Called after APPROVED code review sign-off.

@@ -40,7 +40,7 @@ from ..models.schemas import (
     ConversionOutput, TestReport, FieldCoverageCheck,
     FilterCoverageCheck, TargetStack,
 )
-from .golden_compare import generate_comparison_script
+from .golden_compare import generate_boundary_tests, generate_comparison_script
 from .base import BaseAgent
 
 
@@ -129,8 +129,10 @@ def _generate_tests_impl(
     notes.extend(expr_notes)
 
     # ── 5. Component B — Golden CSV comparison script (v2.13) ─────────────────
+    s2t_records = s2t.get("records", []) if s2t else []
     comparison_script = generate_comparison_script(
-        mapping_name=conversion_output.mapping_name or "mapping"
+        mapping_name=conversion_output.mapping_name or "mapping",
+        s2t_records=s2t_records,
     )
     test_files["tests/compare_golden.py"] = comparison_script
     notes.append(

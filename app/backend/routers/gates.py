@@ -22,6 +22,7 @@ from ._helpers import (
     CodeSignOffRequest, CodeSignOffRecord, CodeReviewDecision,
     SecuritySignOffRecord, SecuritySignOffRequest, SecurityReviewDecision,
 )
+from ..models.schemas import VALID_RESTART_STEPS_GATE1, VALID_RESTART_STEPS_GATE3
 
 router = APIRouter(prefix="")
 
@@ -69,9 +70,49 @@ async def submit_signoff(job_id: str, payload: SignOffRequest):
     )
 
     if payload.decision == ReviewDecision.REJECTED:
-        await db.update_job(job_id, JobStatus.BLOCKED.value, 5, {})
-        logger.info("Job rejected: job_id=%s", job_id)
-        return {"message": "Job rejected. Pipeline will not proceed."}
+        restart_step = payload.restart_from_step
+        if restart_step and restart_step in VALID_RESTART_STEPS_GATE1:
+            # Checkpoint-based restart — resume from the requested step
+            await db.update_job(job_id, JobStatus.PENDING.value, 5, {"error": None})
+            await db.add_audit_entry(
+                job_id=job_id,
+                gate="gate1",
+                event_type="reject_restart",
+                reviewer_name=payload.reviewer_name,
+                reviewer_role=payload.reviewer_role,
+                decision=payload.decision,
+                notes=payload.notes,
+                extra={"restart_from_step": restart_step},
+            )
+            queue: asyncio.Queue = asyncio.Queue()
+            _progress_queues[job_id] = queue
+            state    = job["state"]
+            filename = job["filename"]
+            restart_gen = orchestrator.resume_from_step(job_id, filename, restart_step, state)
+
+            async def _restart_resume():
+                try:
+                    async for progress in restart_gen:
+                        await queue.put(progress)
+                except orchestrator.EmitError as _emit_exc:
+                    await queue.put(_emit_exc.event)
+                finally:
+                    await queue.put(None)
+
+            task = asyncio.create_task(_restart_resume())
+            _active_tasks[job_id] = task
+            logger.info("Pipeline checkpoint-restarting from step %s: job_id=%s",
+                        restart_step, job_id)
+            return {
+                "message": f"Job rejected with checkpoint restart from Step {restart_step}.",
+                "job_id": job_id,
+                "restart_from_step": restart_step,
+            }
+        else:
+            # Existing behavior — hard block
+            await db.update_job(job_id, JobStatus.BLOCKED.value, 5, {})
+            logger.info("Job rejected: job_id=%s", job_id)
+            return {"message": "Job rejected. Pipeline will not proceed."}
 
     # APPROVED — resume pipeline in background
     queue: asyncio.Queue = asyncio.Queue()
@@ -280,19 +321,61 @@ async def submit_code_signoff(job_id: str, payload: CodeSignOffRequest):
         notes=payload.notes,
     )
 
-    # REJECTED — block the job immediately
+    # REJECTED — checkpoint restart or hard block
     if payload.decision == CodeReviewDecision.REJECTED:
-        await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
-        logger.info("Code review rejected: job_id=%s reviewer=%s",
-                    job_id, payload.reviewer_name)
-        return {
-            "message": (
-                "Code review rejected. Job is blocked — upload the mapping again "
-                "to start a fresh conversion."
-            ),
-            "job_id":   job_id,
-            "decision": payload.decision,
-        }
+        restart_step = payload.restart_from_step
+        if restart_step and restart_step in VALID_RESTART_STEPS_GATE3:
+            # Checkpoint-based restart from within the conversion phase
+            await db.update_job(job_id, JobStatus.PENDING.value, 12, {"error": None})
+            await db.add_audit_entry(
+                job_id=job_id,
+                gate="gate3",
+                event_type="reject_restart",
+                reviewer_name=payload.reviewer_name,
+                reviewer_role=payload.reviewer_role,
+                decision=payload.decision,
+                notes=payload.notes,
+                extra={"restart_from_step": restart_step},
+            )
+            queue: asyncio.Queue = asyncio.Queue()
+            _progress_queues[job_id] = queue
+            state    = job["state"]
+            state["code_sign_off"] = code_signoff.model_dump()
+            filename = job["filename"]
+            restart_gen = orchestrator.resume_from_step(job_id, filename, restart_step, state)
+
+            async def _code_restart_resume():
+                try:
+                    async for progress in restart_gen:
+                        await queue.put(progress)
+                except orchestrator.EmitError as _emit_exc:
+                    await queue.put(_emit_exc.event)
+                finally:
+                    await queue.put(None)
+
+            task = asyncio.create_task(_code_restart_resume())
+            _active_tasks[job_id] = task
+            logger.info("Pipeline checkpoint-restarting from step %s after Gate 3 reject: job_id=%s",
+                        restart_step, job_id)
+            return {
+                "message": f"Code review rejected with checkpoint restart from Step {restart_step}.",
+                "job_id":   job_id,
+                "decision": payload.decision,
+                "restart_from_step": restart_step,
+            }
+        else:
+            # Existing behavior — hard block
+            await db.update_job(job_id, JobStatus.BLOCKED.value, 12, {})
+            logger.info("Code review rejected: job_id=%s reviewer=%s",
+                        job_id, payload.reviewer_name)
+            return {
+                "message": (
+                    "Code review rejected. Job is blocked — upload the mapping again "
+                    "to start a fresh conversion."
+                ),
+                "job_id":   job_id,
+                "decision": payload.decision,
+            }
 
     # APPROVED — resume to write COMPLETE status
     queue: asyncio.Queue = asyncio.Queue()
