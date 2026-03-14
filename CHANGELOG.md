@@ -188,6 +188,160 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.14] — 2026-03-13 — Individual dropzone label cleanup
+
+### Fixed
+
+- Simplified the Individual upload dropzone label to a single clear line — removed multi-line hint text that was cluttering the drop area.
+
+---
+
+## [2.18.12] — 2026-03-13 — CSP fix: allow cdnjs.cloudflare.com for JSZip
+
+### Fixed
+
+- The Content Security Policy `script-src` directive was restricted to `'self'` + `'unsafe-inline'`, blocking the JSZip CDN tag added in v2.18.11. Added `https://cdnjs.cloudflare.com` to `script-src` so folder→ZIP packaging works in batch mode.
+
+---
+
+## [2.18.11] — 2026-03-13 — Batch folder-select: client-side ZIP packaging via JSZip
+
+### Added
+
+- **Select Folder** button in batch upload mode — users can now pick a folder directly instead of pre-packaging a ZIP. The browser reads all files via `webkitdirectory`, JSZip packages them client-side preserving subfolder structure, and the ZIP is submitted to the existing `POST /api/jobs/batch` endpoint unchanged. The existing Select ZIP button and drag-drop zone remain for users who already have a ZIP ready. Tips panel updated to explain both options.
+
+---
+
+## [2.18.9] — 2026-03-13 — Clean submit flow + batch-aware History panel + Back button
+
+### Added
+
+- **Batch-aware History panel**: batch submissions now render as collapsible group rows (`📦 Batch` header) showing batch ID, mapping count, overall status badge, and date. Expanding a batch shows one child row per mapping with indent, status badge, tier, and View button. Individual (non-batch) jobs render as flat rows unchanged.
+- **Back to History button**: `openJobFromHistory()` inserts a `← Back to History` link at the top of the stepper panel, so users can return to their list after drilling into a job.
+- **Live refresh in History**: if any visible jobs are still running, the panel polls `/api/jobs` every 5 seconds and re-renders; polling stops automatically when all jobs complete. Timer is cancelled on panel switch.
+
+### Changed
+
+- Submit flow (Individual, ZIP, and Batch) no longer auto-navigates to the stepper on success. Instead, shows a toast (`✓ Job queued — track it in Job History`) and calls `resetSubmitForm()` to clear all file selections and reset the Start button — preventing re-submission without a new file.
+
+---
+
+## [2.18.8] — 2026-03-13 — Cookie quote-strip + Tests panel layout fixes
+
+### Fixed
+
+- **`getPersonaCookie()` returning quoted value**: the browser wraps cookie values in RFC-6265 double quotes (`"Asin D"`) in some contexts. The extra quotes caused the Tests nav item to not appear, submitter name to pre-fill with quotes, and the persona chip to render incorrectly. Fixed by stripping surrounding double-quotes from the raw cookie string.
+- **`panelTests` rendering children horizontally** (appearing blank): `setMainView()` was clearing `flexDirection` to `''` on non-review panels, which removed the `flex-direction: column` from the Tests panel inline style. Fixed by only explicitly setting `column` for review and tests panels; all others retain their HTML-defined inline direction.
+- **`panelLanding` bleeding through on load**: added `display:none` to the initial HTML so it starts hidden and is only revealed by `setMainView('landing')`.
+
+---
+
+## [2.18.7] — 2026-03-13 — In-UI Playwright test runner (admin persona)
+
+### Added
+
+- **🧪 Tests nav button** — visible only for the Asin D (admin) persona. Opens `panelTests` with a suite toggle grid, Run Selected button, live SSE log stream, and results bar (passed / failed / skipped).
+- Suite toggles for all 7 spec files: Auth, Landing, Navigation, Submission, History, Review Queue, Security & Headers — each showing approximate test count.
+- Live log colours PASS lines green, FAIL lines red, SKIP lines yellow via ANSI-style parsing.
+- **`GET /run-tests?suites=...`** SSE endpoint (admin-only, 403 if persona ≠ Asin D) — shells out `npx playwright test --reporter=line <specs>`, streams each stdout line, then sends a `done` event with final counts.
+
+---
+
+## [2.18.6] — 2026-03-13 — Docs + test updates for 5-persona lineup
+
+### Changed
+
+- `app/README.md` and `app/.env.example` clarified that `APP_PASSWORD` is one shared password for all personas.
+- Playwright `auth.spec.js` and `helpers.js` updated: persona count references changed from 4 to 5, Priya Nair added to all relevant assertions.
+- `ICT_Test_Plan_v2.18.docx` updated: 5-persona table, gate reviewer assignments (Priya = Gate 1, James = Gate 2, Sarah = Gate 3), AUTH-01/05 counts corrected.
+
+---
+
+## [2.18.5] — 2026-03-13 — 5th persona: Priya Nair (Business Analyst, Gate 1 Reviewer)
+
+### Added
+
+- **Priya Nair** added to the login persona pick list (teal `#22d3ee`, initials `PN`).
+- Gate reviewer re-assignment: Priya → Gate 1 (business logic), James → Gate 2 (security), Sarah → Gate 3 (release). Maya Patel updated to Submitter role.
+- `_VALID_PERSONAS` whitelist in `main.py` updated; `PERSONA_META` and Playwright `PERSONAS` array updated to match.
+
+---
+
+## [2.18.4] — 2026-03-13 — Expanded Playwright pipeline test coverage (103 tests total)
+
+### Added
+
+- 33 new pipeline test cases (PIPE-16–48) added to `tests/playwright/pipeline.spec.js` covering: Source Qualifier patterns (pass-through, SQL override, multi-SQ, flat file), all core Informatica transformations (Expression, Aggregator, Joiner, Lookup connected/unconnected, Filter, Router, Sorter, Sequence Generator, Normalizer, Update Strategy), SCD Type 1 & 2, incremental load, error/reject routing, complexity tier verification, security scan scenarios (hardcoded creds, SQL injection, PII, clean), parameter files, workflow session extraction, multi-mapping batch scenarios.
+- `ICT_Test_Plan_v2.18.docx` regenerated: test count 70 → 103, new Section 6b for pipeline tests.
+
+### Changed
+
+- Persona renamed from "Aravind Doma" → "Asin D" across all Playwright spec files and helpers.
+
+---
+
+## [2.18.3] — 2026-03-13 — Playwright e2e test suite (60+ tests, 7 spec files)
+
+### Added
+
+- Full Playwright end-to-end test suite under `tests/playwright/`:
+  - `z_auth.spec.js` — AUTH-01–09: login, 4 personas, cookies, logout, rate limiting
+  - `landing.spec.js` — LAND-01–07: greeting, action cards, live stats, nav
+  - `navigation.spec.js` — NAV-01–06: top nav, sidebar chip, view switching
+  - `submission.spec.js` — SUB-01–08: upload modes, prefill, button state
+  - `history.spec.js` — HIST-01–07: table, search, filter, click-through
+  - `review.spec.js` — REV-01–07: queue panel, gate filters, approve/reject
+  - `security.spec.js` — SEC-01–06: unauth API, HTTP headers, health check
+- `playwright.config.js` — Chromium headless, 60s timeout, HTML reporter.
+- `tests/playwright/helpers.js` — `login()`, `logout()`, `goToView()`, `uploadFile()`, `submitJob()`, `waitForStatus()`, `PERSONAS` constant.
+- `tests/playwright/README.md` — setup and run instructions.
+- Run with: `export APP_PASSWORD=... && npm run test:e2e`
+
+---
+
+## [2.18.2] — 2026-03-13 — Persona display + sign-out in sidebar footer
+
+### Added
+
+- Sidebar footer now shows the signed-in persona (avatar initials, name, role) with a **Sign out** button that redirects to `/logout` — consistent with the top-nav persona chip so logout is always reachable regardless of which main-area panel is active.
+
+---
+
+## [2.18.1] — 2026-03-13 — Persona login page + landing page with action cards
+
+### Added
+
+- **Persona login page**: replaced the bare password form with a persona pick list (4 users: Asin D / Data Engineer, Sarah Chen / Migration Lead, James Park / Security Architect, Maya Patel / Platform Engineer) plus a shared password field. Selected persona stored in a JS-readable cookie after successful login. Animated background orbs, avatar initials, selection highlight.
+- **Landing page** (new default view after login): personalised greeting by time of day + first name from persona cookie; three action cards (Submit a Conversion, Review Queue, Job History); live stats row (total jobs, in-progress, complete, awaiting review); Review Queue CTA updates with pending count.
+- **Nav bar**: Home button (returns to landing page); persona chip on right side (avatar initials, name, role); sign-out button → `/logout`; persona name auto-fills submitter name field in upload form.
+
+---
+
+## [2.18.0] — 2026-03-13 — UX overhaul: sidebar simplification + Job History + submitter fields
+
+### Added
+
+- **Job History page** — full-width table with filename, submitter, team, ticket, status, tier, and date. Supports text search, status filter, and pagination.
+- **Submitter fields** on the upload form: name, team, ticket/reference, notes — all stored on the job and displayed in History.
+- **Top nav bar**: Dashboard | Job History | Review Queue (with badge).
+- Review Queue moved to a full-width main-area panel.
+
+### Changed
+
+- Sidebar simplified to upload panel only — job list, search, filter, pagination, and review queue all removed from sidebar.
+- DB schema: `submitter`, `submitter_team`, `ticket_ref`, `notes` columns added via v2.18.0 migration; `complexity_tier` first-class column added.
+
+---
+
+## [2.17.5] — 2026-03-13 — Critical fix: NameError crash at Step 3 + silent API error swallowing
+
+### Fixed
+
+- **NameError crash entering Step 3 (documentation)**: `state` was referenced but never defined at the `should_skip_step(3)` guard in `orchestrator.py`, silently killing every job as it tried to enter the documentation step. Fixed by using the local `complexity` variable for `_tier` and `None` for `_pattern` (pattern classification is not yet available at this stage).
+- **Silent API error swallowing in heartbeat loop**: `asyncio.wait_for(asyncio.shield(_doc_task))` propagated non-timeout exceptions (API rate-limit, auth errors) as-is, bypassing the `except asyncio.TimeoutError` handler and the downstream error logger. Added `except Exception: break` so all non-timeout errors fall through to the existing handler where they are logged and surfaced to the UI as `FAILED`.
+
+---
+
 ## [2.17.4] — 2026-03-12 — UI Overhaul: Submit Intelligence, Live Sidebar, Search & UX Polish
 
 ### Added
