@@ -10,6 +10,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.6.0] — 2026-03-14 — Architecture hardening (P0/P1/P2)
+
+### Added
+
+- **`call_claude_with_retry()`** in `agents/_client.py` — exponential backoff wrapper for all Anthropic API calls; retries on `RateLimitError`, `APIConnectionError`, `APITimeoutError`, and `InternalServerError` with jittered delays up to 60 s.
+- **`EmitError(BaseException)`** in `orchestrator.py` — raised when all 3 DB-write retries are exhausted inside an `emit()` closure; inherits `BaseException` so it is never silently swallowed by `except Exception` blocks.
+- **`_CorruptedState`** sentinel class in `db/database.py` — returned by `_decode_state()` on JSON parse failure; triggers `state_corrupted = 1` flag on the affected job row without raising.
+- **`state_corrupted INTEGER NOT NULL DEFAULT 0`** column in the `jobs` table (auto-migrated at startup via v2.19.0 migration).
+- **`BaseAgent`** abstract base class in `agents/base.py` with `_call_claude()` and `_call_claude_json()` helpers; all 8 agent modules (`conversion_agent`, `review_agent`, `security_agent`, `test_agent`, `session_parser_agent`, `s2t_agent`, `documentation_agent`, `verification_agent`) now subclass it while preserving their module-level function signatures as backward-compat shims.
+- **`_PipelineCtx` dataclass** in `orchestrator.py` — shared state container passed between all extracted step functions; holds `job_id`, `filename`, `emit`, `log`, `pipeline_mode`, and optional per-step output fields.
+- **20 named `_step_N()` async generator functions** in `orchestrator.py` — each public orchestrator entry point (`run_pipeline`, `resume_after_signoff`, etc.) is now a thin delegator; step logic is isolated and independently testable.
+- **`app/backend/routers/`** package — `routes.py` (2 234 lines) split into 7 domain-focused sub-routers (`upload`, `jobs`, `gates`, `batch`, `logs`, `exports`, `misc`) plus a `_helpers.py` module for shared state and validation utilities.
+
+### Changed
+
+- `org_config_loader.py` — replaced `@lru_cache(maxsize=1)` with a TTL mtime cache (`_TTL_SECS = 60`); config changes on disk are picked up within 60 s without a process restart.
+- `app/backend/routes.py` — rewritten as a backward-compat shim that assembles the 7 sub-routers; existing callers in `main.py` and `watcher.py` are unchanged.
+- All `emit()` closures in `orchestrator.py` now include a 3-attempt retry loop before raising `EmitError`.
+
+---
+
 ## [2.18.22] — 2026-03-13 — In-browser User Guide (marked.js)
 
 ### Added
