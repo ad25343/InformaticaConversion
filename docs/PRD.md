@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.17.0 (complete) / App 2.17.0
+**Version:** 2.22.0 (complete) / App 2.22.0
 **Author:** ad25343
-**Last Updated:** 2026-03-11
+**Last Updated:** 2026-03-14
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -830,6 +830,53 @@ back to built-in defaults and the pipeline behaves identically to v2.16.0.
 
 ---
 
+### v2.20 — Checkpoint-Based Resume at Gate Rejection (shipped)
+
+Allows reviewers to restart a job from a specific earlier pipeline step when rejecting at Gate 1 or Gate 3, without re-uploading the XML.
+
+New features:
+- **Restart-from-step dropdown** on Gate 1 and Gate 3 rejection forms — reviewers choose the lightest restart that addresses the issue
+  - Gate 1 options: Step 1 (re-parse), Step 2 (re-classify), Step 3 (re-document), or Full restart (block)
+  - Gate 3 options: Step 6 (re-assign stack), Step 7 (re-convert), Step 10 (re-review equivalence), or Full restart (block)
+- **`resume_from_step(job_id, filename, step_number, state)`** async generator in `orchestrator.py` — reconstructs `_PipelineCtx` from persisted state and dispatches to the correct `_step_N()` function; no re-upload required
+- **`VALID_RESTART_STEPS_GATE1`** and **`VALID_RESTART_STEPS_GATE3`** constants in `models/schemas.py`
+- `SignOffRequest` and `CodeSignOffRequest` schemas gain optional `restart_from_step: int` field
+- Audit log records `restart_from_step` in `extra_json` for every checkpoint restart
+- Gate 1 or Gate 3 REJECT with no `restart_from_step` → existing BLOCKED behavior (unchanged)
+
+### v2.21 — Data Equivalence Validation (shipped)
+
+Every Full Conversion job now ships two additional test artifacts alongside the pytest suite, providing automated checks for data-level correctness between Informatica and the generated code.
+
+New features:
+- **Expression boundary tests** (`tests/test_expressions_{mapping}.py`) — auto-generated pytest stubs with `TODO` fill-in comments for every Expression transformation in the mapping; covers IIF NULL/TRUE/FALSE branches, DECODE exact/default/NULL, date function boundary values (leap year, month end), string function edge cases (empty string, NULL, boundary index), and aggregation NULL exclusion behavior
+- **Golden CSV comparison script** (`tests/compare_golden.py`) — standalone self-contained Python script (stdlib + pandas); compares Informatica CSV output vs. generated code output field-by-field; reports row count diff, schema diff, field match rates, mismatch samples, and format heuristics (float rounding, date format, trim/case differences)
+- CLI: `python tests/compare_golden.py --expected informatica_output.csv --actual generated.csv [--threshold 99.5] [--sample 20] [--ignore-row-count]`
+- Both files are written during Step 11 (test generation) and downloadable via `GET /api/jobs/{id}/tests/download/tests/{filename}`
+- The expected target field list from the S2T workbook is embedded as reference comments in the comparison script
+
+### v2.22 — Bidirectional Migration / Greenfield Authoring (shipped)
+
+Adds the ability to generate Informatica PowerCenter XML mappings from scratch using structured ETL pattern configs — the reverse of the normal conversion flow.
+
+New features:
+- **✨ New Mapping tab** in the UI — choose a pattern, fill in the YAML config, click "Generate Informatica XML", and download the result without opening Informatica Designer
+- **`GET /api/patterns`** — lists all 10 ETL patterns with names, descriptions, and Pydantic config schemas in JSON Schema format
+- **`POST /api/patterns/{name}/generate-xml`** — accepts a YAML pattern config + mapping name, validates against the Pydantic schema, calls Claude to generate a well-formed Informatica PowerCenter XML, validates with `xml.etree.ElementTree`, and returns the XML
+- **`etl_patterns/schemas.py`** — Pydantic v2 config models for all 10 patterns: `TruncateAndLoadConfig`, `IncrementalAppendConfig`, `UpsertConfig`, `Scd2Config`, `LookupEnrichConfig`, `AggregationLoadConfig`, `FilterAndRouteConfig`, `UnionConsolidateConfig`, `ExpressionTransformConfig`, `PassThroughConfig`; exports `PATTERN_SCHEMAS` and `PATTERN_DESCRIPTIONS` registries
+- **`app/backend/agents/xml_generator.py`** — `XmlGeneratorAgent(BaseAgent)` with few-shot Informatica XML examples embedded in the prompt; validates output is parseable before returning
+- **`app/backend/routers/patterns.py`** — sub-router mounted at `/api`
+- **`pattern_generation_log`** DB table — records every XML generation call (pattern name, mapping name, duration, success/failure, XML length)
+
+### v2.23 — Agent + Test Module Refactors (shipped)
+
+Code organisation refactors with no pipeline behaviour changes.
+
+Changed:
+- **`conversion_agent.py` → `conversion/` package** — split into 7 files: `__init__.py`, `_context.py`, `_prompt_builder.py`, `_file_writer.py`, `_pattern_config.py`, `_smoke.py`, `_orchestrate.py`; module-level `convert()` signature unchanged for backward compatibility
+- **`test_agent.py` → `coverage_checker.py` + `test_generator.py` + thin orchestrator** — separates coverage analysis from test stub generation; thin orchestrator module preserves the `generate_tests()` entry point
+- **`golden_compare.py` → `expression_boundary_tests.py` + `compare_script.py`** — separates expression boundary stub generation from the golden CSV comparison script
+
 ### v2.18 — Estate Analyser + Migration Wave Management (planned)
 
 Before the first mapping is converted, migration leads need to understand the full scope
@@ -943,8 +990,9 @@ Step 4   Verification                  [deterministic + Claude flags]
     │
     ▼
 Step 5   ◼ Gate 1 — Human Review Sign-off
-         APPROVE → Step 6
-         REJECT  → BLOCKED (terminal)
+         APPROVE                    → Step 6
+         REJECT + restart_from_step → resume_from_step() → Step 1, 2, or 3
+         REJECT (no restart)        → BLOCKED (terminal)
     │
     ▼
 Step 6   Target Stack Assignment       [Claude classifier]
@@ -972,13 +1020,38 @@ Step 10  Logic Equivalence Check       [Stage A: Claude, XML → code rule-by-ru
 Step 10b Structural Reconciliation     [non-blocking; field coverage, source coverage,
          → ReconciliationReport (RECONCILED / PARTIAL / PENDING_EXECUTION) stored in state]
 Step 11  Test Generation               [Claude, pytest / dbt test stubs]
+         → Expression boundary tests (tests/test_expressions_{mapping}.py)
+         → Golden CSV comparison script (tests/compare_golden.py)
          → Security re-scan of generated test files (merged into Step 8 report)
     │
     ▼
 Step 12  ◼ Gate 3 — Code Review Sign-off
-         APPROVED  → COMPLETE
-         REJECTED  → BLOCKED (terminal)
+         APPROVED                   → COMPLETE
+         REJECTED + restart_from_step → resume_from_step() → Step 6, 7, or 10
+         REJECTED (no restart)      → BLOCKED (terminal)
 ```
+
+### Greenfield authoring (v2.22)
+
+In addition to the conversion pipeline, the tool supports generating Informatica PowerCenter XML from scratch. This is the reverse flow and operates independently of the conversion pipeline.
+
+```
+User provides: pattern name + YAML config + mapping name
+    │
+    ▼
+POST /api/patterns/{name}/generate-xml
+    │
+    ├── Validate YAML config against Pydantic schema (etl_patterns/schemas.py)
+    │
+    ├── XmlGeneratorAgent — Claude generates Informatica PowerCenter XML
+    │   (few-shot examples embedded; prompt includes schema constraints)
+    │
+    ├── xml.etree.ElementTree validation — rejects malformed XML before returning
+    │
+    └── Return XML + log to pattern_generation_log table
+```
+
+The 10 supported pattern schemas are: `truncate_and_load`, `incremental_append`, `upsert`, `scd2`, `lookup_enrich`, `aggregation_load`, `filter_and_route`, `union_consolidate`, `expression_transform`, `pass_through`. The generated XML can be imported directly into Informatica Designer or fed back into the conversion pipeline for round-trip validation.
 
 ---
 
@@ -1066,6 +1139,8 @@ flows through `backend/security.py`.
 | `POST` | `/api/gates/batch-signoff` | Apply a single gate decision to multiple jobs at once (v2.17.1) |
 | `GET` | `/api/progress` | Migration-level progress summary: counts by status, tier breakdown, throughput, ETA (v2.17.1) |
 | `GET` | `/api/progress/export` | CSV download of all job statuses for management reporting (v2.17.1) |
+| `GET` | `/api/patterns` | List all 10 ETL patterns with names, descriptions, and JSON Schema configs (v2.22) |
+| `POST` | `/api/patterns/{name}/generate-xml` | Generate Informatica PowerCenter XML from a YAML pattern config (v2.22) |
 
 ---
 
@@ -1109,6 +1184,14 @@ Job
     └── code_sign_off          Step 12 (Gate 3)
 ```
 
+PatternGenerationLog  (v2.22)
+├── id              Auto-increment integer
+├── pattern_name    One of the 10 ETL pattern names
+├── mapping_name    Caller-supplied mapping name
+├── duration_s      Generation duration in seconds
+├── success         Boolean
+└── xml_length      Character length of the generated XML
+
 Key schema types:
 
 ```
@@ -1120,6 +1203,20 @@ VerificationFlag
 └── auto_fix_suggestion   (optional) Specific code-level fix Claude proposes; if the
                           reviewer checks "Apply this fix" at Gate 1, the suggestion is
                           forwarded to the conversion agent at Step 7
+
+SignOffRequest  (Gate 1 — v2.20 adds optional restart)
+├── reviewer_name         Name of the reviewer
+├── reviewer_role         Role of the reviewer
+├── decision              APPROVE | REJECT
+└── restart_from_step     (optional, v2.20) Step to restart from on REJECT — 1, 2, or 3;
+                          omit for full restart (BLOCKED)
+
+CodeSignOffRequest  (Gate 3 — v2.20 adds optional restart)
+├── reviewer_name         Name of the reviewer
+├── reviewer_role         Role of the reviewer
+├── decision              APPROVED | REJECTED
+└── restart_from_step     (optional, v2.20) Step to restart from on REJECT — 6, 7, or 10;
+                          omit for full restart (BLOCKED)
 
 SecurityReviewDecision  (v1.2 / v2.1)
     APPROVED              Scan was clean, or reviewer confirmed no action needed

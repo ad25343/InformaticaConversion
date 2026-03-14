@@ -1,6 +1,6 @@
 # User Guide — Informatica Conversion Tool
 
-> **Version:** 2.18
+> **Version:** 2.22
 > **Audience:** Data engineers, migration leads, and operations teams
 
 ---
@@ -60,6 +60,7 @@ The tool has five main areas accessible from the top navigation bar:
 | **📋 Job History** | Full table of all jobs with search, status filter, and pagination |
 | **👁 Review Queue** | All jobs waiting at a gate — click any row to open that job's sign-off form directly |
 | **📖 Guide** | This guide, rendered in the browser |
+| **✨ New Mapping** | Generate Informatica PowerCenter XML from a pattern config (greenfield authoring) |
 
 The **left sidebar** shows live pipeline activity at all times regardless of which tab you are on:
 - **Running** — in-progress jobs with a step progress bar and current step name. Click to open the job.
@@ -73,12 +74,13 @@ Every job displays a short **tracking ID** (`#XXXXXXXX`) — an 8-character code
 
 ## Upload modes
 
-Navigate to the **Submit** tab. Select your upload mode using the two tabs at the top:
+Navigate to the **Submit** tab. Select your upload mode using the tabs at the top:
 
 | Mode | Use when |
 |---|---|
 | **📄 Individual** | Converting a single mapping — upload the `.xml` file directly |
 | **📦 Batch** | Converting multiple mappings at once |
+| **✨ New Mapping** | Generating Informatica XML from a pattern config (greenfield authoring — see below) |
 
 ### Individual mode
 
@@ -155,7 +157,7 @@ Select the mode using the toggle buttons on the Submit tab before clicking **▶
 | 8 — Security scan | Scans generated code for vulnerabilities |
 | **9 — Gate 2** | **Human review: approve or fix security findings** |
 | 10 — Quality | Reconciles the generated code against the original mapping |
-| 11 — Tests | Generates test artifacts (coverage report, pytest suite, golden comparison script) |
+| 11 — Tests | Generates test artifacts (coverage report, pytest suite, expression boundary tests, golden comparison script) |
 | **12 — Gate 3** | **Human review: final code sign-off** |
 
 Progress is visible in real time via the step indicator at the top of the job panel. The animated progress bar shows N / 12 steps.
@@ -529,6 +531,41 @@ See **[docs/TESTING_GUIDE.md](TESTING_GUIDE.md)** for full instructions on:
 - Filling in expression boundary test helpers
 - Running the golden CSV comparison script (`compare_golden.py`)
 
+### Data equivalence testing
+
+Every Full Conversion job generates two additional test artifacts for data-level correctness checking:
+
+**Expression boundary tests** — `tests/test_expressions_{mapping}.py`
+
+Auto-generated pytest stubs that cover the high-risk expression edge cases in the mapping. Each test has a `TODO` comment explaining what helper function to fill in. Coverage includes:
+
+| Expression type | Cases generated |
+|---|---|
+| IIF | NULL input, TRUE branch, FALSE branch |
+| DECODE | Exact match, default value, NULL input |
+| Date functions | Leap year, month-end boundary values |
+| String functions | Empty string, NULL, boundary index |
+| Aggregations | NULL exclusion behavior |
+
+Run with: `pytest tests/test_expressions_{mapping}.py`
+
+**Golden CSV comparison** — `tests/compare_golden.py`
+
+A self-contained Python script (stdlib + pandas) that compares Informatica's output CSV against the generated code's output CSV field by field. Use this after running both the Informatica mapping and the generated code in your environment.
+
+```bash
+python tests/compare_golden.py \
+  --expected informatica_output.csv \
+  --actual generated.csv \
+  [--threshold 99.5] \
+  [--sample 20] \
+  [--ignore-row-count]
+```
+
+The script reports: row count diff, schema diff, per-field match rates, a mismatch sample, and format heuristics (float rounding, date format differences, whitespace/case). The expected field list from the S2T workbook is embedded in the script as reference comments.
+
+Both files are downloadable from the job panel via **Download ZIP** (under `tests/`) or directly via `GET /api/jobs/{id}/tests/download/tests/{filename}`.
+
 ---
 
 ## Database scaling
@@ -784,6 +821,194 @@ The **✨ New Mapping** tab lets you generate an Informatica PowerCenter XML map
 | `union_consolidate` | Consolidate multiple sources into one target |
 | `expression_transform` | Column-level expression transformations |
 | `pass_through` | Direct extract with no transformation |
+
+### Pattern YAML reference
+
+All patterns share a common `source` / `target` block. Fields specific to each pattern are shown below. Fetch the full JSON Schema for any pattern via `GET /api/patterns`.
+
+**`truncate_and_load`** — full refresh every run:
+
+```yaml
+pattern: truncate_and_load
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_CUSTOMER
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: DIM_CUSTOMER
+  write_mode: truncate_and_load
+```
+
+**`incremental_append`** — watermark-driven append:
+
+```yaml
+pattern: incremental_append
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_ORDERS
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: FACT_ORDERS
+  write_mode: append
+watermark:
+  column: LAST_UPDATED_DT
+  store: watermarks.db
+```
+
+**`upsert`** — SCD Type 1 merge:
+
+```yaml
+pattern: upsert
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_BRANCH
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: DIM_BRANCH
+  write_mode: upsert
+unique_key: [BRANCH_ID]
+```
+
+**`scd2`** — Slowly Changing Dimension Type 2:
+
+```yaml
+pattern: scd2
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_EMPLOYEE
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: DIM_EMPLOYEE
+  write_mode: scd2
+business_key: [EMPLOYEE_ID]
+effective_from_col: EFF_FROM_DT
+effective_to_col: EFF_TO_DT
+is_current_col: IS_CURRENT_FLG
+```
+
+**`lookup_enrich`** — join to a reference table:
+
+```yaml
+pattern: lookup_enrich
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: FACT_LOAN
+lookups:
+  - table: REF_COUNTY
+    join_keys: {COUNTY_CODE: COUNTY_CODE}
+    prefix: county_
+    join_type: left
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: FACT_LOAN_ENRICHED
+  write_mode: truncate_and_load
+```
+
+**`aggregation_load`** — GROUP BY into a summary table:
+
+```yaml
+pattern: aggregation_load
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: FACT_TRANSACTIONS
+group_by: [REGION_CD, PRODUCT_CD]
+aggregations:
+  TOTAL_AMOUNT: {func: sum, column: AMOUNT}
+  RECORD_COUNT: {func: count, column: TXN_ID}
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: SUMMARY_TRANSACTIONS
+  write_mode: truncate_and_load
+```
+
+**`filter_and_route`** — route rows to different targets:
+
+```yaml
+pattern: filter_and_route
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_APPLICATIONS
+routes:
+  - filter_expr: "{STATUS} == 'APPROVED'"
+    target:
+      type: database
+      connection_string: oracle://user:pass@host/dw
+      table: APPROVED_APPS
+      write_mode: append
+  - filter_expr: "{STATUS} == 'REJECTED'"
+    target:
+      type: database
+      connection_string: oracle://user:pass@host/dw
+      table: REJECTED_APPS
+      write_mode: append
+```
+
+**`union_consolidate`** — combine multiple sources:
+
+```yaml
+pattern: union_consolidate
+sources:
+  - type: database
+    connection_string: oracle://user:pass@host/db1
+    table: REGION_EAST_SALES
+  - type: database
+    connection_string: oracle://user:pass@host/db2
+    table: REGION_WEST_SALES
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: CONSOLIDATED_SALES
+  write_mode: truncate_and_load
+dedup_keys: [TXN_ID]
+```
+
+**`expression_transform`** — column-level transformations:
+
+```yaml
+pattern: expression_transform
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_APPLICANT
+column_map:
+  - output: FULL_NAME
+    expr: "{FIRST_NAME} + ' ' + {LAST_NAME}"
+  - output: ANNUAL_INCOME
+    expr: "{MONTHLY_INCOME} * 12"
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: DIM_APPLICANT
+  write_mode: truncate_and_load
+```
+
+**`pass_through`** — extract with no transformation:
+
+```yaml
+pattern: pass_through
+source:
+  type: database
+  connection_string: oracle://user:pass@host/db
+  table: SRC_REFERENCE_DATA
+target:
+  type: database
+  connection_string: oracle://user:pass@host/dw
+  table: REF_DATA_COPY
+  write_mode: truncate_and_load
+```
 
 ### API access
 
