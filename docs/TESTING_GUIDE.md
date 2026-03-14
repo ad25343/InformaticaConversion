@@ -382,3 +382,72 @@ No — by design. Running the tests requires a live environment, credentials, an
 
 **Q: What if I don't have access to an Informatica environment for the golden comparison?**
 Run Layers 1–3 as a minimum. The expression boundary tests catch the most common mistranslation patterns even without a live Informatica session.
+
+---
+
+## Sample Data Validator
+
+The repository ships with a **leader agent + 10 sub-agent validator** (`sample_data_validator.py`) that keeps the `sample_data/` test fixtures clean and pipeline-ready. Run it whenever you add or modify sample XMLs.
+
+### Location
+
+```
+sample_data_validator.py       # repo root — run from there
+sample_data/                   # the fixture directories it validates
+  apex_insurance/
+  firstbank/
+  meridian_am/
+  nexus_scm/
+```
+
+### Usage
+
+```bash
+# Audit only — report gaps without modifying anything
+python3 sample_data_validator.py
+
+# Verbose — print every finding inline as each agent runs
+python3 sample_data_validator.py --verbose
+
+# Fix mode — auto-repair eligible issues (adds missing INSTANCE elements,
+# generates missing workflows, adds missing param declarations, syncs manifests)
+python3 sample_data_validator.py --fix
+```
+
+### What the 10 agents check
+
+| Agent | Checks |
+|---|---|
+| 01 XMLSchemaValidator | Every XML parses; root structure is `POWERMART > REPOSITORY > FOLDER > MAPPING` |
+| 02 InstanceConnector | Every `CONNECTOR` references a declared `INSTANCE`; no dangling names |
+| 03 MappingWorkflowPairing | Every `m_*.xml` has a matching `wf_m_*.xml` workflow |
+| 04 ParameterCoverage | Every `$$PARAM` used in mappings is declared in all 3 env param files (dev/uat/prod) |
+| 05 TierCoverageValidator | Each complexity tier contains the required transformation types (simple: SQ+EXP, medium: SQ+LKP+AGG, complex: SQ+JNR+RTR) |
+| 06 SessionWorkflowStructure | Workflow SESSION tasks have a valid `Mapping Name` attribute and `TASKINSTANCE` child |
+| 07 CrossReferenceIntegrity | `CONNECTOR` `FROMINSTANCE`/`TOINSTANCE` names match defined sources, targets, or transformations |
+| 08 ScenarioCoverageAuditor | Pipeline-critical scenarios have test coverage: SCD2 pattern, multi-target routing, multi-source join, aggregation rollup, SQL override, filter condition, parameter usage, lookup |
+| 09 SymmetryEnforcer | All 4 projects have consistent file counts; `all_mappings/` is in sync with tier directories |
+| 10 ManifestIndexSync | `*_full.manifest.json` and `INDEX.txt` match files on disk |
+
+### Verdict levels
+
+| Verdict | Meaning |
+|---|---|
+| **FULL PASS** | No findings — sample data is clean |
+| **PASS WITH WARNINGS** | Only MEDIUM/LOW findings — advisory, no blocker |
+| **CONDITIONAL PASS** | HIGH findings present — fix before relying on these fixtures for pipeline testing |
+| **FAIL** | CRITICAL findings — pipeline will likely error parsing these files |
+
+### What `--fix` auto-repairs
+
+- Missing `INSTANCE` elements for declared `SOURCE`/`TARGET`/`TRANSFORMATION` objects
+- Missing workflow files (generates a minimal valid `wf_m_*.xml`)
+- Missing `$$PARAM` declarations in environment param files
+- Out-of-sync `all_mappings/` directory (copies from tier directories)
+- Out-of-sync `manifest.json` files (regenerates from disk)
+
+`--fix` does **not** rewrite mapping XML business logic — findings requiring that (e.g. wrong transform type for a tier) must be fixed manually.
+
+### Extending the validator
+
+Each agent is a Python class inheriting from `BaseAgent` in `sample_data_validator.py`. To add a new check, subclass `BaseAgent`, implement `run(self, fix, verbose) -> AgentReport`, and add it to `LeaderAgent.AGENTS`. The leader agent will pick it up automatically on the next run.
