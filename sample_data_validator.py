@@ -107,6 +107,42 @@ REQUIRED_SCENARIOS = {
             t.get("TYPE") == "Lookup Procedure" for t in root.iter("TRANSFORMATION")
         )
     },
+    "sequence_generator": {
+        "description": "Sequence Generator transformation (surrogate key generation)",
+        "detect": lambda root: any(
+            t.get("TYPE") == "Sequence Generator" for t in root.iter("TRANSFORMATION")
+        )
+    },
+    "update_strategy": {
+        "description": "Update Strategy transformation (CDC insert/update/delete pattern)",
+        "detect": lambda root: any(
+            t.get("TYPE") == "Update Strategy" for t in root.iter("TRANSFORMATION")
+        )
+    },
+    "reusable_transform": {
+        "description": "Reusable transformation (REUSABLE=YES — shared across mappings)",
+        "detect": lambda root: any(
+            t.get("REUSABLE") == "YES" for t in root.iter("TRANSFORMATION")
+        )
+    },
+    "unconnected_lookup": {
+        "description": "Unconnected lookup (:LKP. invocation syntax in expression)",
+        "detect": lambda root: bool(
+            re.search(r':LKP\.', ET.tostring(root, encoding="unicode"))
+        )
+    },
+    "sorter": {
+        "description": "Sorter transformation (explicit sort before Rank or Aggregator)",
+        "detect": lambda root: any(
+            t.get("TYPE") == "Sorter" for t in root.iter("TRANSFORMATION")
+        )
+    },
+    "rank": {
+        "description": "Rank transformation (top-N or bottom-N filter)",
+        "detect": lambda root: any(
+            t.get("TYPE") == "Rank" for t in root.iter("TRANSFORMATION")
+        )
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

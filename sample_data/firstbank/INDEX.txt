@@ -92,7 +92,7 @@ SIMPLE MAPPINGS (17) — Single Source, Minimal Transformations
     Pattern: SQ → EXP → Target
 
 ================================================================================
-MEDIUM MAPPINGS (20) — Multi-source, Lookups, Aggregations, SCD2
+MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
 ================================================================================
 
 16. m_dim_customer_scd2
@@ -226,6 +226,10 @@ MEDIUM MAPPINGS (20) — Multi-source, Lookups, Aggregations, SCD2
     Targets: AGG_PRODUCT_PERFORMANCE
     Pattern: SQ → JNR → AGG
     Business Logic: Monthly product performance
+
+39. m_fct_txn_sk_seq
+    Surrogate key load using Sequence Generator (SEQ_GEN → EXP → Target)
+    Pattern: SQ → SEQ_GEN → EXP (NEXTVAL→TXN_SK, SYSDATE→LOAD_DT) → Target
 
 ================================================================================
 COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Multiple Targets
@@ -414,12 +418,12 @@ References & Dimensions:         m_dim_branch_load, m_dim_product_load, m_dim_da
 STATISTICS
 ================================================================================
 
-Total Mappings:              55
+Total Mappings:              56
   Simple (1-source):         17
-  Medium (multi-transform):  23
+  Medium (multi-transform):  24
   Complex (multi-source):    15
 
-Total Workflows:             55 (one per mapping)
+Total Workflows:             56 (one per mapping)
 Total Transformation Types:  8 (SQ, EXP, LKP, AGG, JNR, RTR, FIL, UNI)
 Total Source Tables:         50+ distinct
 Total Target Tables:         60+ (some mappings have multiple targets)

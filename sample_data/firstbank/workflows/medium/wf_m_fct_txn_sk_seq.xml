@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
+<POWERMART CREATION_DATE="10/03/2026 09:00:00" REPOSITORY_VERSION="112">
+<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Oracle" NAME="FIRSTBANK_DWH" VERSION="112">
+<FOLDER DESCRIPTION="" GROUP="" NAME="FirstBank_Digital" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
+  <CONFIG DESCRIPTION="" ISDEFAULT="YES" NAME="default_config" OBJECTVERSION="1" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Stop on errors" VALUE="0"/>
+    <ATTRIBUTE NAME="Commit type" VALUE="Source"/>
+    <ATTRIBUTE NAME="Commit interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Commit on end of file" VALUE="YES"/>
+    <ATTRIBUTE NAME="Recovery strategy" VALUE="Restart from last checkpoint"/>
+    <ATTRIBUTE NAME="Log file name" VALUE="session.log"/>
+    <ATTRIBUTE NAME="Log file directory" VALUE="$PMSessionLogDir"/>
+    <ATTRIBUTE NAME="Maximum concurrent pipelines" VALUE="10"/>
+  </CONFIG>
+  <TASK DESCRIPTION="Session for m_fct_txn_sk_seq" ISVALID="YES" NAME="s_m_fct_txn_sk_seq" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_txn_sk_seq"/>
+    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_txn_sk_seq.log"/>
+    <ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
+    <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Commit Type" VALUE="Source"/>
+    <ATTRIBUTE NAME="Rollback Incomplete Target Rows" VALUE="YES"/>
+  </TASK>
+  <WORKFLOW DESCRIPTION="Workflow for m_fct_txn_sk_seq" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_txn_sk_seq" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
+    <TASKINSTANCE DESCRIPTION="" ISOVERRIDABLE="NO" NAME="s_m_fct_txn_sk_seq" TASKTYPENAME="Session" TASKNAME="s_m_fct_txn_sk_seq"/>
+  </WORKFLOW>
+</FOLDER>
+</REPOSITORY>
+</POWERMART>

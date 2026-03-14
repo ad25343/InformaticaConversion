@@ -3,10 +3,10 @@
   "label": "FirstBank Digital \u2014 Full Estate v1.0",
   "description": "Complete Informatica PowerCenter test estate for FirstBank Digital retail banking platform",
   "creation_date": "09/03/2026 12:00:00",
-  "total_mappings": 55,
+  "total_mappings": 56,
   "mapping_distribution": {
     "simple": 17,
-    "medium": 23,
+    "medium": 24,
     "complex": 15
   },
   "mappings": [
@@ -55,6 +55,7 @@
     "m_fct_trade_settlement.xml",
     "m_fct_transaction_delta.xml",
     "m_fct_txn_risk_route3.xml",
+    "m_fct_txn_sk_seq.xml",
     "m_fct_wire_transfers.xml",
     "m_ref_country_codes.xml",
     "m_ref_exchange_rates.xml",

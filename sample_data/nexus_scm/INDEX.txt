@@ -24,7 +24,7 @@ SIMPLE MAPPINGS (16):
   15. m_fct_inventory_snapshot — Daily inventory snapshot fact
   16. m_stg_raw_iot_passthru — Raw IoT sensor data passthrough staging (passthru scenario)
 
-MEDIUM MAPPINGS (23):
+MEDIUM MAPPINGS (24):
   16. m_dim_supplier_scd2 — Supplier dimension SCD Type 2 tracking
   17. m_dim_product_scd2 — Product dimension SCD Type 2
   18. m_dim_customer_scd2 — Customer dimension SCD Type 2
@@ -48,6 +48,8 @@ MEDIUM MAPPINGS (23):
   36. m_fct_inventory_append — Inventory append fact (delta append scenario)
   37. m_fct_order_priority_route3 — 3-way order priority routing: LOW/MED/HIGH (Router scenario)
   38. m_fct_shipment_union_load — Multi-source shipment union load (Union scenario)
+
+  39. m_stg_po_incremental — Incremental PO delta extract (sql_override #2, WHERE PO_DATE >= $$LAST_LOAD_DT)
 
 COMPLEX MAPPINGS (15):
   36. m_fct_multi_echelon_inv
@@ -81,6 +83,6 @@ COMPLEX MAPPINGS (15):
   50. m_etl_control_framework
       Sources: ETL_CONTROL_TABLE, SOURCE_ROW_COUNTS, TARGET_ROW_COUNTS
 
-Total: 54 mappings
+Total: 55 mappings
 Domain: Manufacturing / Supply Chain
 Repository DB: Microsoft SQL Server

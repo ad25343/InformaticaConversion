@@ -3,10 +3,10 @@
   "label": "Nexus Manufacturing Corp \u2014 Supply Chain & Inventory DWH v1.0",
   "description": "Informatica PowerCenter test estate for Nexus Manufacturing supply chain platform",
   "creation_date": "10/03/2026 09:00:00",
-  "total_mappings": 54,
+  "total_mappings": 55,
   "mapping_distribution": {
     "simple": 16,
-    "medium": 23,
+    "medium": 24,
     "complex": 15
   },
   "mappings": [
@@ -62,6 +62,7 @@
     "m_ref_incoterms.xml",
     "m_ref_lead_times.xml",
     "m_stg_po_extract.xml",
+    "m_stg_po_incremental.xml",
     "m_stg_raw_iot_passthru.xml",
     "m_stg_receipt_extract.xml"
   ]
