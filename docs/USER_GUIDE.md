@@ -1,6 +1,6 @@
 # User Guide — Informatica Conversion Tool
 
-> **Version:** 2.17.4
+> **Version:** 2.18
 > **Audience:** Data engineers, migration leads, and operations teams
 
 ---
@@ -51,7 +51,7 @@ Open `http://localhost:8000` in your browser.
 
 ## Navigating the UI
 
-The tool has four main areas accessible from the top navigation bar:
+The tool has five main areas accessible from the top navigation bar:
 
 | Tab | Purpose |
 |---|---|
@@ -59,7 +59,7 @@ The tool has four main areas accessible from the top navigation bar:
 | **🏠 Submit** | Upload files and start a pipeline; the right panel shows live insights after submission |
 | **📋 Job History** | Full table of all jobs with search, status filter, and pagination |
 | **👁 Review Queue** | All jobs waiting at a gate — click any row to open that job's sign-off form directly |
-| **🧪 Health Check** | Platform diagnostics and end-to-end test runner (admin only — visible when signed in as a reviewer persona) |
+| **📖 Guide** | This guide, rendered in the browser |
 
 The **left sidebar** shows live pipeline activity at all times regardless of which tab you are on:
 - **Running** — in-progress jobs with a step progress bar and current step name. Click to open the job.
@@ -71,18 +71,18 @@ Every job displays a short **tracking ID** (`#XXXXXXXX`) — an 8-character code
 
 ---
 
-## Manual conversion (single mapping)
+## Upload modes
 
-### Step 1 — Upload your files
-
-Navigate to the **Submit** tab. The left column contains the upload form; select your upload mode using the two tabs at the top:
+Navigate to the **Submit** tab. Select your upload mode using the two tabs at the top:
 
 | Mode | Use when |
 |---|---|
 | **📄 Individual** | Converting a single mapping — upload the `.xml` file directly |
-| **📦 Batch** | Converting multiple mappings at once (one subfolder per mapping) |
+| **📦 Batch** | Converting multiple mappings at once |
 
-**Individual mode** — drop a Mapping XML to get started:
+### Individual mode
+
+Drop a Mapping XML (`.xml`) onto the upload area, or click to browse. Two optional companion files enhance the extraction:
 
 | File | Required? | Description |
 |---|---|---|
@@ -90,33 +90,57 @@ Navigate to the **Submit** tab. The left column contains the upload form; select
 | Workflow XML | No | Enables session-level extraction (Step 0) |
 | Parameter file | No | Enables `$$VARIABLE` resolution throughout the mapping |
 
-**Batch mode** lets you convert many mappings in one go. You can either:
-- Click **📁 Select Folder** to pick a folder directly — it is packaged into a ZIP automatically in the browser.
-- Click **📦 Select ZIP** if you already have a ZIP prepared.
+Individual mode accepts `.xml` files only.
 
-Structure your folder (or ZIP) with one subfolder per mapping:
+### Batch mode
+
+Batch mode lets you convert many mappings in a single operation.
+
+**Select a folder** — click **📁 Select Folder** and pick a directory from your computer. The browser packages the folder into a ZIP automatically. No preparation needed.
+
+**Select a pre-built ZIP** — click **📦 Select ZIP** if you already have a ZIP prepared.
+
+**Folder / ZIP structure — subfolders (recommended for organised batches):**
 
 ```
-my_batch_folder/   (or batch.zip/)
+my_batch_folder/
   mapping_a/mapping.xml
   mapping_b/mapping.xml
-  mapping_b/workflow.xml    ← optional
-  mapping_b/params.txt      ← optional
+  mapping_b/workflow.xml    ← optional per mapping
+  mapping_b/params.txt      ← optional per mapping
 ```
 
-The tool processes all mappings concurrently up to `BATCH_CONCURRENCY` (default: 3).
+**Flat folder — all XMLs in one directory:**
 
-### Step 2 — Monitor your job
+If your folder contains multiple mapping XMLs at the root level with no subfolders, the tool automatically creates one job per XML file. No reorganisation is required.
 
-After clicking **▶ Start Pipeline**, the right column of the Submit tab immediately switches to a **Job Insights** panel for your submission. It shows live metrics as each pipeline step completes — no need to navigate away:
+```
+my_flat_folder/
+  m_customer_load.xml
+  m_product_load.xml
+  m_appraisal_rank.xml
+```
 
-- Tracking ID, live status badge, complexity tier, and assigned stack
-- Animated progress bar (N / 12 steps)
-- Metric cards that populate as the pipeline runs: mappings found, sources, targets, transforms, blocking flags, security findings, review score, and test coverage
+The tool processes all mappings concurrently up to `BATCH_CONCURRENCY` (default: 3). Jobs waiting for a concurrency slot queue automatically and start as running slots free up — gate-paused jobs **release** their slot so they never block queued work.
 
-Click **View Full Details →** at any time to open the complete job view. You can also navigate to **Job History** to see all your past runs.
+---
 
-The tool runs a 12-step pipeline automatically. Progress is visible in real time via the step indicator at the top of the job panel:
+## Pipeline modes
+
+Before starting a job (Individual or Batch), choose how far through the pipeline to run:
+
+| Mode | Steps | Use when |
+|---|---|---|
+| **🔄 Full Conversion** | Steps 1–12 (all gates included) | You want production-ready code — the default |
+| **📋 Documentation Only** | Steps 1–4 (parse → classify → S2T → verify) | You only need the Source-to-Target mapping and technical docs, without generating code |
+
+Select the mode using the toggle buttons on the Submit tab before clicking **▶ Start Pipeline**. The same mode applies to every mapping in a batch run.
+
+**Documentation Only** exits cleanly after Step 4 verification completes, exports the S2T Excel and documentation Markdown, and marks the job complete. No human gates are triggered. This is useful for cataloguing a large migration inventory before committing to code generation.
+
+---
+
+## The 12-step pipeline (Full Conversion)
 
 | Step | What happens |
 |---|---|
@@ -134,31 +158,99 @@ The tool runs a 12-step pipeline automatically. Progress is visible in real time
 | 11 — Tests | Generates test artifacts (coverage report, pytest suite, golden comparison script) |
 | **12 — Gate 3** | **Human review: final code sign-off** |
 
-### Step 3 — Review gates
+Progress is visible in real time via the step indicator at the top of the job panel. The animated progress bar shows N / 12 steps.
+
+---
+
+## Human review gates
 
 There are three points where a named reviewer must act before the pipeline continues.
 
-**Gate 1 — Verification review**
+### Gate 1 — Verification review
 
 Triggered after Step 4. The reviewer sees all verification flags with their severity (CRITICAL / HIGH / MEDIUM / LOW), blocking status, and recommended actions. For each flag they can either accept it (acknowledge the risk and proceed) or note it as resolved (the issue has been addressed in the source mapping).
 
 Actions: **Approve** (proceed to code generation) or **Reject** (stop — the mapping needs to be fixed and re-uploaded).
 
-**Gate 2 — Security review**
+### Gate 2 — Security review
 
 Triggered after Step 8. The reviewer sees all security findings from the automated scan, with severity, line numbers, and remediation guidance.
 
 Actions: **Approved** · **Acknowledged** (accept risk) · **Request fix** (loop back to Step 7 for remediation and re-scan) · **Failed** (hard stop).
 
-**Gate 3 — Code sign-off**
+### Gate 3 — Code sign-off
 
 Triggered after Step 11. The reviewer sees the generated code (syntax-highlighted), the quality reconciliation report, and the test coverage summary.
 
 Actions: **Approved** (pipeline complete — outputs written to disk, PR opened if configured) · **Regenerate** (re-run conversion from Step 6) · **Rejected** (hard stop).
 
-### Step 4 — Download your outputs
+---
 
-After Gate 3 approval, the following are available from the job panel:
+## Monitoring your job
+
+After clicking **▶ Start Pipeline**, the right column of the Submit tab immediately switches to a **Job Insights** panel. It shows live metrics as each pipeline step completes — no need to navigate away:
+
+- Tracking ID, live status badge, complexity tier, and assigned stack
+- Animated progress bar (N / 12 steps)
+- Metric cards that populate as the pipeline runs: mappings found, sources, targets, transforms, blocking flags, security findings, review score, and test coverage
+
+Click **View Full Details →** at any time to open the complete job view.
+
+---
+
+## Reviewing jobs at scale (Review Queue)
+
+When running a large migration, many jobs can be waiting at gates simultaneously. The **Review Queue** tab shows all pending gate decisions in a single table.
+
+**Opening a specific job for review:** click anywhere on a row (or the "Review →" button at the right) to open that job's full detail view. The page scrolls automatically to the active gate sign-off card. A "← Back to Review Queue" bar at the top lets you return to the list without losing your place.
+
+**Bulk sign-off:** check the boxes next to multiple jobs, enter a reviewer name, then click **Approve Selected**, **Reject Selected**, or **Acknowledge Selected** (Gate 2 only). The summary bar shows how many jobs are waiting at Gate 1, Gate 2, and Gate 3 — use the filter buttons to focus on one gate at a time.
+
+**Sidebar shortcut:** the **Needs Sign-off** section in the left sidebar always shows jobs at any gate regardless of which screen you are on. Clicking a card there navigates directly to that job's sign-off form.
+
+---
+
+## Output folders
+
+After a job completes, all artifacts are written to readable directories on disk.
+
+### Individual jobs
+
+```
+OUTPUT_DIR/
+  individual/
+    <mapping_stem>_<short_id>/
+      input/          original uploaded XML files
+      output/         generated code files
+        tests/        generated test files
+      docs/           documentation.md, s2t_mapping.xlsx
+      logs/           raw JSONL pipeline log
+```
+
+Example: `individual/m_customer_load_a1b2c3d4/`
+
+### Batch jobs
+
+All mappings in a batch are grouped under a shared batch folder:
+
+```
+OUTPUT_DIR/
+  batch_<short_batch_id>/
+    m_customer_load/
+      input/    output/    docs/    logs/
+    m_product_load/
+      input/    output/    docs/    logs/
+    m_appraisal_rank/
+      input/    output/    docs/    logs/
+```
+
+Example: `batch_e5f6a7b8/m_customer_load/`
+
+This makes it easy to locate all outputs from a single batch run in one place.
+
+### Downloads
+
+From the job panel, after Gate 3 approval (or after Step 4 for Documentation Only jobs):
 
 | Output | How to get it |
 |---|---|
@@ -170,17 +262,19 @@ After Gate 3 approval, the following are available from the job panel:
 
 ---
 
-## Reviewing jobs at scale (Review Queue)
+## Job History & cleanup
 
-When running a large migration, many jobs can be waiting at gates simultaneously. The **Review Queue** tab shows all pending gate decisions in a single table so you can process them in bulk.
+The **Job History** tab shows a full table of all jobs with search, status filter, and pagination.
 
-**Opening a specific job for review:** click anywhere on a row (or the "Review →" button at the right) to open that job's full detail view. The page scrolls automatically to the active gate sign-off card. A "← Back to Review Queue" bar at the top lets you return to the list without losing your place.
+### Deleting individual jobs
 
-**Bulk sign-off:** check the boxes next to multiple jobs, enter a reviewer name, then click **Approve Selected**, **Reject Selected**, or **Acknowledge Selected** (Gate 2 only). The summary bar shows how many jobs are waiting at Gate 1, Gate 2, and Gate 3 — use the filter buttons to focus on one gate at a time.
+Each job row has a **🗑** delete button. Clicking it soft-deletes the job — it is removed from history and the sidebar but its log is retained in the database archive. Deletion is immediate and does not require confirmation.
 
-**Sidebar shortcut:** the **Needs Sign-off** section in the left sidebar always shows jobs at any gate regardless of which screen you are on. Clicking a card there also navigates directly to that job's sign-off form.
+### Deleting a batch
 
-To track overall migration progress, use `GET /api/progress` or the **Export Progress CSV** option for a spreadsheet view of all job statuses — useful for weekly management reporting.
+Each batch group in history has a **🗑 Delete batch** button in the header row. This soft-deletes all jobs in the batch at once. Useful for cleaning up test runs or failed experiments.
+
+Deleted jobs and batches do not appear in any list view but can be recovered by an admin using the database directly if needed.
 
 ---
 
@@ -219,7 +313,7 @@ A manifest represents a **project group** — all the related Informatica files 
 }
 ```
 
-**Per-mapping overrides** — individual mappings can specify their own workflow or parameter file, falling back to the top-level defaults for any field not specified:
+**Per-mapping overrides** — individual mappings can specify their own workflow or parameter file:
 
 ```json
 {
@@ -244,17 +338,15 @@ A manifest represents a **project group** — all the related Informatica files 
 | Field | Required | Description |
 |---|---|---|
 | `label` | No | Human-readable name for the batch — used as the output folder name. Recommended. |
-| `mappings` | **Yes** | Array of mapping XMLs. Each entry is a filename string (inherits top-level defaults) or an object with `mapping`, `workflow`, `parameters` fields that override the top-level values for that mapping only. |
-| `workflow` | No | Default workflow XML for all mappings (overridable per entry) |
-| `parameters` | No | Default parameter file (.xml / .txt / .par) for all mappings (overridable per entry) |
+| `mappings` | **Yes** | Array of mapping XMLs. Each entry is a filename string or an object with per-mapping overrides. |
+| `workflow` | No | Default workflow XML for all mappings |
+| `parameters` | No | Default parameter file (.xml / .txt / .par) for all mappings |
 | `reviewer` | No | Reviewer name — surfaced in gate notifications |
 | `reviewer_role` | No | Reviewer role |
 
-All referenced files must be in the same directory as the manifest. **Drop the manifest last** — it is the signal that all files are ready.
+**Drop the manifest last** — it is the signal that all files are ready.
 
-### Output directory structure
-
-When a watcher batch completes, artifacts for each mapping are written to:
+### Output directory structure (watcher)
 
 ```
 OUTPUT_DIR/
@@ -263,11 +355,9 @@ OUTPUT_DIR/
       input/    output/    docs/    logs/
     m_appraisal_rank/
       input/    output/    docs/    logs/
-    m_commission_calc/
-      input/    output/    docs/    logs/
 ```
 
-The microsecond timestamp is always appended to the label so re-runs with the same label never overwrite each other and folders sort chronologically. If no `label` is provided, the manifest filename stem is used in its place.
+The microsecond timestamp is always appended so re-runs with the same label never overwrite each other.
 
 ### What happens to the manifest after processing
 
@@ -275,7 +365,7 @@ The microsecond timestamp is always appended to the label so re-runs with the sa
 |---|---|
 | Job submitted successfully | `WATCHER_DIR/processed/` |
 | Referenced files missing (timed out) | `WATCHER_DIR/failed/` with `.error` sidecar |
-| Invalid JSON or bad schema | `WATCHER_DIR/failed/` with `.error` sidecar immediately |
+| Invalid JSON or bad schema | `WATCHER_DIR/failed/` immediately |
 
 ### Enabling the watcher
 
@@ -295,23 +385,19 @@ WATCHER_INCOMPLETE_TTL_SECS=300  # seconds before a partial manifest is failed
 
 ---
 
-## Time-based scheduled conversions (v2.15.0)
+## Time-based scheduled conversions
 
 The time-based scheduler lets you automate conversion runs on a recurring cron schedule — useful for nightly batch jobs, weekly pipeline refreshes, or any scenario where conversions should fire at a specific time without manual intervention.
 
 ### How it works
 
-1. Enable the scheduler and the file watcher in `.env` (see Configuration below).
+1. Enable the scheduler and the file watcher in `.env`.
 2. Create a `*.schedule.json` file in `SCHEDULER_DIR` that contains a cron expression and an embedded manifest.
 3. At the scheduled time, the scheduler materialises a `.manifest.json` file into `WATCHER_DIR`.
-4. The manifest file watcher picks it up and submits the conversion batch automatically — exactly as if you had dropped the manifest by hand.
+4. The manifest file watcher picks it up and submits the conversion batch automatically.
 5. Gate reviews still require a human. Configure `WEBHOOK_URL` to alert your team when a gate is reached.
 
-The scheduler and file watcher are independent subsystems. The scheduler produces manifests; the watcher consumes them. Both must be enabled.
-
 ### Schedule file format
-
-Create a file with any name ending in `.schedule.json` in `SCHEDULER_DIR`:
 
 ```json
 {
@@ -324,12 +410,7 @@ Create a file with any name ending in `.schedule.json` in `SCHEDULER_DIR`:
         "version":  "1.0",
         "mappings": [
             "m_customer_load.xml",
-            "m_product_load.xml",
-            {
-                "mapping":    "m_appraisal_rank.xml",
-                "workflow":   "wf_appraisal.xml",
-                "parameters": "params_appraisal.xml"
-            }
+            "m_product_load.xml"
         ],
         "workflow":      "wf_default.xml",
         "parameters":    "params_prod.xml",
@@ -341,25 +422,13 @@ Create a file with any name ending in `.schedule.json` in `SCHEDULER_DIR`:
 
 | Field | Required | Description |
 |---|---|---|
-| `cron` | **Yes** | 5-field cron expression — see table below |
+| `cron` | **Yes** | 5-field cron expression |
 | `timezone` | No | IANA timezone name (e.g. `"America/New_York"`). Defaults to UTC. |
-| `label` | No | Human-readable run label — written to the output folder name. Defaults to schedule filename stem. |
-| `enabled` | No | Set `false` to pause a schedule without deleting the file. Defaults to `true`. |
-| `manifest` | **Yes** | Full manifest payload — same format as a hand-dropped manifest (see above). The `label` field is injected automatically if not present. |
+| `label` | No | Human-readable run label. Defaults to schedule filename stem. |
+| `enabled` | No | Set `false` to pause without deleting the file. Defaults to `true`. |
+| `manifest` | **Yes** | Full manifest payload — same format as a hand-dropped manifest. |
 
-### Cron expression format
-
-The standard 5-field cron format: `minute  hour  day-of-month  month  day-of-week`
-
-| Field | Range | Notes |
-|---|---|---|
-| minute | 0–59 | |
-| hour | 0–23 | |
-| day-of-month | 1–31 | |
-| month | 1–12 | |
-| day-of-week | 0–7 | 0 and 7 = Sunday; 1 = Monday; ... 6 = Saturday |
-
-Supported syntax: `*` (any), `*/n` (every n), `a-b` (range), `a-b/n` (range with step), `a,b,c` (list), and any comma-joined combination.
+### Cron expression quick reference
 
 | Expression | Fires at |
 |---|---|
@@ -369,50 +438,24 @@ Supported syntax: `*` (any), `*/n` (every n), `a-b` (range), `a-b/n` (range with
 | `"15 8 1 * *"` | 1st of every month at 08:15 |
 | `"0 18 * * 5"` | Fridays at 18:00 |
 
-### Output directory structure
-
-Each scheduled run produces the same output structure as a hand-dropped manifest:
-
-```
-OUTPUT_DIR/
-  <label>_<YYYYMMDD_HHMMSS_ffffff>/
-    m_customer_load/
-      input/    output/    docs/    logs/
-    m_appraisal_rank/
-      input/    output/    docs/    logs/
-```
-
-The microsecond timestamp is always appended so multiple runs of the same schedule never overwrite each other.
-
 ### Enabling the scheduler
 
 Both the scheduler and the file watcher must be enabled in `.env`:
 
 ```
-# File watcher — required for the scheduler to work
 WATCHER_ENABLED=true
 WATCHER_DIR=/path/to/watch/folder
-
-# Time-based scheduler
 SCHEDULER_ENABLED=true
 SCHEDULER_DIR=/path/to/schedules/folder
 ```
 
-`SCHEDULER_DIR` is where your `*.schedule.json` files live. `WATCHER_DIR` is where the scheduler writes materialised manifests. They can be different directories (recommended) or the same.
-
-Optional tuning:
-
-```
-SCHEDULER_POLL_INTERVAL_SECS=60   # how often to evaluate cron expressions (default 60)
-```
-
-Schedule files are re-read on every poll — you can add, edit, or disable schedules without restarting the server.
+Schedule files are re-read on every poll — add, edit, or disable schedules without restarting the server.
 
 ---
 
 ## Webhook notifications
 
-Configure a webhook to receive notifications when a job reaches a gate, completes, or fails — useful for alerting the review team without them having to poll the UI.
+Configure a webhook to receive notifications when a job reaches a gate, completes, or fails.
 
 In `.env`:
 
@@ -428,13 +471,13 @@ To verify that notifications come from this tool, set an HMAC signing key:
 WEBHOOK_SECRET=<random hex string>
 ```
 
-Every outbound request will include an `X-Webhook-Signature: sha256=<hex>` header. Your receiver can verify it by computing `HMAC-SHA256(WEBHOOK_SECRET, raw_body)` and comparing with constant-time equality.
+Every outbound request will include an `X-Webhook-Signature: sha256=<hex>` header. Your receiver can verify it by computing `HMAC-SHA256(WEBHOOK_SECRET, raw_body)`.
 
 ---
 
 ## GitHub PR integration
 
-When configured, the tool automatically opens a draft pull request after every Gate 3 approval — the generated code is committed and a PR is created targeting your main branch.
+When configured, the tool automatically opens a draft pull request after every Gate 3 approval.
 
 In `.env`:
 
@@ -456,7 +499,7 @@ Generate a Personal Access Token at https://github.com/settings/tokens (classic)
 
 ## Testing your converted code
 
-The tool generates test artifacts as part of every conversion job (Step 11). These are delivered in the output ZIP under `tests/` and must be run by the data engineering team in their own environment — the tool itself does not execute them.
+The tool generates test artifacts as part of every Full Conversion job (Step 11). These are delivered in the output ZIP under `tests/` and must be run by the data engineering team in their own environment.
 
 See **[docs/TESTING_GUIDE.md](TESTING_GUIDE.md)** for full instructions on:
 - Reviewing the field coverage report
@@ -470,7 +513,7 @@ See **[docs/TESTING_GUIDE.md](TESTING_GUIDE.md)** for full instructions on:
 
 SQLite is the default and is sufficient for pilots and migrations up to approximately 200 mappings.
 
-**For migrations above 200 mappings, switch to PostgreSQL.** At that scale, concurrent batch runs with large state blobs will start producing lock contention errors. To switch, set `DATABASE_URL` in `backend/db/database.py`:
+**For migrations above 200 mappings, switch to PostgreSQL.** To switch, set `DATABASE_URL` in `backend/db/database.py`:
 
 ```python
 DATABASE_URL = "postgresql+asyncpg://user:password@host:5432/informatica_conversion"
@@ -498,7 +541,7 @@ All settings are controlled via `.env`. Copy `.env.example` to `.env` as your st
 |---|---|---|
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8000` | Listen port |
-| `HTTPS` | `false` | Set to `true` when serving over HTTPS (enables secure cookie flag) |
+| `HTTPS` | `false` | Set to `true` when serving over HTTPS |
 | `CORS_ORIGINS` | unset | Comma-separated allowed origins for cross-origin deployments |
 | `SHOW_DOCS` | `false` | Set to `true` to enable Swagger UI at `/docs` |
 
@@ -551,67 +594,57 @@ All settings are controlled via `.env`. Copy `.env.example` to `.env` as your st
 | `SCHEDULER_DIR` | unset | Absolute path to the directory containing `*.schedule.json` files |
 | `SCHEDULER_POLL_INTERVAL_SECS` | `60` | Seconds between cron evaluation polls |
 
-The scheduler requires `WATCHER_ENABLED=true` and `WATCHER_DIR` to also be configured.
-
 ---
 
 ## Customising for your organisation
 
-All customisation is done through two optional YAML files and an optional prompts folder. No Python code changes are required. If the files are absent the tool runs exactly as it did in v2.16.0 — all defaults are backwards-compatible.
+All customisation is done through two optional YAML files and an optional prompts folder. No Python code changes are required.
 
 ### Pattern classification signals (`org_config.yaml`)
-
-The classifier uses keyword lists to identify patterns such as SCD2, upsert, or incremental append. You can extend these lists to match your naming conventions:
 
 ```yaml
 # app/config/org_config.yaml
 pattern_signals:
   scd2:
-    target_name_contains: ["_HIST", "_ARCHIVE"]   # add your SCD2 table suffixes
+    target_name_contains: ["_HIST", "_ARCHIVE"]
   upsert:
     target_name_contains: ["_MERGE", "_UPSERT"]
   incremental_append:
     target_name_contains: ["_DELTA", "_INC"]
   expression_complexity:
-    additional_indicators: ["DECODE", "INSTR"]    # extra complexity indicators
+    additional_indicators: ["DECODE", "INSTR"]
 ```
 
 ### Audit / DW columns (`org_config.yaml`)
 
-Override the column names and SQL expressions injected into every generated target table:
-
 ```yaml
 audit_fields:
   insert_timestamp:
-    column: LOAD_DT            # was DW_INSERT_DT
+    column: LOAD_DT
     expression: current_date()
   update_timestamp:
-    column: REFRESH_DT         # was DW_UPDATE_DT
+    column: REFRESH_DT
     expression: current_timestamp()
   source_system:
-    column: SRC_SYS            # was DW_SOURCE_SYS
+    column: SRC_SYS
     expression: "'INFORMATICA'"
-  # Set to null to omit a field entirely:
-  # insert_timestamp: null
 ```
 
 ### Verification flag severity (`org_config.yaml`)
 
-Promote, demote, or suppress any verification flag without touching Python code:
-
 ```yaml
 verification_policy:
   HARDCODED_VALUE:
-    severity: HIGH       # was MEDIUM — promote for stricter enforcement
+    severity: HIGH
     blocking: true
   SOURCE_SQ_CONNECTIVITY:
-    severity: INFO       # suppress noisy false positives in your environment
+    severity: INFO
     blocking: false
 ```
 
 ### Warehouse profiles (`warehouse_registry.yaml`)
 
-Eight warehouses are pre-registered. Add any SQLAlchemy-compatible target by appending an entry — the `profiles.yml` generator will pick it up automatically:
+Eight warehouses are pre-registered. Add any SQLAlchemy-compatible target by appending an entry:
 
 ```yaml
 # app/config/warehouse_registry.yaml
@@ -629,38 +662,23 @@ my_custom_dw:
 
 ### Skipping pipeline steps (`org_config.yaml`)
 
-Skip documentation generation (Step 4) or test generation (Step 11) under conditions you define — useful for CI pipelines where speed matters more than full output:
-
 ```yaml
 pipeline_options:
   skip_steps:
-    - step: 4          # skip documentation for LOW-complexity mappings
+    - step: 4
       when:
         tier: LOW
-    - step: 11         # skip test generation when pattern confidence is HIGH
+    - step: 11
       when:
         pattern_confidence: HIGH
   auto_approve_gates:
     - gate: 1
       when:
         tier: LOW
-        pattern_confidence: HIGH   # auto-approve Gate 1 for well-understood patterns
-```
-
-### Unsupported transformation types (`org_config.yaml`)
-
-Add extra Informatica transformation types that should raise an UNSUPPORTED flag at parse time:
-
-```yaml
-parser_options:
-  additional_unsupported_types:
-    - "Custom Transformation"
-    - "Java Transformation"
+        pattern_confidence: HIGH
 ```
 
 ### System prompt overrides (`app/prompts/`)
-
-Drop a Jinja2 template file into `app/prompts/` to replace the built-in conversion system prompt for a specific stack. The file is loaded at startup so you can edit it without restarting the server if you use `--reload`.
 
 | File | Replaces |
 |---|---|
@@ -678,31 +696,33 @@ See `app/prompts/README.md` for variable reference and examples.
 Export with *Include Dependencies* enabled so that any reusable transformations and mapplets are included in the XML. Missing dependencies will be flagged at Gate 1 with re-export guidance.
 
 **Q: What if my mapping uses mapplets?**
-The tool detects and inline-expands mapplet definitions automatically (v2.12). If a mapplet instance is found but its definition is not in the export, a HIGH severity flag is raised at Gate 1 advising you to re-export with dependencies included.
+The tool detects and inline-expands mapplet definitions automatically. If a mapplet instance is found but its definition is not in the export, a HIGH severity flag is raised at Gate 1.
 
 **Q: Can I override the target stack assigned by the tool?**
-Not directly in the current version. If the assigned stack (Step 6) is wrong, reject at Gate 3 and re-upload — the tool will reassign on the next run. A manual override UI is planned for a future version.
+Not directly in the current version. If the assigned stack (Step 6) is wrong, reject at Gate 3 and re-upload — the tool will reassign on the next run.
 
 **Q: How do I convert multiple mappings at once?**
-Use **Batch mode** on the Submit tab. Click **📁 Select Folder** to pick a folder (the browser packages it into a ZIP automatically), or click **📦 Select ZIP** if you already have one. Structure it with one subfolder per mapping. The tool processes all mappings concurrently.
+Use **Batch mode** on the Submit tab. Click **📁 Select Folder** to pick a folder (the browser packages it automatically), or click **📦 Select ZIP** if you already have one. Both flat folders and structured subfolders are supported.
+
+**Q: I have 17 XML files in one folder — do I need to reorganise them into subfolders?**
+No. If all XMLs are in the same directory with no subfolders, the tool automatically creates one job per XML file (flat-folder mode).
+
+**Q: What is Documentation Only mode?**
+It runs Steps 1–4 only (parse, classify, S2T, verify) and exits cleanly after producing the Source-to-Target Excel and technical docs. No code is generated, no gates are triggered. Use it to catalogue your mapping inventory before committing to full conversion.
 
 **Q: My gate review was rejected — how do I retry?**
-Fix the underlying issue in Informatica, re-export the mapping XML, and upload the file again as a new job. Deleted jobs retain their logs in the archive for reference.
+Fix the underlying issue in Informatica, re-export the mapping XML, and upload it again as a new job. Deleted jobs retain their logs in the archive for reference.
 
 **Q: Does the tool ever automatically execute the generated code or tests?**
-No. The tool generates code and test artifacts but never runs them. Execution is the data engineering team's responsibility in their own environment. See `docs/TESTING_GUIDE.md`.
+No. The tool generates code and test artifacts but never runs them. Execution is the data engineering team's responsibility in their own environment.
 
 **Q: Can the watcher be used without the UI?**
-Yes — the watcher submits jobs through the same internal pipeline, and the UI is optional. However, Gate 1, 2, and 3 reviews still require a human to open the UI and submit a decision. If you need notifications when a gate is reached, configure `WEBHOOK_URL` to alert your team.
+Yes — gate reviews still require a human, but the watcher submits jobs automatically. Configure `WEBHOOK_URL` to alert your team when a gate is reached.
 
-**Q: Where are output files stored on disk?**
-After Gate 3 approval, all artifacts are written to the configured `OUTPUT_DIR` (defaults to `<repo_root>/jobs/{job_id}/`). The directory structure is:
+**Q: What happens to batch jobs if the server is restarted?**
+Batch jobs that were queued but hadn't started are automatically re-queued on startup. Jobs that were paused at a gate are restored to the gate-waiting state and resume normally when the reviewer acts.
 
-```
-jobs/{job_id}/
-  input/          original uploaded XML files
-  output/         generated code files (preserving folder structure)
-    tests/        generated test files
-  docs/           documentation.md, s2t_mapping.xlsx, manifest.xlsx
-  logs/           raw JSONL pipeline log
-```
+**Q: Where are output files stored?**
+Individual jobs: `OUTPUT_DIR/individual/<mapping_stem>_<short_id>/`
+Batch jobs: `OUTPUT_DIR/batch_<short_batch_id>/<mapping_stem>/`
+See the **Output folders** section above for the full directory layout.

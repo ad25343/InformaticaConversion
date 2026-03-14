@@ -10,6 +10,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.22] — 2026-03-13 — In-browser User Guide (marked.js)
+
+### Added
+
+- **📖 Guide** nav item (renamed from "How It Works") — opens a full in-browser user guide rendered from `docs/USER_GUIDE.md` via marked.js. No download, no separate page — markdown is fetched from `GET /api/docs/user-guide` and rendered with scoped CSS inside the panel.
+- `GET /api/docs/user-guide` endpoint — serves `docs/USER_GUIDE.md` as `text/plain` for the frontend renderer.
+- **marked.js 9.1.6** added to CDN scripts (cdnjs.cloudflare.com, already in CSP allow-list).
+- `loadGuide()` JS function — fetches and renders the guide once per session; shows a loading state while the fetch is in flight and a friendly error if it fails.
+- `_guideLoaded` flag prevents redundant fetches on repeated tab visits.
+
+### Changed
+
+- `docs/USER_GUIDE.md` updated to v2.18 — covers pipeline modes (Full vs Documentation Only), flat-folder batch, readable output folders (`individual/` and `batch_<id>/`), batch delete, startup recovery for stranded jobs, semaphore release at gate, and the new Guide nav.
+- The hardcoded 12-step grid and pipeline-mode cards previously in `panelDocs` are removed — the single-source-of-truth markdown file is rendered instead.
+
+---
+
 ## [2.18.21] — 2026-03-13 — Pipeline mode selector + How It Works panel + readable output folders
 
 ### Added

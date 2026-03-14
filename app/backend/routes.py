@@ -17,7 +17,7 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, BackgroundTasks, Form, Request
 from starlette.background import BackgroundTask
-from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse, Response
 from typing import Optional as _Opt
 
 from .db import database as db
@@ -107,6 +107,22 @@ def _validate_zip_content_type(upload: UploadFile) -> None:
 # ── Active pipeline tasks (in-memory for MVP) ─────
 _active_tasks: dict[str, asyncio.Task] = {}
 _progress_queues: dict[str, asyncio.Queue] = {}
+
+
+# ─────────────────────────────────────────────
+# User Guide
+# ─────────────────────────────────────────────
+
+_GUIDE_PATH = Path(__file__).parent.parent.parent / "docs" / "USER_GUIDE.md"
+
+@router.get("/docs/user-guide", response_class=Response)
+async def get_user_guide():
+    """Serve USER_GUIDE.md as plain text for in-browser markdown rendering."""
+    try:
+        content = _GUIDE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="User guide not found")
+    return Response(content=content, media_type="text/plain; charset=utf-8")
 
 
 # ─────────────────────────────────────────────
