@@ -32,7 +32,7 @@ const STATUS_BADGE = {
   assigning_stack: ['badge-running','Assigning Stack'],
   converting:        ['badge-running','Converting'],
   security_scanning:      ['badge-running','Security Scan'],
-  validating:             ['badge-running','Security Scan'],
+  validating:             ['badge-running','Validating'],
   awaiting_security_review: ['badge-waiting','Security Sign-off'],
   reviewing:              ['badge-running','Quality Review'],
   testing:                ['badge-running','Testing'],
@@ -40,6 +40,7 @@ const STATUS_BADGE = {
   complete:             ['badge-complete','Complete'],
   failed:               ['badge-failed','Failed'],
   blocked:              ['badge-blocked','Blocked'],
+  cancelled:            ['badge-failed','Cancelled'],
 };
 
 const SEV_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
@@ -58,6 +59,11 @@ const _RUNNING_SET = new Set(['pending','parsing','classifying','documenting','v
 const _GATE_SET = new Set(['awaiting_review','awaiting_security_review','awaiting_code_review']);
 
 let _prevGatePending = 0;
+
+// Review queue state
+let _reviewQueue = [];
+let _reviewGateFilter = null;
+let _reviewSelectedJobIds = new Set();
 
 // ─────────────────────────────────────────────
 // Utilities
@@ -116,12 +122,46 @@ const PERSONA_META = {
 
 function getPersonaCookie() {
   const m = document.cookie.match(/(?:^|;\s*)persona=([^;]+)/);
-  if (!m) return 'User';
-  return decodeURIComponent(m[1]).replace(/^"|"$/g, '');
+  if (!m) return '';
+  const v = decodeURIComponent(m[1]).replace(/^"|"$/g, '').trim();
+  return v || '';
+}
+
+function _setPersonaCookie(name) {
+  document.cookie = `persona=${encodeURIComponent(name)};path=/;max-age=${60*60*24*365}`;
+}
+
+function pickPersona(name) {
+  _setPersonaCookie(name);
+  const ov = document.getElementById('personaPickerOverlay');
+  if (ov) ov.style.display = 'none';
+  initPersonaUI();
+}
+
+function pickPersonaCustom() {
+  const inp = document.getElementById('personaCustomInput');
+  const name = (inp ? inp.value : '').trim();
+  if (!name) return;
+  pickPersona(name);
+}
+
+function showPersonaPicker() {
+  const ov = document.getElementById('personaPickerOverlay');
+  const list = document.getElementById('personaPickerList');
+  if (!ov || !list) return;
+  list.innerHTML = Object.entries(PERSONA_META).map(([n, m]) => `
+    <div onclick="pickPersona('${n}')"
+         style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;cursor:pointer;transition:background .15s"
+         onmouseenter="this.style.background='var(--surface2)'" onmouseleave="this.style.background=''">
+      <div style="width:36px;height:36px;border-radius:50%;background:${m.color};color:${m.fg};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.initials}</div>
+      <div><div style="font-weight:600;font-size:13px;color:var(--text)">${n}</div><div style="font-size:11px;color:var(--muted)">${m.role}</div></div>
+    </div>`).join('');
+  ov.style.display = 'flex';
 }
 
 function initPersonaUI() {
-  const name = getPersonaCookie();
+  const name = getPersonaCookie() || '';
+  if (!name) { showPersonaPicker(); return; }
   const meta = PERSONA_META[name] || { role: '', initials: (name[0] || '?').toUpperCase(),
                                         color: 'rgba(108,99,255,.25)', fg: '#a5b4fc' };
   const av = document.getElementById('personaAvatarNav');
@@ -191,7 +231,7 @@ function setMainView(view) {
       btn.style.color = (v === view) ? 'var(--accent)' : 'var(--muted)';
     }
   });
-  if (view === 'review')  loadReviewQueue();
+  if (view === 'review')  { loadReviewQueue(); initReviewColResize(); }
   if (view === 'history') { loadHistory(); }
   if (view !== 'history') _stopHistLive();
   if (view === 'landing') loadLandingStats();
@@ -277,6 +317,24 @@ function downloadReportMd() {
   a.download = `${safe}_conversion_report.md`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function downloadAuditReport(jobId) {
+  const id = jobId || (window._currentJob && window._currentJob.job_id);
+  if (!id) return;
+  try {
+    const res = await fetch(`/api/jobs/${id}/audit-report`);
+    if (!res.ok) { alert('Could not generate audit report: ' + res.statusText); return; }
+    const md = await res.text();
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const safe = ((window._currentJob && window._currentJob.filename) || id).replace(/[^a-z0-9_\-\.]/gi, '_');
+    a.href     = url;
+    a.download = `${safe}_AUDIT_REPORT.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert('Audit report download failed: ' + e.message); }
 }
 
 function openPrintReport() {
@@ -438,18 +496,28 @@ function buildReportMarkdown(job) {
 
   const co = state.conversion;
   if (co?.files) {
-    h2(`Step 7 — Converted Code (${co.target_stack})`);
+    h2(`Step 7 — Conversion Output (${co.target_stack})`);
+    const fileEntries = Object.entries(co.files);
+    const totalLoc = fileEntries.reduce((s, [, b]) => s + (b || '').split('\n').length, 0);
+    kv('Output files', fileEntries.length);
+    kv('Total lines of code', totalLoc.toLocaleString());
+    kv('Pattern used', co.pattern || '—');
+    kv('Pattern confidence', co.confidence || '—');
+    L.push('');
+    if (fileEntries.length) {
+      L.push('**Generated files:**', '');
+      fileEntries.forEach(([fname, body]) => {
+        const loc = (body || '').split('\n').length;
+        L.push(`- \`${fname}\` (${loc.toLocaleString()} lines)`);
+      });
+      L.push('');
+      L.push('_Full source files are available in the job export package (output/ folder)._', '');
+    }
     if (co.notes?.length) {
-      L.push('**Notes:**');
+      L.push('**Conversion notes:**');
       co.notes.forEach(n => L.push(`- ${n}`));
       L.push('');
     }
-    Object.entries(co.files).forEach(([fname, body]) => {
-      h3(fname);
-      const ext = fname.split('.').pop()?.toLowerCase() || '';
-      const lang = { py:'python', sql:'sql', yml:'yaml', yaml:'yaml', md:'markdown' }[ext] || '';
-      code(lang, body);
-    });
   }
 
   const ss = state.security_scan;

@@ -390,10 +390,12 @@ class TestGatesPending(unittest.TestCase):
         for key in ("total", "by_gate", "jobs"):
             self.assertIn(key, body)
 
-    def test_by_gate_has_three_keys(self):
+    def test_by_gate_has_expected_keys(self):
         r = self.client.get("/api/gates/pending", cookies=self.cookies)
         by_gate = r.json()["by_gate"]
-        self.assertEqual(len(by_gate), 3)
+        # JSON serialises integer keys as strings; by_gate has "1","2","3" + "blocked","failed"
+        for key in ("1", "2", "3", "blocked", "failed"):
+            self.assertIn(key, by_gate)
 
     def test_total_matches_jobs_list_length(self):
         r = self.client.get("/api/gates/pending", cookies=self.cookies)

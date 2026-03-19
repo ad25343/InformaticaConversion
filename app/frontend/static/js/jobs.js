@@ -363,6 +363,7 @@ async function openHistoryJob(jobId, name) {
 async function openJob(jobId) {
   if (eventSource) { eventSource.close(); eventSource = null; }
   currentJobId = jobId;
+  setMainView('dashboard');
   await loadJobs();
 
   const res = await fetch(`/api/jobs/${jobId}`);
@@ -370,18 +371,31 @@ async function openJob(jobId) {
   renderJobPanel(job);
 
   eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+  // Track whether the pipeline sent real progress so we know if the final
+  // re-render on 'done' is needed.  Gate-waiting jobs emit an immediate
+  // 'state' + 'done' burst with no active pipeline — re-rendering on those
+  // clears whatever the reviewer typed in the sign-off form.
+  let _sseHadProgress = false;
   eventSource.onmessage = async (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'done') {
+    if (msg.type === 'progress') {
+      // Active pipeline step — re-render to show updated progress.
+      _sseHadProgress = true;
+      const updated = await fetch(`/api/jobs/${jobId}`);
+      renderJobPanel(await updated.json());
+      await loadJobs();
+    } else if (msg.type === 'done') {
       eventSource.close();
-      const updated = await fetch(`/api/jobs/${jobId}`);
-      renderJobPanel(await updated.json());
-      await loadJobs();
-    } else if (msg.type === 'progress' || msg.type === 'state') {
-      const updated = await fetch(`/api/jobs/${jobId}`);
-      renderJobPanel(await updated.json());
-      await loadJobs();
+      // Only re-render if the pipeline actually ran (had progress events).
+      // Without this guard, gate-waiting jobs immediately get re-rendered,
+      // wiping reviewer name / notes the user just started typing.
+      if (_sseHadProgress) {
+        const updated = await fetch(`/api/jobs/${jobId}`);
+        renderJobPanel(await updated.json());
+        await loadJobs();
+      }
     }
+    // 'state' and 'heartbeat' — informational only, no re-render needed.
   };
   eventSource.onerror = () => eventSource.close();
 }
@@ -407,11 +421,36 @@ function renderJobPanel(job) {
           &nbsp;·&nbsp; Started: ${utcDate(job.created_at).toLocaleString()}
         </div>
       </div>
-      <div class="report-actions" style="margin-bottom:0;flex-shrink:0">
-        <span class="lbl">Download report:</span>
-        <button class="btn btn-ghost btn-sm" title="Download full report as Markdown" onclick="downloadReportMd()">📄 .md</button>
-        <button class="btn btn-ghost btn-sm" title="Open print-ready report — use browser Save as PDF" onclick="openPrintReport()">🖨️ PDF</button>
-        ${state.has_manifest || state.manifest_report ? `<button class="btn btn-ghost btn-sm" title="Download pre-conversion manifest — fill in yellow rows, re-upload before converting" onclick="downloadManifestXlsx()" style="color:#c07000;border-color:#c07000">📊 Manifest</button>` : ''}
+      <div class="report-actions" style="margin-bottom:0;flex-shrink:0;display:flex;align-items:center;gap:6px">
+        <span class="lbl">Reports:</span>
+        <div class="report-dropdown" style="position:relative;display:inline-block">
+          <button class="btn btn-ghost btn-sm report-dropdown-toggle" title="Download Complete Conversion Report"
+                  onclick="this.closest('.report-dropdown').classList.toggle('open')"
+                  onblur="setTimeout(()=>this.closest('.report-dropdown').classList.remove('open'),150)">
+            📄 Complete Report ▾
+          </button>
+          <div class="report-dropdown-menu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--surface2);border:1px solid var(--border);border-radius:8px;min-width:160px;z-index:200;box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden">
+            <button class="report-dropdown-item" onclick="downloadReportMd();this.closest('.report-dropdown').classList.remove('open')"
+                    style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 14px;background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;text-align:left;white-space:nowrap"
+                    onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background='none'">
+              📄 Download (.md)
+            </button>
+            <button class="report-dropdown-item" onclick="openPrintReport();this.closest('.report-dropdown').classList.remove('open')"
+                    style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 14px;background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;text-align:left;white-space:nowrap"
+                    onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background='none'">
+              🖨️ Print / PDF
+            </button>
+          </div>
+        </div>
+        ${state.has_manifest || state.manifest_report ? `
+        <button class="btn btn-ghost btn-sm" title="Download S2T Manifest — fill in yellow rows, re-upload before converting"
+                onclick="downloadManifestXlsx()" style="color:#c07000;border-color:#c07000">
+          📊 S2T Manifest
+        </button>` : ''}
+        <button class="btn btn-ghost btn-sm" title="Governance snapshot — scores, sign-off chain, flags, security findings"
+                onclick="downloadAuditReport('${job.job_id}')" style="color:#818cf8;border-color:#818cf8">
+          🔍 Summary
+        </button>
       </div>
     </div>
     ${renderStepper(job.current_step, job.status)}
@@ -450,7 +489,7 @@ function renderJobPanel(job) {
           <strong>What to do:</strong> <span>${hint}</span>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="retryJob('${job.job_id}')" title="Re-run the pipeline with the same XML file">🔄 Retry</button>
-        <button class="btn btn-ghost btn-sm" onclick="reuploadForJob()">↩ Re-upload Fixed File</button>
+        <button class="btn btn-ghost btn-sm" onclick="reuploadForJob(${JSON.stringify(hint)})">↩ Submit New File</button>
       </div>
     </div>`;
   }
@@ -486,7 +525,7 @@ function renderJobPanel(job) {
         </div>
       </div>
       <div style="margin-top:14px">
-        <button class="btn btn-warn btn-sm" onclick="reuploadForJob()">↩ Upload Corrected File</button>
+        <button class="btn btn-warn btn-sm" onclick="reuploadForJob()">↩ Submit New File</button>
       </div>
     </div>`;
   }
@@ -506,6 +545,7 @@ function renderJobPanel(job) {
       ${pr.mapping_names?.length ? `<div style="font-size:12px;color:var(--muted)">Mappings: <strong style="color:var(--text)">${pr.mapping_names.map(esc).join(', ')}</strong></div>` : ''}
       ${pr.unresolved_parameters?.length ? `<div style="font-size:12px;color:var(--warn);margin-top:8px">⚠️ Unresolved parameters: <code style="background:var(--bg);padding:2px 6px;border-radius:4px">${pr.unresolved_parameters.map(esc).join(', ')}</code></div>` : ''}
       ${pr.flags?.filter(f=>f.flag_type==='PARSE_ERROR').length ? `<div style="font-size:12px;color:var(--danger);margin-top:8px">Parse errors detected — see full flags in Step 4.</div>` : ''}
+      ${renderCompletenessScore(pr)}
       </div>
     </div>`;
   }
@@ -522,6 +562,7 @@ function renderJobPanel(job) {
       ${c.criteria_matched?.map(cr=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">· ${esc(cr)}</div>`).join('')||''}
       ${c.rationale ? `<div style="font-size:12px;color:var(--muted);margin-top:10px;font-style:italic">${esc(c.rationale)}</div>` : ''}
       ${c.special_flags?.length ? `<div style="margin-top:10px;padding:8px;background:rgba(248,113,113,.08);border-radius:6px;font-size:12px;color:var(--danger)">⚠️ ${c.special_flags.map(esc).join('<br/>⚠️ ')}</div>` : ''}
+      ${renderConversionReadiness(c, state.parse_report)}
       </div>
     </div>`;
   }
@@ -735,9 +776,14 @@ function renderJobPanel(job) {
           <label>Notes (optional)</label>
           <textarea id="reviewNotes" placeholder="Any conditions, caveats, or observations…" style="height:80px;resize:vertical"></textarea>
         </div>
-        <div class="form-actions">
-          <button class="btn btn-success" onclick="submitSignoff('${job.job_id}', 'APPROVED', ${JSON.stringify(sortedFlags).replace(/"/g,'&quot;')})">✓ Approve — Proceed to Conversion</button>
+        ${renderGate1ReadinessWarning(state)}
+      <div class="form-actions">
+          <button class="btn btn-success" id="gate1ApproveBtn" onclick="submitSignoff('${job.job_id}', 'APPROVED', ${JSON.stringify(sortedFlags).replace(/"/g,'&quot;')})" ${isGate1SoftBlocked(state) ? 'disabled title="Readiness score is LOW or CRITICAL — document Approved Fixes above to unlock"' : ''}>✓ Approve — Proceed to Conversion</button>
           <button class="btn btn-danger"  onclick="showGate1RestartOptions()">✗ Reject — Needs Remediation</button>
+        </div>
+        <div id="gate1ApprovedFixesRow" style="display:${isGate1SoftBlocked(state)?'block':'none'};margin-top:10px">
+          <div style="font-size:12px;font-weight:700;color:var(--warn);margin-bottom:6px">⚠️ Conversion Readiness is LOW — document approved fixes to unlock the Approve button</div>
+          <textarea id="gate1ApprovedFixes" placeholder="List the approved fixes, clarifications, or accepted risks that address the readiness gaps…" style="width:100%;height:80px;resize:vertical;background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:8px;color:var(--text);font-size:12px" oninput="checkGate1ApproveUnlock()"></textarea>
         </div>
         <div id="gate1RestartRow" style="display:none;margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
           <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Optional: restart pipeline from a checkpoint (skip re-upload)</div>
@@ -830,7 +876,14 @@ function renderJobPanel(job) {
         <div style="font-size:12px;color:var(--text)">The response JSON could not be parsed cleanly — files below may be partial or truncated.
         <strong>Review each file carefully before use.</strong> Re-running the job may produce a cleaner result.</div>
       </div>` : ''}
-      ${co.notes?.length ? `<div style="margin-bottom:14px">${co.notes.map(n=>`<div style="font-size:12px;color:var(--warn);margin-bottom:4px">⚠️ ${esc(n)}</div>`).join('')}</div>` : ''}
+      ${co.notes?.length ? `<div style="margin-bottom:14px">${co.notes.map(n=>{
+        const u = n.toUpperCase();
+        const isCritical = u.startsWith('CRITICAL') || u.includes('HIGH-RISK') || u.includes('AMBIGUI') || u.includes('UNDOCUMENTED') || u.includes('CROSS JOIN') || u.includes('FALLBACK') || u.includes('PLACEHOLDER') || u.includes('LINEAGE GAP');
+        const isPass     = u.includes('NO HARDCODED') || u.includes('NO EVAL') || u.includes('NO SQL INJECTION') || u.startsWith('PERFORMANCE') || u.startsWith('DW AUDIT') || u.includes('EXTERNALIZED') || u.includes('COMPLETE AND RUNNABLE');
+        const icon  = isCritical ? '⚠️' : isPass ? '✅' : 'ℹ️';
+        const color = isCritical ? 'var(--warn)' : isPass ? 'var(--success,#4ade80)' : 'var(--muted)';
+        return `<div style="font-size:12px;color:${color};margin-bottom:4px">${icon} ${esc(n)}</div>`;
+      }).join('')}</div>` : ''}
       <div class="output-files">
         ${fileNames.map(f=>`<div class="output-file-card" onclick="showFileInViewer('${esc(f)}', ${JSON.stringify(co.files).replace(/"/g,'&quot;')})">
           <div class="output-file-icon">${fileIcon(f)}</div>
@@ -1362,6 +1415,159 @@ function renderLogPanel(entries, jobId) {
     </div>
     </div>
   </div>`;
+}
+
+// ── v2.24.0 — Conversion Readiness helpers ────────────────────────────────────
+
+/** Map a 0-100 score to a label + colour. */
+function _readinessLabel(score) {
+  if (score >= 85) return { label: 'HIGH',     emoji: '✅', color: 'var(--accent2)' };
+  if (score >= 65) return { label: 'MEDIUM',   emoji: '⚠️', color: 'var(--warn)'   };
+  if (score >= 40) return { label: 'LOW',      emoji: '🔴', color: 'var(--danger)'  };
+  return              { label: 'CRITICAL',  emoji: '❌', color: 'var(--danger)'  };
+}
+
+/** Render a single score bar row. */
+function _scoreBar(label, score, max, color, detail) {
+  const pct = Math.round((score / max) * 100);
+  return `<div style="margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
+      <span style="color:var(--muted)">${esc(label)}</span>
+      <span style="color:${color};font-weight:700">${score}/${max}</span>
+    </div>
+    <div style="height:4px;background:var(--border);border-radius:2px">
+      <div style="height:100%;width:${pct}%;background:${color};border-radius:2px;transition:width .4s"></div>
+    </div>
+    ${detail ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${esc(detail)}</div>` : ''}
+  </div>`;
+}
+
+/**
+ * Render the Source Completeness score section for Step 1 Parse Report card.
+ * Only shown when parse_report.completeness_score is present.
+ */
+function renderCompletenessScore(pr) {
+  const rawScore = pr.completeness_score;
+  const sigs     = pr.completeness_signals || {};
+  const hasData  = rawScore != null && Object.keys(sigs).length > 0;
+
+  // Old jobs (pre-v2.24.0): no score computed — show a neutral note instead of
+  // misleading full bars.
+  if (!hasData) {
+    return `<div style="margin-top:14px;padding:10px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);font-size:11px;color:var(--muted)">
+      🧩 Source Completeness score available on jobs processed after v2.24.0.
+    </div>`;
+  }
+
+  const score = rawScore;
+  const meta  = _readinessLabel(score);
+
+  const sigOrder = [
+    ['expression_coverage', 'Expression Coverage',  35],
+    ['joiner_conditions',   'Joiner Conditions',     20],
+    ['router_conditions',   'Router Conditions',     15],
+    ['lookup_conditions',   'Lookup Conditions',     15],
+    ['unresolved_params',   'Unresolved Parameters', 10],
+    ['sql_complexity',      'SQL Complexity',          5],
+  ];
+
+  const bars = sigOrder.map(([key, lbl, max]) => {
+    const sig = sigs[key] || {};
+    const s   = sig.score ?? max;
+    const col = s >= max * 0.75 ? 'var(--accent2)' : s >= max * 0.5 ? 'var(--warn)' : 'var(--danger)';
+    return _scoreBar(lbl, s, max, col, sig.detail || '');
+  }).join('');
+
+  return `<div style="margin-top:14px;padding:12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:12px;font-weight:700;color:var(--muted)">🧩 SOURCE COMPLETENESS</span>
+      <span style="font-size:18px;font-weight:800;color:${meta.color}">${meta.emoji} ${score}/100 <span style="font-size:11px;font-weight:600">${meta.label}</span></span>
+    </div>
+    ${bars}
+  </div>`;
+}
+
+/**
+ * Render the Conversion Readiness panel for Step 2 Complexity card.
+ * Shows Score 1 (Pattern Confidence), Score 2 (Source Completeness from parse_report),
+ * and the combined Conversion Readiness.
+ */
+function renderConversionReadiness(c, pr) {
+  const s1     = c.pattern_confidence_score  ?? 65;
+  const s2     = (pr && pr.completeness_score != null) ? pr.completeness_score : 65;
+  const comb   = c.conversion_readiness      ?? Math.round(s1 * 0.4 + s2 * 0.6);
+  const meta   = _readinessLabel(comb);
+  const s1meta = _readinessLabel(s1);
+  const s2meta = _readinessLabel(s2);
+
+  return `<div style="margin-top:16px;padding:14px;background:var(--surface2);border-radius:8px;border:1px solid ${meta.color}44">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <span style="font-size:12px;font-weight:700;color:var(--muted)">🎯 CONVERSION READINESS</span>
+      <span style="font-size:22px;font-weight:800;color:${meta.color}">${meta.emoji} ${comb}/100 <span style="font-size:12px;font-weight:600">${meta.label}</span></span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div style="padding:10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:4px">SCORE 1 — PATTERN CONFIDENCE (40%)</div>
+        <div style="font-size:20px;font-weight:800;color:${s1meta.color}">${s1meta.emoji} ${s1}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(c.pattern_confidence || 'NONE')} — ${esc(c.suggested_pattern || 'no pattern matched')}</div>
+      </div>
+      <div style="padding:10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:4px">SCORE 2 — SOURCE COMPLETENESS (60%)</div>
+        <div style="font-size:20px;font-weight:800;color:${s2meta.color}">${s2meta.emoji} ${s2}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">from XML signal analysis (Step 1)</div>
+      </div>
+    </div>
+    <div style="height:6px;background:var(--border);border-radius:3px;margin-bottom:6px">
+      <div style="height:100%;width:${comb}%;background:${meta.color};border-radius:3px;transition:width .5s"></div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);text-align:center">
+      Combined = Score 1 × 0.40 + Score 2 × 0.60 &nbsp;·&nbsp;
+      85–100 = HIGH ✅ &nbsp; 65–84 = MEDIUM ⚠️ &nbsp; 40–64 = LOW 🔴 &nbsp; 0–39 = CRITICAL ❌
+    </div>
+  </div>`;
+}
+
+/**
+ * Returns true when Gate 1 Approve should be soft-blocked.
+ * Blocked when combined readiness is LOW (<65) and no approved fixes have been entered.
+ */
+function isGate1SoftBlocked(state) {
+  const c    = state.complexity || {};
+  const comb = c.conversion_readiness ?? 100;
+  return comb < 65;
+}
+
+/**
+ * Render a warning banner above the Gate 1 approve/reject buttons when readiness
+ * is below the MEDIUM threshold.
+ */
+function renderGate1ReadinessWarning(state) {
+  const c    = state.complexity || {};
+  const comb = c.conversion_readiness ?? 100;
+  if (comb >= 65) return '';
+  const meta = _readinessLabel(comb);
+  return `<div style="margin-bottom:14px;padding:12px 14px;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.4);border-radius:8px">
+    <div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:6px">
+      ${meta.emoji} Conversion Readiness: ${comb}/100 — ${meta.label}
+    </div>
+    <div style="font-size:12px;color:var(--text);line-height:1.6">
+      The combined Conversion Readiness score is below the MEDIUM threshold (65).
+      Approving now risks CRITICAL AMBIGUITIES in the generated code
+      (incomplete join conditions, missing router logic, unresolved parameters).
+      <br/><strong>Document your approved fixes below</strong> to unlock the Approve button.
+    </div>
+  </div>`;
+}
+
+/**
+ * Called on every keystroke in the Approved Fixes textarea.
+ * Unlocks the Approve button once text has been entered.
+ */
+function checkGate1ApproveUnlock() {
+  const ta  = document.getElementById('gate1ApprovedFixes');
+  const btn = document.getElementById('gate1ApproveBtn');
+  if (!ta || !btn) return;
+  btn.disabled = ta.value.trim().length < 20;
 }
 
 function renderStepper(currentStep, status) {

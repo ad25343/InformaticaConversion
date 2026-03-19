@@ -1,8 +1,8 @@
 # Design: Config-Driven Pattern Library for Informatica Conversion
 
-**Status:** ✅ Complete — all 5 phases shipped (v2.16.0)
-**Version target:** v2.16.0
-**Last updated:** 2026-03-10
+**Status:** ✅ Complete — all 5 phases shipped (v2.16.0) + readiness scoring (v2.24.0) + pipeline stability (v2.25.0)
+**Version target:** v2.25.0
+**Last updated:** 2026-03-18
 **Authors:** Engineering
 
 ---
@@ -766,56 +766,89 @@ or not.
 
 ---
 
-## 7. The Decision Tree
+## 7. Classification Decision Matrix
 
-The pattern is determined by reading the transformation chain. This is
-**deterministic** — the XML structure tells you the pattern; it is not
-inferred by AI heuristics.
+The pattern is determined by reading the transformation chain from the source XML.
+Classification is **deterministic** — not inferred by AI heuristics. First match in
+priority order wins.
 
-```
-1. Multiple distinct SOURCE elements feeding a Joiner?
-      YES → Lookup Enrichment (if Lookups against external tables)
-            OR Union Consolidation (if Union transformation present)
-      NO  → continue
+### 7.1 Signal legend
 
-2. Aggregator transformation present?
-      YES → Aggregation Load  (STOP — unambiguous)
-      NO  → continue
+| Symbol | Meaning |
+|---|---|
+| ✅ | Primary trigger — this signal is sufficient to assign this pattern |
+| ⚠️ | Contributes to confidence level (HIGH vs MEDIUM) but not the trigger |
+| ❌ | Must be absent — if present, an earlier higher-priority pattern fires instead |
+| · | Not the deciding signal for this pattern. For early exits (rows 1–3) the classifier stops immediately at ✅ and never reaches this column. For later rows (4–10) the signal is already guaranteed absent by a higher-priority check. |
 
-3. Router transformation present?
-      YES → Filter and Route  (STOP — check for multiple TARGETLOADORDER)
-      NO  → continue
+### 7.2 Full signal matrix
 
-4. Lookup transformation that points at the TARGET table itself?
-      YES → SCD Type 2  (STOP — self-lookup is the definitive signature)
-      NO  → continue
+All signals in one place. Every pattern has at least one ✅ — its primary trigger.
 
-5. Update Strategy transformation present?
-      YES → Upsert / SCD Type 1  (STOP)
-      NO  → continue
+**First match wins:** the classifier checks patterns in priority order (1→10) and stops at the first ✅ hit. Lower-priority patterns are only reached when all higher-priority triggers are absent — so by the time the classifier considers `truncate_and_load` (row 9) or `pass_through` (row 10), it has already confirmed that Router, Union, Aggregator, SCD/DIM/APPEND target names, Lookups, and Expression transforms are either absent or insufficient.
 
-6. Lookup transformations pointing at OTHER tables?
-      YES → Lookup Enrichment
-      NO  → continue
+**Transformation signals** (read from XML transformation chain) and **target name signals** (matched against the target transformation name) are evaluated together.
 
-7. Filter transformation on a date/sequence column?
-      YES → Incremental Append
-      NO  → continue
+| Pri | Pattern | Router | Union | Aggregator | Joiner ×1¹ | Lookup 1+ | Expression | SQ ≥ 3 | Xfms ≤ 2 | Xfms ≤ 4 | Xfms ≤ 6 | Target: SCD/HIST/ARCHIVE | Target: DIM/MERGE/UPSERT | Target: APPEND/INC/DELTA | etl_patterns class | Confidence |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | **filter_and_route** | ✅ | · | · | · | · | · | · | · | · | · | · | · | · | `FilterAndRoutePattern` | HIGH if targets ≥ 2, else MEDIUM |
+| 2 | **union_consolidate** | ❌ | ⚠️ | · | · | · | · | ✅ | · | · | · | · | · | · | `UnionConsolidatePattern` | HIGH if SQ ≥ 3, MEDIUM if Union xfm |
+| 3 | **aggregation_load** | ❌ | · | ✅ | · | · | · | · | · | · | · | · | · | · | `AggregationLoadPattern` | HIGH |
+| 4 | **scd2** | ❌ | · | ❌ | · | · | · | · | · | · | · | ✅ | · | · | `Scd2Pattern` | HIGH |
+| 5 | **upsert** | ❌ | · | ❌ | ✅² | · | · | · | · | · | · | · | ✅ | · | `UpsertPattern` | HIGH (name match), MEDIUM (joiner only) |
+| 6 | **lookup_enrich** | ❌ | · | ❌ | · | ✅ | · | · | · | · | · | · | · | · | `LookupEnrichPattern` | HIGH if 2+, MEDIUM if 1 |
+| 7 | **incremental_append** | ❌ | · | ❌ | · | · | ✅ | · | · | · | · | · | · | ✅ | `IncrementalAppendPattern` | MEDIUM |
+| 8 | **expression_transform** | ❌ | · | ❌ | · | · | ✅ | · | · | ✅ | · | · | · | · | `ExpressionTransformPattern` | MEDIUM |
+| 9 | **truncate_and_load** | ❌ | · | ❌ | · | · | · | · | · | · | ✅ | · | · | · | `TruncateAndLoadPattern` | MEDIUM |
+| 10 | **pass_through** | ❌ | · | ❌ | · | · | · | · | ✅ | · | · | · | · | · | `PassThroughPattern` | LOW |
+| 11 | **unclassified** | · | · | · | · | · | · | · | · | · | · | · | · | · | *(none — bespoke LLM generation)* | NONE |
 
-8. Expression transformation with derived output ports?
-      YES → Expression Transform
-      NO  → Pass-Through
-```
+¹ Joiner ×1 = exactly one Joiner transformation with no Aggregator present.
+² Row 5 fires on EITHER trigger: target name match ✅ (HIGH confidence) OR Joiner ×1 ✅ alone (MEDIUM confidence). A mapping with a Joiner but no DIM/MERGE/UPSERT target name previously fell through the classifier — it now correctly lands on `upsert` at MEDIUM confidence.
 
-**Secondary refinements** (applied after pattern assignment):
+> Target name matching is case-insensitive. Built-in lists are configurable via `app/config/org_config.yaml → pattern_signals` (see §11, v2.17.0):
+> ```yaml
+> pattern_signals:
+>   scd2:             { target_name_contains: ["_HIST", "_ARCHIVE"] }
+>   upsert:           { target_name_contains: ["_MERGE", "_UPSERT"] }
+>   incremental_append: { target_name_contains: ["_DELTA", "_INC"] }
+> ```
 
-- `DATABASETYPE="Flat File"` on SOURCE or TARGET → use file IO reader/writer
-- Custom SQL in Source Qualifier (`Sql Query` TABLEATTRIBUTE non-empty and
-  > 100 chars) → reduce confidence to MEDIUM; surface the SQL for human review
-- External Procedure transformation present → reduce confidence to LOW; flag
-  the external call
-- 3+ Joiner transformations in one mapping → reduce confidence to LOW regardless
-  of pattern; high structural complexity warrants human confirmation
+---
+
+### 7.3 Confidence rules
+
+| Condition | Confidence |
+|---|---|
+| Unambiguous structural signal (Router, Aggregator, SQ≥3) | HIGH |
+| Name match on SCD2 or Upsert target | HIGH |
+| Single Lookup (not 2+) | MEDIUM |
+| Name match on incremental signals | MEDIUM |
+| Expression transform in ≤4 xfm pipeline | MEDIUM |
+| Simple 1→1 pipeline, no complex transforms | MEDIUM |
+| Pass-through (≤2 transforms) | LOW |
+| Unsupported transformation (Java / External Procedure / Stored Procedure) | NONE |
+| No pattern matched | NONE |
+
+---
+
+### 7.4 Confidence → gate behaviour
+
+| Confidence | What happens at Gate 1 |
+|---|---|
+| **HIGH** | Config skeleton auto-generated; no special flag |
+| **MEDIUM** | Config generated; flagged elements highlighted for human confirmation |
+| **LOW** | Pattern suggested as starting point; human confirms before Step 7 runs |
+| **NONE** | Falls back to full bespoke LLM generation; flagged prominently |
+
+---
+
+### 7.5 Secondary refinements (applied after pattern assignment)
+
+- `DATABASETYPE="Flat File"` on SOURCE or TARGET → use file IO reader/writer instead of DB
+- Custom SQL in Source Qualifier (> 100 chars) → reduce confidence to MEDIUM; surface SQL for review
+- External Procedure transformation present → reduce confidence to LOW; flag the external call
+- 3+ Joiner transformations in one mapping → reduce confidence to LOW; high structural complexity warrants human confirmation
 
 ---
 
@@ -1048,6 +1081,106 @@ pattern_signals:
 
 Built-in signal lists remain unchanged and are used as defaults when no config is
 present — fully backwards-compatible with v2.16.0.
+
+### v2.24.0 — Conversion Readiness scoring system
+
+Two numeric scores (0–100) are computed automatically and surface in the UI, Gate 1, and the Audit Report.
+
+#### Score 1 — Pattern Confidence (weight 40%)
+
+Converts the existing `pattern_confidence` label (HIGH / MEDIUM / LOW / NONE) to a numeric value:
+
+| Label | Score |
+|---|---|
+| HIGH | 90 |
+| MEDIUM | 65 |
+| LOW | 40 |
+| NONE | 15 |
+
+Stored on `ComplexityReport.pattern_confidence_score`. Computed during Step 2 (classifier_agent.py).
+
+#### Score 2 — Source Completeness (weight 60%)
+
+Computed deterministically at the end of Step 1 (parser_agent.py) from six structural signals:
+
+| Signal | Max pts | Deducts when … |
+|---|---|---|
+| Expression Coverage | 35 | Expression ports exist but carry no explicit logic (bare field passthrough) |
+| Joiner Conditions | 20 | Joiner transformation has no `Join Condition` TABLEATTRIBUTE |
+| Router Conditions | 15 | Router transformation has no Group Filter Conditions |
+| Lookup Conditions | 15 | Lookup transformation has no `Lookup Condition` TABLEATTRIBUTE |
+| Unresolved Parameters | 10 | 1 pt deducted per unresolved `$$PARAM`, capped at 10 |
+| SQL Complexity | 5 | 2 pts deducted for short custom SQL; 5 pts deducted for complex SQL (>500 chars) |
+
+Stored on `ParseReport.completeness_score` (float) and `ParseReport.completeness_signals` (per-signal breakdown dict with `score`, `max`, `detail` keys).
+
+#### Combined Conversion Readiness
+
+```
+readiness = round(score1 × 0.40 + score2 × 0.60, 1)
+```
+
+Thresholds:
+
+| Range | Label | Gate 1 Approve |
+|---|---|---|
+| 85–100 | HIGH ✅ | Unlocked (no friction) |
+| 65–84 | MEDIUM ⚠️ | Unlocked |
+| 40–64 | LOW 🔴 | **Soft-blocked** — reviewer must enter Approved Fixes text (≥20 chars) to unlock |
+| 0–39 | CRITICAL ❌ | **Soft-blocked** — same |
+
+The soft-block prevents the root cause of critical ambiguities in generated code: approving a mapping whose join conditions, router logic, or lookup keys were never expressed in the XML.
+
+---
+
+### v2.19.0 — Gap analysis: date_utils, numeric_utils, IO stubs, matrix hardening
+
+#### New utility modules (etl_patterns/utils/)
+
+| Module | Functions |
+|---|---|
+| `date_utils` | `to_date`, `add_to_date`, `date_diff`, `trunc_date`, `to_char_date`, `last_day`, `is_date` |
+| `numeric_utils` | `safe_round`, `trunc_num`, `safe_abs`, `safe_mod`, `ceil_num`, `floor_num` |
+
+Both modules are null-safe and accept Informatica-style format strings (`MM/DD/YYYY`, `'MM'`, etc.) directly. The `_ETL_LIBRARY_SECTION` injected into Step 7 now includes all date and numeric mappings. Stage D has two new gap types: `gap_date_utils` and `gap_numeric_utils`.
+
+#### IO type stubs (etl_patterns/io/)
+
+`XmlFileReader`, `JsonFileReader`, `ExcelFileReader`, `XmlFileWriter`, `JsonFileWriter`, `ExcelFileWriter` are registered in both factory maps so YAML config validation passes. Each raises `NotImplementedError` at runtime with an explicit workaround message.
+
+**Before v2.19.0:** `get_reader({"type": "xml_file"})` → `ConfigError: Unknown source type`.
+**After v2.19.0:** `get_reader({"type": "xml_file"})` → `NotImplementedError: … Workaround: convert XML to CSV first`.
+
+#### Decision matrix hardening (§7.2)
+
+- **etl_patterns class column added** — every row now shows the Python class that implements it.
+- **Row 11 (unclassified)** added — documents the NONE fallback path explicitly.
+- **Joiner ×1 promoted from ⚠️ to ✅** in row 5 (upsert). Previously a join-style mapping with no DIM/MERGE/UPSERT target name cascaded silently to `lookup_enrich` or `expression_transform`. It now correctly lands on `UpsertPattern` at MEDIUM confidence. Footnote ² documents the OR-trigger semantics.
+
+---
+
+### v2.18.0 — Utility injection into Step 7 conversion prompt
+
+The Step 7 conversion agent now receives an explicit `etl_patterns` library reference block
+in its prompt for PySpark and Python stacks. This block lists every available utility function
+and the Informatica expression it replaces, with the instruction **"USE THESE — do not
+reinvent them inline."**
+
+Before v2.18.0: Claude generated `IIF(ISNULL(x), 'UNKNOWN', x)` as inline Python.
+After v2.18.0: Claude generates `from etl_patterns.utils.null_safe import coalesce` and calls
+`coalesce(x, 'UNKNOWN')`.
+
+**Stage D (Code Review)** was updated alongside this change. It now distinguishes:
+- **Adoption gaps** — code that reinvents something already in `etl_patterns` (prefix `gap_*`)
+- **Net-new candidates** — logic not in `etl_patterns` that should become a new utility
+
+Adoption gaps are flagged even when effort is LOW, because the fix requires no new library
+code — just a refactor to the existing import.
+
+**Audit Report §9 — Pattern Library Usage** (new section): shows which ETL pattern was
+detected at Step 2, whether the converter emitted a `config/<slug>.yaml`, and whether the
+generated code imports `etl_patterns` utilities, with a list of which utility modules
+were found in the output.
 
 ---
 

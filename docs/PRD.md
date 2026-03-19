@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Informatica Conversion Tool
 
-**Version:** 2.22.0 (complete) / App 2.22.0
+**Version:** 2.25.0 (complete) / App 2.25.0
 **Author:** ad25343
-**Last Updated:** 2026-03-14
+**Last Updated:** 2026-03-18
 **License:** CC BY-NC 4.0 — [github.com/ad25343/InformaticaConversion](https://github.com/ad25343/InformaticaConversion)
 **Contact:** [github.com/ad25343/InformaticaConversion/issues](https://github.com/ad25343/InformaticaConversion/issues)
 
@@ -868,6 +868,25 @@ New features:
 - **`app/backend/routers/patterns.py`** — sub-router mounted at `/api`
 - **`pattern_generation_log`** DB table — records every XML generation call (pattern name, mapping name, duration, success/failure, XML length)
 
+### v2.25 — Report UX overhaul + pipeline stability (shipped)
+
+UX improvements to the download report actions and critical pipeline stability fixes.
+
+New features:
+- **Complete Report dropdown** — `.md` and `Print / PDF` options merged into a single `📄 Complete Report ▾` dropdown in the job header. Reduces header clutter.
+- **Clearer report labels** — `📊 S2T Manifest` (was `Manifest`), `🔍 Summary` (was `Audit`). The Summary is a governance-only snapshot covering scores, sign-off chain, flags, and security findings — no prose, no code.
+- **PDF report scoped to governance content** — previously the print PDF embedded all generated source files verbatim (a 105-page document for a simple mapping). Now shows a file inventory (name + line count) and directs reviewers to the output export package for the actual code.
+
+Fixes:
+- **Gate sign-off form cleared on open** — SSE stream immediately emitted `state`+`done` for gate-waiting jobs, triggering a full re-render that wiped the reviewer name input. Fixed: SSE handler now only re-renders on `progress` events.
+- **Jobs stuck at `awaiting_code_review`** — artifact export or notification failures in Step 12 prevented the `COMPLETE` DB write. Fixed: all optional post-approval steps wrapped in try/except; `COMPLETE` always written.
+- **Audit Trail / Summary 500 error** — audit-report and reuse-analysis endpoints parsed compressed state as plain JSON. Fixed: both now use `_decode_state()`.
+- **Logo navigation went to blank page** — fixed wrong view name (`'home'` → `'landing'`).
+
+### v2.24 — Conversion Readiness scoring system (shipped)
+
+Two-score readiness system gates Gate 1 approval on mapping quality. See CHANGELOG.md for full signal breakdown.
+
 ### v2.23 — Agent + Test Module Refactors (shipped)
 
 Code organisation refactors with no pipeline behaviour changes.
@@ -970,274 +989,24 @@ auth model with named users, role-based permissions, and SSO.
 
 ---
 
-## 4. Pipeline Architecture
+## 4. Architecture & Technical Design
 
-```
-Upload (Mapping XML + optional Workflow XML + optional Parameter File  OR  ZIP archive)
-    │
-    ▼
-Step 0   Session & Parameter Parse
-         Auto-detect file types → Cross-reference validation → $$VAR resolution
-         → Scan uploaded XML for embedded credentials (passwords in CONNECTION attrs)
-         → Blocked if INVALID (mapping/session mismatch); PARTIAL if warnings
-    │
-    ▼
-Step 1   XML Parse & Graph Extraction  [deterministic, lxml + XXE-hardened parser]
-Step 2   Complexity Classification     [rule-based, objective criteria from parsed XML]
-Step S2T Source-to-Target Field Map    [Claude + openpyxl Excel output]
-Step 3   Documentation Generation      [Claude, Markdown]
-Step 4   Verification                  [deterministic + Claude flags]
-    │
-    ▼
-Step 5   ◼ Gate 1 — Human Review Sign-off
-         APPROVE                    → Step 6
-         REJECT + restart_from_step → resume_from_step() → Step 1, 2, or 3
-         REJECT (no restart)        → BLOCKED (terminal)
-    │
-    ▼
-Step 6   Target Stack Assignment       [Claude classifier]
-Step 7   Code Generation               [Claude, multi-file output]
-Step 7b  Smoke Execution Check         [non-blocking; py_compile / SQL balance / yaml.safe_load]
-         → Failures stored as HIGH smoke_flags on ConversionOutput; pipeline continues
-    │
-    ▼
-Step 8   Security Scan                 [bandit (Python) + YAML regex + Claude review]
-         → Produces: APPROVED / REVIEW_RECOMMENDED / REQUIRES_FIXES
-    │
-    ▼
-Step 9   ◼ Gate 2 — Human Security Review
-         APPROVED     → auto-proceed to Step 10 (scan was clean)
-         ACKNOWLEDGED → proceed to Step 10 (issues noted, risk accepted)
-         REQUEST_FIX  → re-run Step 7 with findings injected → re-run Step 8 → re-present Gate 2
-                        (max 2 remediation rounds; auto-proceeds to Step 10 if re-scan is clean)
-         FAILED       → BLOCKED (terminal)
-         [Pauses only when scan is not APPROVED]
-    │
-    ▼
-Step 10  Logic Equivalence Check       [Stage A: Claude, XML → code rule-by-rule comparison]
-         Code Quality Review           [Stage B: Claude cross-check vs. docs, S2T, parse flags]
-         Performance Review            [Stage C: advisory anti-pattern scan at scale]
-Step 10b Structural Reconciliation     [non-blocking; field coverage, source coverage,
-         → ReconciliationReport (RECONCILED / PARTIAL / PENDING_EXECUTION) stored in state]
-Step 11  Test Generation               [Claude, pytest / dbt test stubs]
-         → Expression boundary tests (tests/test_expressions_{mapping}.py)
-         → Golden CSV comparison script (tests/compare_golden.py)
-         → Security re-scan of generated test files (merged into Step 8 report)
-    │
-    ▼
-Step 12  ◼ Gate 3 — Code Review Sign-off
-         APPROVED                   → COMPLETE
-         REJECTED + restart_from_step → resume_from_step() → Step 6, 7, or 10
-         REJECTED (no restart)      → BLOCKED (terminal)
-```
+Pipeline architecture, stack assignment logic, security model, full API surface, and data model are maintained in the living design document:
 
-### Greenfield authoring (v2.22)
+**→ [docs/ARCHITECTURE.md](ARCHITECTURE.md)**
 
-In addition to the conversion pipeline, the tool supports generating Informatica PowerCenter XML from scratch. This is the reverse flow and operates independently of the conversion pipeline.
-
-```
-User provides: pattern name + YAML config + mapping name
-    │
-    ▼
-POST /api/patterns/{name}/generate-xml
-    │
-    ├── Validate YAML config against Pydantic schema (etl_patterns/schemas.py)
-    │
-    ├── XmlGeneratorAgent — Claude generates Informatica PowerCenter XML
-    │   (few-shot examples embedded; prompt includes schema constraints)
-    │
-    ├── xml.etree.ElementTree validation — rejects malformed XML before returning
-    │
-    └── Return XML + log to pattern_generation_log table
-```
-
-The 10 supported pattern schemas are: `truncate_and_load`, `incremental_append`, `upsert`, `scd2`, `lookup_enrich`, `aggregation_load`, `filter_and_route`, `union_consolidate`, `expression_transform`, `pass_through`. The generated XML can be imported directly into Informatica Designer or fed back into the conversion pipeline for round-trip validation.
+That document covers:
+- 12-step pipeline flow with gate decision trees
+- Greenfield authoring (v2.22) reverse flow
+- Stack assignment decision matrix (PySpark / dbt / Python)
+- Security threat model and defences (`backend/security.py`)
+- Full API endpoint reference with version history
+- Data model: DB tables, state JSON structure, key schema types
+- Technical constraints (Python version, SQLite, Claude API dependency)
 
 ---
 
-## 5. Stack Assignment Decision Matrix
-
-Step 6 assigns one of three target stacks (or a documented hybrid) based on the
-criteria below. The assignment is deterministic given the mapping characteristics —
-reviewers can override at Gate 1 by adding a note, but the default follows this matrix.
-
-| Criterion | PySpark | dbt | Python (Pandas) |
-|---|---|---|---|
-| **Complexity tier** | HIGH / VERY_HIGH | LOW / MEDIUM | LOW / MEDIUM |
-| **Data volume** | > 50M rows | Any (SQL-bound) | < 1M rows |
-| **Source type** | DB, files, streams | DB / warehouse | Files (CSV/JSON/XML), APIs |
-| **Target type** | DB, data lake, files | Data warehouse | Files, APIs, lightweight DB |
-| **Transformation types** | Complex joins, multi-aggregations, UDFs, procedural logic | SQL-expressible — filters, joins, aggregations, SCDs, derived fields | Simple field mapping, API calls, file format conversion |
-| **SCD support** | SCD1 + SCD2 (merge/upsert) | SCD1 + SCD2 (snapshots) | SCD1 only (practical limit) |
-| **Join complexity** | Multiple joiners, complex conditions, cross-dataset | Single or multi JOIN in SQL | Simple merges only |
-| **Lookup handling** | Broadcast join, dynamic cache | CTE or ref() | Dict lookup / merge |
-| **Expressions** | Spark functions + UDFs | SQL CASE/COALESCE/macros | Python functions |
-| **Parallelism** | Native (Spark cluster) | Warehouse-native | None (single process) |
-| **Test framework** | pytest + pyspark.testing | dbt tests (schema.yml) | pytest |
-| **Output artifacts** | `.py` job + `requirements.txt` + YAML configs | `.sql` models + `schema.yml` + `sources.yml` + macros | `.py` script + `requirements.txt` |
-| **Auto-assigned when** | ≥1 Joiner + HIGH tier, or VERY_HIGH, or volume flag | SQL-friendly transformations + warehouse target | LOW tier + file/API source or target |
-
-**Hybrid:** Where a single mapping has sub-flows that suit different stacks, the assignment
-record documents which component maps to which stack and why. Hybrid is rare — most
-Informatica mappings have a dominant pattern that determines the stack clearly.
-
----
-
-## 6. Security Architecture
-
-Security is infrastructure, not a feature layer. Every file-handling path in the application
-flows through `backend/security.py`.
-
-| Threat | Defence |
-|---|---|
-| XML External Entity (XXE) | `safe_xml_parser()` — DTD loading and entity resolution disabled on every lxml parse |
-| Zip Slip | `safe_zip_extract()` — every entry path resolved relative to virtual root before write |
-| Zip Bomb | `safe_zip_extract()` — total extracted bytes and entry count capped |
-| Symlink attacks | Symlink entries in ZIP silently skipped |
-| Oversized uploads | `validate_upload_size()` called on every upload stream before processing |
-| Dependency CVEs | 7 CVEs patched in v1.1 (python-multipart ×2, jinja2 ×3, starlette ×2); reproducible via `pip-audit` |
-| Hardcoded secret key | Startup warning logged if `SECRET_KEY` is the default placeholder value |
-| Unauthenticated access | Session-cookie middleware enforces login on all non-static routes |
-| CORS misconfiguration | No CORS headers emitted by default (same-origin only); opt-in via `CORS_ORIGINS` env var |
-| Credentials in uploaded XML | `scan_xml_for_secrets()` — checks CONNECTION/SESSION attrs for non-placeholder passwords at Step 0 |
-| Insecure generated code | Step 8 — bandit (Python), YAML regex secrets scan, Claude review (all stacks) |
-| Security gate bypass | Step 9 — human reviewer must explicitly approve, acknowledge, or fail before pipeline continues |
-| Secrets in generated test code | Step 11 test files re-scanned and merged into Step 8 security report before Gate 3 |
-| Recurring bad patterns in generated code | Security Knowledge Base — 17 standing rules + auto-learned patterns from all prior Gate 2 findings injected into every conversion prompt (v2.2) |
-
----
-
-## 7. API Surface
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/jobs` | Upload Mapping (+ optional Workflow + Parameter) and start pipeline |
-| `POST` | `/api/jobs/zip` | Upload a single-mapping ZIP archive — files auto-detected |
-| `POST` | `/api/jobs/batch` | Upload a batch ZIP (one subfolder per mapping) — starts all pipelines |
-| `GET` | `/api/batches/{id}` | Get batch record + per-job summaries and computed batch status |
-| `GET` | `/api/jobs` | List all jobs |
-| `GET` | `/api/jobs/{id}` | Get job state |
-| `GET` | `/api/jobs/{id}/stream` | SSE progress stream |
-| `DELETE` | `/api/jobs/{id}` | Soft-delete job (stamps `deleted_at`; data preserved in Log Archive) |
-| `POST` | `/api/jobs/{id}/sign-off` | Gate 1 decision (APPROVE / REJECT) |
-| `POST` | `/api/jobs/{id}/security-review` | Gate 2 decision (APPROVED / ACKNOWLEDGED / REQUEST_FIX / FAILED) |
-| `POST` | `/api/jobs/{id}/code-signoff` | Gate 3 decision (APPROVED / REJECTED) |
-| `GET` | `/api/jobs/{id}/logs` | Job log (JSON or plain text) |
-| `GET` | `/api/jobs/{id}/logs/download` | Download raw JSONL log |
-| `GET` | `/api/jobs/{id}/s2t/download` | Download S2T Excel workbook |
-| `GET` | `/api/jobs/{id}/download/{file}` | Download a generated code file |
-| `GET` | `/api/jobs/{id}/tests/download/{file}` | Download a generated test file |
-| `GET` | `/api/logs/registry` | All jobs with log filenames and final status |
-| `GET` | `/api/logs/history` | Soft-deleted DB jobs + orphaned registry entries for the Log Archive |
-| `GET` | `/api/logs/history/{job_id}` | Read a historical job log without requiring a live DB record |
-| `GET` | `/api/security/knowledge` | Security KB summary: rules count, patterns count, top 10 patterns |
-| `POST` | `/api/jobs/{id}/manifest-upload` | Upload annotated manifest XLSX with reviewer overrides (v2.4) |
-| `GET` | `/api/jobs/{id}/manifest.xlsx` | Download the pre-conversion mapping manifest (v2.4) |
-| `GET` | `/api/jobs/{id}/export` | Build and return completed job artifact ZIP (v2.5) |
-| `GET` | `/api/audit` | Audit trail of all Gate 1/2/3 decisions with reviewer metadata (v2.4.6) |
-| `GET` | `/api/gates/pending` | All jobs awaiting a gate decision with flag summaries; filterable by gate and batch (v2.17.1) |
-| `POST` | `/api/gates/batch-signoff` | Apply a single gate decision to multiple jobs at once (v2.17.1) |
-| `GET` | `/api/progress` | Migration-level progress summary: counts by status, tier breakdown, throughput, ETA (v2.17.1) |
-| `GET` | `/api/progress/export` | CSV download of all job statuses for management reporting (v2.17.1) |
-| `GET` | `/api/patterns` | List all 10 ETL patterns with names, descriptions, and JSON Schema configs (v2.22) |
-| `POST` | `/api/patterns/{name}/generate-xml` | Generate Informatica PowerCenter XML from a YAML pattern config (v2.22) |
-
----
-
-## 8. Data Model (Key Fields)
-
-```
-Batch  (v2.0)
-├── batch_id       UUID
-├── source_zip     Original ZIP filename
-├── mapping_count  Number of mapping folders detected in the ZIP
-├── created_at / updated_at
-└── [status]       Computed from job statuses: running / complete / partial / failed
-
-Job
-├── job_id             UUID
-├── filename           Original mapping filename
-├── batch_id           UUID of parent batch (v2.0, nullable — null for standalone jobs)
-├── status             JobStatus enum (PARSING → COMPLETE / BLOCKED / FAILED)
-├── current_step       0–12
-├── xml_content        Mapping XML (stored in SQLite)
-├── workflow_xml_content   Workflow XML (v1.1, nullable)
-├── parameter_file_content Parameter file (v1.1, nullable)
-└── state              JSON blob — pipeline artefacts per step
-    ├── session_parse_report   Step 0
-    ├── parse_report           Step 1
-    ├── complexity             Step 2
-    ├── s2t                    Step S2T (between Steps 2 and 3)
-    ├── documentation_md       Step 3
-    ├── verification           Step 4
-    ├── sign_off               Step 5  (Gate 1)
-    ├── stack_assignment       Step 6
-    ├── conversion             Step 7  (files dict: filename → code)
-    ├── security_scan          Step 8
-    ├── security_scan_rounds   Step 8  (v2.2) list of prior scan rounds for fix-round diff
-    ├── security_sign_off      Step 9  (Gate 2)
-    ├── manifest               Step 1.5  (v2.4) ManifestReport
-    ├── code_review            Step 10
-    ├── perf_review            Step 10   (v2.6) PerfReviewReport — advisory only
-    ├── reconciliation         Step 10b  (v2.8) ReconciliationReport
-    ├── test_report            Step 11
-    └── code_sign_off          Step 12 (Gate 3)
-```
-
-PatternGenerationLog  (v2.22)
-├── id              Auto-increment integer
-├── pattern_name    One of the 10 ETL pattern names
-├── mapping_name    Caller-supplied mapping name
-├── duration_s      Generation duration in seconds
-├── success         Boolean
-└── xml_length      Character length of the generated XML
-
-Key schema types:
-
-```
-VerificationFlag
-├── flag_type             Flag category (e.g. ORPHANED_PORT, UNSUPPORTED_TRANSFORMATION)
-├── severity              CRITICAL | HIGH | MEDIUM | LOW | INFO
-├── description           Human-readable description of the issue
-├── recommendation        Actionable guidance for the reviewer
-└── auto_fix_suggestion   (optional) Specific code-level fix Claude proposes; if the
-                          reviewer checks "Apply this fix" at Gate 1, the suggestion is
-                          forwarded to the conversion agent at Step 7
-
-SignOffRequest  (Gate 1 — v2.20 adds optional restart)
-├── reviewer_name         Name of the reviewer
-├── reviewer_role         Role of the reviewer
-├── decision              APPROVE | REJECT
-└── restart_from_step     (optional, v2.20) Step to restart from on REJECT — 1, 2, or 3;
-                          omit for full restart (BLOCKED)
-
-CodeSignOffRequest  (Gate 3 — v2.20 adds optional restart)
-├── reviewer_name         Name of the reviewer
-├── reviewer_role         Role of the reviewer
-├── decision              APPROVED | REJECTED
-└── restart_from_step     (optional, v2.20) Step to restart from on REJECT — 6, 7, or 10;
-                          omit for full restart (BLOCKED)
-
-SecurityReviewDecision  (v1.2 / v2.1)
-    APPROVED              Scan was clean, or reviewer confirmed no action needed
-    ACKNOWLEDGED          Issues noted and accepted as known risk (proceeds to Step 10)
-    REQUEST_FIX           Re-run Step 7 with findings injected → re-run Step 8 →
-                          re-present Gate 2 (max 2 rounds; auto-proceeds if clean)
-    FAILED                Block pipeline permanently
-
-SecuritySignOffRecord  (Gate 2 sign-off)
-├── reviewer_name         Name of the security reviewer
-├── reviewer_role         Role of the reviewer
-├── review_date           Timestamp of decision (UTC, displayed in local timezone)
-├── decision              SecurityReviewDecision enum value
-├── notes                 Reviewer notes
-└── remediation_round     (v2.1) Which REQUEST_FIX round produced this record (0 = no fix
-                          requested; 1 = first round; 2 = second and final round)
-```
-
----
-
-## 9. Sample Files
+## 5. Sample Files
 
 The repository ships sample Informatica exports across three complexity tiers to allow
 end-to-end testing without a live PowerCenter instance.
@@ -1254,7 +1023,7 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ---
 
-## 10. Success Metrics
+## 6. Success Metrics
 
 | Metric | v2.2 | v2.4 | v2.5 | v2.6 | v2.7 | v2.8 |
 |---|---|---|---|---|---|---|
@@ -1277,7 +1046,7 @@ quick single-set test. All 9 mapping sets pass Step 0 validation with
 
 ---
 
-## 11. Technical Constraints
+## 7. Technical Constraints
 
 - **Python 3.11+** — orchestrator uses `asyncio.TaskGroup` patterns; type annotations
   use `X | Y` union syntax

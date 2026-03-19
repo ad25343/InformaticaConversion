@@ -10,6 +10,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.25.0] — 2026-03-18 — Report UX overhaul + pipeline stability fixes
+
+### Added
+
+- **"Complete Report ▾" dropdown** — `.md` and `Print / PDF` combined into a single dropdown button in the job header. Reduces visual clutter and makes the distinction between format options clear.
+- **Report button renaming** — all four report actions now have descriptive labels:
+  - `📄 Complete Report ▾` (dropdown: Download .md / Print / PDF)
+  - `📊 S2T Manifest` (was `Manifest`)
+  - `🔍 Summary` (was `Audit`) — governance-only snapshot: scores, sign-off chain, flags, security findings
+
+### Fixed
+
+- **"Please enter your name" on gate sign-off** — SSE stream emitted an immediate `state` + `done` event pair for gate-waiting jobs (no active pipeline), causing the frontend to re-render the entire sign-off form and wipe any reviewer name the user had already typed. Fixed: frontend now only re-renders on genuine `progress` events; `state`, `heartbeat`, and instant-`done` events are ignored.
+- **Jobs stuck at `awaiting_code_review` after Gate 3 approval** — `_step_12_final_export` called artifact export and GitHub PR helpers with no error handling. Any exception (or a server restart between the sign-off DB write and the `emit(COMPLETE)`) left the job permanently stuck. Fixed: both helpers wrapped in try/except; the `COMPLETE` DB write always executes regardless of export outcome. Export failures are logged and noted in the completion message.
+- **Audit Trail (🔍 Summary) Internal Server Error** — `/api/jobs/{job_id}/audit-report` endpoint used `json.loads(raw)` directly on the state column, which is zlib-compressed since v2.4.3. Fixed: endpoint now uses `_decode_state()` which handles both compressed and legacy plain-JSON formats.
+- **Cross-job reuse analysis endpoint** — same `json.loads(raw)` bug in `/api/jobs/reuse-analysis`; fixed with `_decode_state()`.
+- **PDF report was 100+ pages** — `buildReportMarkdown` in `app.js` embedded the full content of every generated source file as a fenced code block. A single Low-complexity job produced a 105-page PDF. Fixed: Step 7 section now shows a file inventory (filename + line count) with a note pointing to the output folder. Code belongs in the export package, not the governance PDF.
+- **Logo / title "⚡ Informatica PowerCenter Converter" navigated to blank page** — `setMainView('home')` was used instead of `setMainView('landing')`. Fixed.
+
+### Changed
+
+- `_step_12_final_export` — `fire_webhook` and `fire_email` calls also wrapped in try/except (non-blocking); a notification failure no longer prevents job completion.
+
+---
+
+## [2.24.0] — 2026-03-18 — Conversion Readiness scoring system
+
+### Added
+
+- **Source Completeness Score (Score 2, 0–100)** — computed deterministically at the end of Step 1 (XML parse) from six structural signals extracted from the parsed graph:
+  - Expression Coverage (35 pts): fraction of Expression-transformation ports with non-trivial logic
+  - Joiner Conditions (20 pts): fraction of Joiner transformations with a `Join Condition` TABLEATTRIBUTE defined
+  - Router Conditions (15 pts): fraction of Router transformations with Group Filter Conditions defined
+  - Lookup Conditions (15 pts): fraction of Lookup transformations with a `Lookup Condition` TABLEATTRIBUTE defined
+  - Unresolved Parameters (10 pts): −1 pt per unresolved `$$PARAM`, capped at 10
+  - SQL Complexity (5 pts): full 5 if no custom SQL; 3 if short SQL (≤500 chars); 0 if complex SQL
+  - Stored on `ParseReport.completeness_score` (float) and `ParseReport.completeness_signals` (per-signal detail dict).
+
+- **Pattern Confidence Score (Score 1, 0–100)** — numeric equivalent of the `pattern_confidence` label already produced in Step 2: `HIGH=90`, `MEDIUM=65`, `LOW=40`, `NONE=15`. Stored on `ComplexityReport.pattern_confidence_score`.
+
+- **Combined Conversion Readiness (0–100)** — weighted average: `Score1 × 0.40 + Score2 × 0.60`. Label thresholds: `85–100 = HIGH ✅`, `65–84 = MEDIUM ⚠️`, `40–64 = LOW 🔴`, `0–39 = CRITICAL ❌`. Stored on `ComplexityReport.conversion_readiness`.
+
+- **UI — Step 1 Source Completeness panel** — six-signal breakdown with per-signal score bars shown inside the Step 1 Parse Report card.
+
+- **UI — Step 2 Conversion Readiness panel** — two-score side-by-side tile (Pattern Confidence vs Source Completeness) plus combined score with a colour-coded progress bar, shown inside the Step 2 Complexity Classification card.
+
+- **Gate 1 soft-block** — when `conversion_readiness < 65`, the "Approve — Proceed to Conversion" button is disabled. A warning banner with a `Approved Fixes` textarea appears. Typing ≥20 characters unlocks the button, ensuring reviewers acknowledge the gaps before approving. Jobs with MEDIUM/HIGH readiness are unaffected.
+
+- **AUDIT_REPORT §1 Job Metadata** — three new rows: `Score 1 — Pattern Confidence`, `Score 2 — Source Completeness`, `Combined Conversion Readiness` (with numeric value and label).
+
+- **AUDIT_REPORT §9 Pattern Library** — `Confidence` row now shows the numeric score in parentheses alongside the label.
+
+### Changed
+
+- `ParseReport` schema gains two new optional fields (v2.24.0, non-breaking, both have defaults): `completeness_score: float = 100.0` and `completeness_signals: Dict[str, Any] = {}`.
+- `ComplexityReport` schema gains two new optional fields (v2.24.0, non-breaking, both have defaults): `pattern_confidence_score: float = 65.0` and `conversion_readiness: float = 65.0`.
+
+---
+
+## [2.23.0] — 2026-03-18 — etl_patterns gap analysis and library hardening
+
+### Added
+
+- **`etl_patterns/utils/date_utils.py`** — null-safe date helpers covering every common Informatica date function: `to_date()`, `add_to_date()`, `date_diff()`, `trunc_date()`, `to_char_date()`, `last_day()`, `is_date()`. Accepts both Informatica format tokens (`MM/DD/YYYY`) and Python strftime patterns.
+- **`etl_patterns/utils/numeric_utils.py`** — null-safe numeric helpers: `safe_round()`, `trunc_num()`, `safe_abs()`, `safe_mod()`, `ceil_num()`, `floor_num()`. Matches Informatica `ROUND`, `TRUNC`, `ABS`, `MOD`, `CEIL`, `FLOOR` semantics including NULL propagation.
+- **IO reader/writer stubs** — `XmlFileReader`, `JsonFileReader`, `ExcelFileReader` (readers) and `XmlFileWriter`, `JsonFileWriter`, `ExcelFileWriter` (writers) added to both factory maps. Raises `NotImplementedError` at runtime with a workaround message; previously raised `ConfigError: Unknown source/target type`.
+- **Stage D gap types** — `gap_date_utils` and `gap_numeric_utils` added to `review_agent.py` adoption-gap prefix list, `REUSE_SYSTEM` inventory, and the JSON schema `pattern_type` enum.
+- **Step 7 prompt** — `_ETL_LIBRARY_SECTION` in `_common.py` now lists all date and numeric utility imports and 12 new Informatica→etl_patterns mapping rows.
+
+### Changed
+
+- **Decision matrix §7.2** — added `etl_patterns class` column; added row 11 (unclassified / NONE); promoted Joiner ×1 from ⚠️ to ✅ in row 5 (upsert) so join-style mappings without a target name match land on `UpsertPattern` (MEDIUM) rather than cascading to a wrong pattern.
+- **`etl_patterns/README.md`** — added utility module table; corrected IO types section to distinguish fully-implemented vs roadmap stubs.
+- **`DESIGN_PATTERN_LIBRARY.md`** — added v2.19.0 change-log entry.
+
+---
+
 ## [2.22.0] — 2026-03-14 — Bidirectional migration / greenfield authoring
 
 ### Added

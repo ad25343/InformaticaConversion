@@ -1,6 +1,6 @@
 # User Guide — Informatica Conversion Tool
 
-> **Version:** 2.22
+> **Version:** 2.25
 > **Audience:** Data engineers, migration leads, and operations teams
 
 ---
@@ -172,6 +172,55 @@ There are three points where a named reviewer must act before the pipeline conti
 
 Triggered after Step 4. The reviewer sees all verification flags with their severity (CRITICAL / HIGH / MEDIUM / LOW), blocking status, and recommended actions. For each flag they can either accept it (acknowledge the risk and proceed) or note it as resolved (the issue has been addressed in the source mapping).
 
+**Conversion Readiness soft-block** — when the combined Conversion Readiness score is below 65 (LOW or CRITICAL), the Approve button is disabled. A warning banner and an "Approved Fixes" textarea appear. Typing at least 20 characters in that field (documenting the accepted gaps or planned fixes) unlocks the button. Jobs with MEDIUM or HIGH readiness are unaffected.
+
+#### Conversion Readiness scores explained
+
+Two scores are computed automatically during analysis and combined into a single **Conversion Readiness** indicator, visible on every job card and in full detail at Gate 1.
+
+| Score | Weight | What it measures |
+|---|---|---|
+| **Score 1 — Pattern Confidence** | 40% | How confidently the tool recognised the mapping's ETL pattern. Derived from the pattern classification in Step 2. |
+| **Score 2 — Source Completeness** | 60% | How complete the mapping's logic is in the XML export — are expressions populated, joiner/router conditions defined, all dependencies present? Computed from six structural signals in Step 1. |
+
+**Combined score** = `(Score 1 × 0.40) + (Score 2 × 0.60)`, on a 0–100 scale.
+
+| Band | Range | What it means | Gate 1 behaviour |
+|---|---|---|---|
+| **HIGH ✅** | 85–100 | Strong pattern match, complete source logic | Approve enabled |
+| **MEDIUM ⚠️** | 65–84 | Minor gaps; tool can still convert reliably | Approve enabled |
+| **LOW 🔴** | 40–64 | Significant gaps — pattern unclear or source logic missing | Approve **disabled** — must document accepted gaps |
+| **CRITICAL ❌** | 0–39 | Pattern unrecognised and/or major logic gaps | Approve **disabled** — must document accepted gaps |
+
+**Score 1 — Pattern Confidence values:**
+
+| Label | Numeric | Meaning |
+|---|---|---|
+| HIGH | 90 | Mapping matches a known pattern with high confidence |
+| MEDIUM | 65 | Likely match — some ambiguity in the transformation chain |
+| LOW | 40 | Weak match — unusual structure; manual review strongly recommended |
+| NONE | 15 | No recognised pattern — conversion will be partial at best |
+
+**Score 2 — Source Completeness signals** (six structural checks, each contributing to the 0–100 score):
+
+| Signal | What it checks |
+|---|---|
+| Expression ports populated | All expression transformation ports have logic defined, not left blank |
+| Joiner conditions defined | Join conditions are specified, not empty |
+| Router conditions defined | Each router group has a filter condition |
+| Lookup conditions defined | Lookup match conditions are present |
+| No unresolved mapplet references | All mapplet instances have their definition included in the export |
+| No unnamed or orphan ports | All ports are named and connected end-to-end |
+
+> **If Score 2 is LOW:** the gap is in the Informatica repository itself — logic is missing or unpopulated in the source mapping. Fix in Informatica Designer and re-export before converting. The tool cannot generate logic that isn't defined in the source.
+
+**Where scores appear:**
+- **Job card** — combined band (HIGH / MEDIUM / LOW / CRITICAL) shown as a colour-coded badge
+- **Step 1 card** — six-signal Score 2 breakdown with per-signal score bars
+- **Step 2 card** — two-score side-by-side tile (Score 1 vs Score 2) with combined progress bar
+- **Gate 1** — soft-block warning if combined score < 65
+- **Summary report** — §1 Job Metadata includes all three values (Score 1, Score 2, Combined) as part of the permanent sign-off record
+
 Actions: **Approve** (proceed to code generation) or **Reject**.
 
 When rejecting at Gate 1 you choose what happens next:
@@ -280,9 +329,17 @@ From the job panel, after Gate 3 approval (or after Step 4 for Documentation Onl
 |---|---|
 | All generated code | **Download ZIP** button |
 | Source-to-Target mapping | **Download S2T Excel** button |
-| Pre-conversion manifest | **Download Manifest** button |
-| Full pipeline report | **Download Report (Markdown)** or **Print to PDF** |
+| Pre-conversion manifest | **📊 S2T Manifest** button in the job header |
+| Full pipeline report (all 12 steps, narrative) | **📄 Complete Report ▾ → Download (.md)** or **Print / PDF** |
+| Governance snapshot (scores, sign-off chain, flags) | **🔍 Summary** button in the job header |
 | Individual test files | Available in the ZIP under `tests/` |
+
+**Report types explained:**
+
+| Report | Audience | Contains |
+|---|---|---|
+| **Complete Report** (.md or PDF) | Mapping owner, BA, reviewer | Full narrative — documentation, S2T, test coverage, conversion notes. Code is listed by filename + line count only; actual files are in the ZIP. |
+| **Summary** (governance snapshot) | Tech lead, compliance, audit trail | Conversion Readiness scores, sign-off chain, all flag decisions, security findings. No prose, no code. Ideal for attaching to a sign-off ticket. |
 
 ---
 

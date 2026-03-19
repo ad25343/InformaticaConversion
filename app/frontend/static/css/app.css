@@ -314,6 +314,9 @@ hr { border: none; border-top: 1px solid var(--border); }
 /* ── Report download actions ── */
 .report-actions { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
 .report-actions .lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.report-dropdown-menu { display: none; }
+.report-dropdown.open .report-dropdown-menu { display: block; }
+.report-dropdown-item:hover { background: var(--surface) !important; }
 
 /* ── Print / PDF styles ── */
 @media print {
@@ -342,3 +345,21 @@ hr { border: none; border-top: 1px solid var(--border); }
   .flag        { background: #fafafa !important; }
   @page        { margin: 0.75in; size: A4; }
 }
+
+/* ── Review Queue resizable columns ───────────────────────────────────────── */
+.rq-hcell { position: relative; overflow: visible; white-space: nowrap; padding-right: 10px; }
+.rq-rsz {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 18px; cursor: col-resize;
+  display: flex; align-items: center; justify-content: center;
+}
+.rq-rsz::after {
+  content: ''; display: block;
+  width: 2px; height: 14px;
+  background: var(--border); border-radius: 1px;
+  transition: background .15s;
+}
+.rq-rsz:hover::after, .rq-rsz.rq-dragging::after { background: var(--accent); }
+.rq-sortable { cursor: pointer; }
+.rq-sortable:hover { color: var(--text); }
+.rq-sort-ind { margin-left: 4px; font-size: 9px; opacity: .7; }
