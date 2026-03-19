@@ -214,11 +214,12 @@ class TestValidateConversionFiles(unittest.TestCase):
         return _validate_conversion_files(files, stack)
 
     def test_clean_python_file_no_warnings(self):
+        # Use chunksize to satisfy the SCALE validator (correct production pattern)
         files = {
             "transform.py": (
                 "import pandas as pd\n\n"
                 "def run():\n"
-                "    df = pd.read_csv('input.csv')\n"
+                "    df = pd.read_csv('input.csv', chunksize=10000)\n"
                 "    return df\n"
             )
         }

@@ -56,6 +56,7 @@ etl_metadata: true
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -69,6 +70,18 @@ from etl_patterns.io.writers.db_writer import DatabaseWriter
 from etl_patterns.patterns.base import BasePattern
 
 log = logging.getLogger(__name__)
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _validate_identifier(name: str, context: str = "identifier") -> None:
+    """Raise ValueError if *name* is not a safe SQL identifier."""
+    if not _IDENT_RE.match(name):
+        raise ValueError(
+            f"Invalid SQL identifier for {context}: {name!r}. "
+            "Only letters, digits, underscores, and dots are permitted."
+        )
+
 
 _DEFAULT_END_OF_TIME = "9999-12-31 00:00:00"
 _DEFAULT_EFFECTIVE_FROM = "EFFECTIVE_FROM_DT"
@@ -228,6 +241,11 @@ class Scd2Pattern(BasePattern):
         all_cols = list(dict.fromkeys(business_key + tracked_cols))  # deduplicated, ordered
         select_cols = ", ".join(all_cols)
 
+        _validate_identifier(fqn, "target table")
+        _validate_identifier(is_cur_col, "is_current column")
+        for _col in all_cols:
+            _validate_identifier(_col, "selected column")
+
         sql = (
             f"SELECT {select_cols} FROM {fqn} "  # noqa: S608
             f"WHERE {is_cur_col} = 1"
@@ -255,6 +273,11 @@ class Scd2Pattern(BasePattern):
         now: datetime,
     ) -> None:
         """Set effective_to = now and is_current = 0 for each expired key."""
+        _validate_identifier(fqn, "target table")
+        _validate_identifier(eff_to_col, "effective_to column")
+        _validate_identifier(is_cur_col, "is_current column")
+        for _col in business_key:
+            _validate_identifier(_col, "business key column")
         where_clause = " AND ".join(f"{col} = :{col}" for col in business_key)
         sql = (
             f"UPDATE {fqn} "  # noqa: S608

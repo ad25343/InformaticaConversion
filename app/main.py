@@ -6,10 +6,17 @@ Informatica Conversion Tool — FastAPI Application Entry Point
 import asyncio
 import logging
 import os
+import sys
 import time
 import urllib.parse
 from pathlib import Path
 from contextlib import asynccontextmanager
+
+# etl_patterns lives at the repo root (one level above app/).
+# Add it to sys.path so it is importable without a separate install step.
+_REPO_ROOT = str(Path(__file__).parent.parent.resolve())
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from fastapi import Depends, FastAPI, Request, Form
 from fastapi.middleware.cors import CORSMiddleware

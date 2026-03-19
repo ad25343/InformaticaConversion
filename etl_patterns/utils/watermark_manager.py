@@ -33,6 +33,7 @@ the source engine is used.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -45,6 +46,17 @@ from etl_patterns.utils.type_cast import type_cast
 log = logging.getLogger(__name__)
 
 _DEFAULT_TABLE = "ETL_WATERMARKS"
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _validate_identifier(name: str, context: str = "table") -> None:
+    """Raise ValueError if *name* is not a safe SQL identifier."""
+    if not _IDENT_RE.match(name):
+        raise ValueError(
+            f"Invalid SQL identifier for {context}: {name!r}. "
+            "Only letters, digits, underscores, and dots are permitted."
+        )
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS {table} (
@@ -75,6 +87,7 @@ class WatermarkManager:
         table: str = _DEFAULT_TABLE,
         auto_create: bool = True,
     ) -> None:
+        _validate_identifier(table, "watermark table")
         self._engine = engine
         self._table  = table
         if auto_create:
@@ -216,6 +229,7 @@ def _build_upsert(table: str) -> tuple[str, str]:
     The DELETE + INSERT pattern works on SQLite, PostgreSQL, MySQL, and SQL
     Server without any dialect-specific MERGE / ON CONFLICT syntax.
     """
+    _validate_identifier(table, "watermark table")
     delete_sql = f"DELETE FROM {table} WHERE mapping_name = :mn AND watermark_col = :wc"
     insert_sql = (
         f"INSERT INTO {table} (mapping_name, watermark_col, watermark_val, updated_at) "

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
+<POWERMART CREATION_DATE="03/13/2026" REPOSITORY_VERSION="112">
+<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Oracle" NAME="FIRSTBANK_DWH" VERSION="112">
+<FOLDER DESCRIPTION="firstbank folder" GROUP="" NAME="firstbank" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
+<CONFIG DESCRIPTION="" ISDEFAULT="YES" NAME="default" VERSIONNUMBER="1">
+<ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
+<ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+<ATTRIBUTE NAME="Commit Type" VALUE="Source"/>
+<ATTRIBUTE NAME="Rollback Segment" VALUE=""/>
+<ATTRIBUTE NAME="Recovery Strategy" VALUE="Restart from beginning"/>
+</CONFIG>
+<TASK DESCRIPTION="Session for m_fct_transaction_delta" ISVALID="YES" NAME="s_m_fct_transaction_delta" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+<ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_transaction_delta"/>
+<ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_transaction_delta.log"/>
+<ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
+<ATTRIBUTE NAME="Error Threshold" VALUE="0"/>
+<ATTRIBUTE NAME="Treat Source Rows As" VALUE="Data Driven"/>
+</TASK>
+<WORKFLOW DESCRIPTION="Workflow for m_fct_transaction_delta" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_transaction_delta" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
+<TASKINSTANCE DESCRIPTION="" ISOVERRIDABLE="NO" NAME="s_m_fct_transaction_delta" TASKTYPENAME="Session" TASKNAME="s_m_fct_transaction_delta"/>
+</WORKFLOW>
+</FOLDER>
+</REPOSITORY>
+</POWERMART>

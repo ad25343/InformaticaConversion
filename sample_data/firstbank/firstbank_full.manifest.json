@@ -3,10 +3,10 @@
   "label": "FirstBank Digital \u2014 Full Estate v1.0",
   "description": "Complete Informatica PowerCenter test estate for FirstBank Digital retail banking platform",
   "creation_date": "09/03/2026 12:00:00",
-  "total_mappings": 54,
+  "total_mappings": 56,
   "mapping_distribution": {
     "simple": 17,
-    "medium": 26,
+    "medium": 24,
     "complex": 15
   },
   "mappings": [
@@ -33,6 +33,7 @@
     "m_fct_aml_monitoring.xml",
     "m_fct_atm_transactions_load.xml",
     "m_fct_card_transactions.xml",
+    "m_fct_channel_union_load.xml",
     "m_fct_check_processing.xml",
     "m_fct_counterparty_exposure.xml",
     "m_fct_credit_risk_rating.xml",
@@ -52,6 +53,9 @@
     "m_fct_statements.xml",
     "m_fct_stress_test_scenarios.xml",
     "m_fct_trade_settlement.xml",
+    "m_fct_transaction_delta.xml",
+    "m_fct_txn_risk_route3.xml",
+    "m_fct_txn_sk_seq.xml",
     "m_fct_wire_transfers.xml",
     "m_ref_country_codes.xml",
     "m_ref_exchange_rates.xml",
@@ -59,10 +63,8 @@
     "m_ref_interest_rates.xml",
     "m_stg_account_extract.xml",
     "m_stg_customer_extract.xml",
-    "m_stg_transaction_extract.xml",
-    "m_fct_transaction_delta.xml",
-    "m_fct_channel_union_load.xml",
+    "m_stg_customer_file_load.xml",
     "m_stg_raw_event_passthru.xml",
-    "m_fct_txn_risk_route3.xml"
+    "m_stg_transaction_extract.xml"
   ]
 }

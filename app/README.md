@@ -83,7 +83,7 @@ my_batch_folder/   (or batch.zip/)
 
 ### Human Gates
 
-**Gate 1 (Step 5 — Human Review):** Reviewer sees the full Verification Report before any code is generated. Where Claude suggests an actionable code-level fix for a flag (`auto_fix_suggestion`), a "🔧 Suggested Auto-Fix" panel is shown with a checkbox — checking it carries the suggestion forward to Step 7 for the conversion agent to apply.
+**Gate 1 (Step 5 — Human Review):** Reviewer sees the full Verification Report before any code is generated. Where Claude suggests an actionable code-level fix for a flag (`auto_fix_suggestion`), a "🔧 Suggested Auto-Fix" panel is shown with a checkbox — checking it carries the suggestion forward to Step 7 for the conversion agent to apply. On REJECT, the reviewer chooses a restart point: Step 1 (re-parse), Step 2 (re-classify), Step 3 (re-document), or Full restart (block job, re-upload required).
 - APPROVE → pipeline continues to stack assignment and code generation
 - REJECT → job blocked permanently
 
@@ -93,7 +93,7 @@ my_batch_folder/   (or batch.zip/)
 - REQUEST_FIX → re-run Step 7 (code generation) with all findings injected as mandatory fix requirements, then re-run Step 8 (security scan), then re-present Gate 2. Capped at 2 remediation rounds; if the re-scan is clean it auto-proceeds. "Request Fix" button hidden after round 2.
 - FAILED → job blocked permanently
 
-**Gate 3 (Step 12 — Code Review):** Reviewer sees converted code, test coverage, and the security report.
+**Gate 3 (Step 12 — Code Review):** Reviewer sees converted code, test coverage, and the security report. On REJECT, the reviewer chooses a restart point: Step 6 (re-assign stack), Step 7 (re-convert), Step 10 (re-review equivalence only), or Full restart.
 - APPROVED → job marked COMPLETE
 - REJECTED → job blocked permanently; team re-uploads the mapping to start a fresh job
 
@@ -289,6 +289,8 @@ Step 6 assigns the target stack based on mapping characteristics. The decision i
 | `POST` | `/api/gates/batch-signoff` | Apply one gate decision to multiple jobs — Gate 1/2/3; returns succeeded/failed per job |
 | `GET` | `/api/progress` | Migration progress summary: counts by status and tier, throughput per day, ETA |
 | `GET` | `/api/progress/export` | CSV of all job statuses for management reporting |
+| `GET` | `/api/patterns` | List all 10 ETL patterns with their names, descriptions, and Pydantic config schemas |
+| `POST` | `/api/patterns/{name}/generate-xml` | Generate Informatica PowerCenter XML from a pattern config YAML |
 
 > Enable interactive API docs at `http://localhost:8000/docs` by setting `SHOW_DOCS=true` in `.env`.
 

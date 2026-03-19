@@ -35,6 +35,7 @@ import anthropic
 from typing import Optional
 from ..models.schemas import ComplexityReport, ComplexityTier, ParseReport, SessionParseReport
 from ._client import make_client
+from .base import BaseAgent
 
 log = logging.getLogger("conversion.documentation_agent")
 
@@ -229,7 +230,7 @@ def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
     return "\n".join(lines)
 
 
-async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label: str) -> tuple[str, bool]:
+async def _claude_call(prompt: str, pass_label: str) -> tuple[str, bool]:
     """
     Make a single documentation Claude call with automatic retry on transient errors.
     Returns (text, truncated).
@@ -245,6 +246,7 @@ async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label
 
     log.info("documentation_agent: %s — requesting max_tokens=%d", pass_label, max_tokens)
 
+    client = make_client()
     message = await claude_with_retry(
         lambda: client.messages.create(
             model=MODEL,
@@ -265,105 +267,116 @@ async def _claude_call(client: anthropic.AsyncAnthropic, prompt: str, pass_label
     return text, truncated
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
+# ── Agent class ───────────────────────────────────────────────────────────────
 
+class DocumentationAgent(BaseAgent):
+
+    async def document(
+        self,
+        parse_report: ParseReport,
+        complexity: ComplexityReport,
+        graph: dict,
+        session_parse_report: Optional[SessionParseReport] = None,
+    ) -> str:
+        """
+        Returns the full documentation as a Markdown string.
+
+        Strategy is tier-based:
+          LOW  — single pass (overview + transformations + parameters only)
+          MEDIUM / HIGH / VERY_HIGH — two passes (Pass 1: transformations, Pass 2: lineage)
+
+        Pass 2 does NOT re-send the full graph JSON — Pass 1's output already contains all
+        transformation detail. Lineage is scoped to non-trivial fields only.
+
+        The returned string ends with one of two sentinels:
+          DOC_COMPLETE_SENTINEL    — completed without truncation; safe to advance
+          DOC_TRUNCATION_SENTINEL  — hit the token limit; orchestrator injects a warning flag
+        """
+        parse_summary = (
+            f"Parse Status: {parse_report.parse_status}\n"
+            f"Objects Found: {json.dumps(parse_report.objects_found)}\n"
+            f"Mappings: {', '.join(parse_report.mapping_names)}\n"
+            f"Unresolved Parameters: {parse_report.unresolved_parameters}\n"
+            f"Flags: {len(parse_report.flags)}"
+        )
+
+        complexity_summary = (
+            f"Tier: {complexity.tier.value}\n"
+            f"Criteria: {'; '.join(complexity.criteria_matched)}\n"
+            f"Special Flags: {complexity.special_flags}"
+        )
+
+        # Graph JSON is only sent to Pass 1 — compact but complete
+        graph_json = json.dumps(graph, indent=2)
+        if len(graph_json) > 80_000:
+            graph_json = graph_json[:80_000] + "\n... [truncated for length]"
+
+        session_context_block = _build_session_context_block(session_parse_report)
+        session_section = f"\n{session_context_block}\n" if session_context_block else ""
+
+        num_trans = _count_transformations(graph)
+        use_two_pass = complexity.tier.value in ("MEDIUM", "HIGH", "VERY_HIGH")
+
+        log.info(
+            "documentation_agent: starting %s doc generation — tier=%s transformations=%d",
+            "two-pass" if use_two_pass else "single-pass",
+            complexity.tier.value, num_trans,
+        )
+
+        # ── Pass 1: Overview + Transformations + Parameters ───────────────────────
+        pass1_prompt = PASS_1_PROMPT.format(
+            parse_summary=parse_summary,
+            complexity_summary=complexity_summary,
+            graph_json=graph_json,
+        )
+
+        pass1_doc, pass1_truncated = await _claude_call(pass1_prompt, "Pass 1 (transformations)")
+        log.info("documentation_agent: Pass 1 complete — %d chars", len(pass1_doc))
+
+        if pass1_truncated:
+            log.error("documentation_agent: Pass 1 truncated — returning early")
+            return pass1_doc + DOC_TRUNCATION_SENTINEL
+
+        # ── LOW tier: single pass is sufficient — no lineage section needed ────────
+        if not use_two_pass:
+            log.info("documentation_agent: LOW tier — single pass complete, skipping Pass 2")
+            return pass1_doc + DOC_COMPLETE_SENTINEL
+
+        # ── Pass 2: Lineage (non-trivial fields) + Session Context + Ambiguities ───
+        # NOTE: graph_json is intentionally NOT sent here — Pass 1's output already
+        # contains all transformation detail that Pass 2 needs for lineage tracing.
+        pass2_prompt = PASS_2_PROMPT.format(
+            pass1_doc=pass1_doc,
+            session_context_block=session_section,
+        )
+
+        pass2_doc, pass2_truncated = await _claude_call(pass2_prompt, "Pass 2 (lineage)")
+        log.info("documentation_agent: Pass 2 complete — %d chars", len(pass2_doc))
+
+        # Combine — Pass 1 ends at Parameters, Pass 2 starts at Field-Level Lineage
+        combined = pass1_doc.rstrip() + "\n\n" + pass2_doc.lstrip()
+
+        if pass2_truncated:
+            combined += DOC_TRUNCATION_SENTINEL
+            log.warning(
+                "documentation_agent: two-pass complete but TRUNCATED — total %d chars",
+                len(combined),
+            )
+        else:
+            combined += DOC_COMPLETE_SENTINEL
+            log.info(
+                "documentation_agent: two-pass complete — total %d chars",
+                len(combined),
+            )
+
+        return combined
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
 async def document(
     parse_report: ParseReport,
     complexity: ComplexityReport,
     graph: dict,
     session_parse_report: Optional[SessionParseReport] = None,
 ) -> str:
-    """
-    Returns the full documentation as a Markdown string.
-
-    Strategy is tier-based:
-      LOW  — single pass (overview + transformations + parameters only)
-      MEDIUM / HIGH / VERY_HIGH — two passes (Pass 1: transformations, Pass 2: lineage)
-
-    Pass 2 does NOT re-send the full graph JSON — Pass 1's output already contains all
-    transformation detail. Lineage is scoped to non-trivial fields only.
-
-    The returned string ends with one of two sentinels:
-      DOC_COMPLETE_SENTINEL    — completed without truncation; safe to advance
-      DOC_TRUNCATION_SENTINEL  — hit the token limit; orchestrator injects a warning flag
-    """
-    client = make_client()
-
-    parse_summary = (
-        f"Parse Status: {parse_report.parse_status}\n"
-        f"Objects Found: {json.dumps(parse_report.objects_found)}\n"
-        f"Mappings: {', '.join(parse_report.mapping_names)}\n"
-        f"Unresolved Parameters: {parse_report.unresolved_parameters}\n"
-        f"Flags: {len(parse_report.flags)}"
-    )
-
-    complexity_summary = (
-        f"Tier: {complexity.tier.value}\n"
-        f"Criteria: {'; '.join(complexity.criteria_matched)}\n"
-        f"Special Flags: {complexity.special_flags}"
-    )
-
-    # Graph JSON is only sent to Pass 1 — compact but complete
-    graph_json = json.dumps(graph, indent=2)
-    if len(graph_json) > 80_000:
-        graph_json = graph_json[:80_000] + "\n... [truncated for length]"
-
-    session_context_block = _build_session_context_block(session_parse_report)
-    session_section = f"\n{session_context_block}\n" if session_context_block else ""
-
-    num_trans = _count_transformations(graph)
-    use_two_pass = complexity.tier.value in ("MEDIUM", "HIGH", "VERY_HIGH")
-
-    log.info(
-        "documentation_agent: starting %s doc generation — tier=%s transformations=%d",
-        "two-pass" if use_two_pass else "single-pass",
-        complexity.tier.value, num_trans,
-    )
-
-    # ── Pass 1: Overview + Transformations + Parameters ───────────────────────
-    pass1_prompt = PASS_1_PROMPT.format(
-        parse_summary=parse_summary,
-        complexity_summary=complexity_summary,
-        graph_json=graph_json,
-    )
-
-    pass1_doc, pass1_truncated = await _claude_call(client, pass1_prompt, "Pass 1 (transformations)")
-    log.info("documentation_agent: Pass 1 complete — %d chars", len(pass1_doc))
-
-    if pass1_truncated:
-        log.error("documentation_agent: Pass 1 truncated — returning early")
-        return pass1_doc + DOC_TRUNCATION_SENTINEL
-
-    # ── LOW tier: single pass is sufficient — no lineage section needed ────────
-    if not use_two_pass:
-        log.info("documentation_agent: LOW tier — single pass complete, skipping Pass 2")
-        return pass1_doc + DOC_COMPLETE_SENTINEL
-
-    # ── Pass 2: Lineage (non-trivial fields) + Session Context + Ambiguities ───
-    # NOTE: graph_json is intentionally NOT sent here — Pass 1's output already
-    # contains all transformation detail that Pass 2 needs for lineage tracing.
-    pass2_prompt = PASS_2_PROMPT.format(
-        pass1_doc=pass1_doc,
-        session_context_block=session_section,
-    )
-
-    pass2_doc, pass2_truncated = await _claude_call(client, pass2_prompt, "Pass 2 (lineage)")
-    log.info("documentation_agent: Pass 2 complete — %d chars", len(pass2_doc))
-
-    # Combine — Pass 1 ends at Parameters, Pass 2 starts at Field-Level Lineage
-    combined = pass1_doc.rstrip() + "\n\n" + pass2_doc.lstrip()
-
-    if pass2_truncated:
-        combined += DOC_TRUNCATION_SENTINEL
-        log.warning(
-            "documentation_agent: two-pass complete but TRUNCATED — total %d chars",
-            len(combined),
-        )
-    else:
-        combined += DOC_COMPLETE_SENTINEL
-        log.info(
-            "documentation_agent: two-pass complete — total %d chars",
-            len(combined),
-        )
-
-    return combined
+    return await DocumentationAgent().document(parse_report, complexity, graph, session_parse_report)

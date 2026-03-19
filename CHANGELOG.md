@@ -10,54 +10,144 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.18.26] — 2026-03-14 — Sample-data full audit and repair (all 662 files)
-
-### Fixed
-
-- **Deep type-aware audit** run across all 662 XML files in the four test projects (apex_insurance, firstbank, meridian_am, nexus_scm) — mappings, parameter files, and workflows each checked against their own structural rules.
-- **34 mapping XMLs missing `<INSTANCE>` elements** (9 unique templates × 2 copies each in `mappings/` and `all_mappings/`) — `<INSTANCE>` entries derived from `CONNECTOR` `FROMINSTANCE`/`TOINSTANCE` pairs and injected into each `<MAPPING>` block.
-- **3 firstbank parameter files** (`params_firstbank_dev/prod/uat.xml`) used a non-standard `<PARAMETERFILE>/<SESFOLDER>/<SESSION>/<PARAMETER>` schema instead of the correct Informatica PowerCenter `<POWERMART>/<REPOSITORY>/<PARAMFILE>/<PARAM>` format. All three rewritten to the correct format with all parameter values (`$$SRC_DB`, `$$TGT_DB`, `$$ETL_DATE`, `$$LOAD_TYPE`, `$$LOG_LEVEL`, `$$REJECT_ROW_THRESHOLD`) preserved and `$$ENVIRONMENT` added per-env.
-- Final state: **662 / 662 files clean** — 434 mapping XMLs, 12 parameter files, 216 workflow files.
-
-### Chore
-
-- `jobs.db`, `jobs.db-wal`, `jobs.db-shm`, and `jobs/` added to `.gitignore` — these are runtime artifacts that must never be committed.
-
----
-
-## [2.18.25] — 2026-03-14 — Performance rules in prompts + Stage C perf review
+## [2.25.0] — 2026-03-18 — Report UX overhaul + pipeline stability fixes
 
 ### Added
 
-- **`## Performance Rules` blocks** added to all three conversion system prompts:
-  - *PySpark*: partition strategy, broadcast joins for Lookup transformations, UDF ban, `collect()` avoidance, partition pruning, shuffle minimisation, `persist()` checkpoints, `spark.sql.shuffle.partitions` config.
-  - *dbt*: materialisation selection guide (view / incremental / table), incremental strategy per warehouse (BigQuery, Snowflake/Redshift, Spark), partition/cluster key config, explicit column lists, early filter pushdown.
-  - *Python/Pandas*: mandatory `chunksize` on all file reads, `iterrows()` ban, hash-map joins for single-column lookups, chunk-pipeline pattern (no accumulate-then-write).
-- **Stage C — Performance Review** added to `review_agent.py` — advisory-only anti-pattern scan that runs after Stage B (never blocks on logic issues). Checks for `collect()` on large DataFrames, Python UDFs, missing partition hints, cartesian joins, `view` materialisation on final mart models, `SELECT *`, `read_csv` without `chunksize`, and `iterrows()`. Result stored as `perf_review` on `CodeReviewReport`.
-- **`PerfReviewCheck` / `PerfReviewReport`** Pydantic models added to `schemas.py`.
-- **Scale anti-pattern scan** added to `_validate_conversion_files()` as a 7th non-blocking `ℹ️ SCALE:` check — flags `collect()`, `read_csv` without `chunksize`, and `iterrows()` in generated files.
-
----
-
-## [2.18.24] — 2026-03-14 — Sample-data connector completeness (433 mapping XMLs)
+- **"Complete Report ▾" dropdown** — `.md` and `Print / PDF` combined into a single dropdown button in the job header. Reduces visual clutter and makes the distinction between format options clear.
+- **Report button renaming** — all four report actions now have descriptive labels:
+  - `📄 Complete Report ▾` (dropdown: Download .md / Print / PDF)
+  - `📊 S2T Manifest` (was `Manifest`)
+  - `🔍 Summary` (was `Audit`) — governance-only snapshot: scores, sign-off chain, flags, security findings
 
 ### Fixed
 
-- **Systematic connector gap** across all 217 tiered mappings + 216 `all_mappings/` copies in all 4 test projects: only the primary key field was wired end-to-end; all other target fields were declared as `TARGETFIELD` elements but had no `CONNECTOR` reaching them, causing the S2T extractor to report them as unmapped.
-- Fix script applied to 433 files (400 changed, 33 already clean):
-  1. `CONNECTOR` elements added for every unconnected `TARGETFIELD` following the existing transformation chain pattern.
-  2. `TRANSFORMFIELD` output ports added to the last transformation for any derived target fields missing as ports.
-  3. `INSTANCE` elements added inside every `MAPPING` block for all referenced transformations.
-- `sample_data/firstbank/all_mappings/m_stg_customer_file_load.xml` added — was missing from `all_mappings/` while present in the tiered folder.
+- **"Please enter your name" on gate sign-off** — SSE stream emitted an immediate `state` + `done` event pair for gate-waiting jobs (no active pipeline), causing the frontend to re-render the entire sign-off form and wipe any reviewer name the user had already typed. Fixed: frontend now only re-renders on genuine `progress` events; `state`, `heartbeat`, and instant-`done` events are ignored.
+- **Jobs stuck at `awaiting_code_review` after Gate 3 approval** — `_step_12_final_export` called artifact export and GitHub PR helpers with no error handling. Any exception (or a server restart between the sign-off DB write and the `emit(COMPLETE)`) left the job permanently stuck. Fixed: both helpers wrapped in try/except; the `COMPLETE` DB write always executes regardless of export outcome. Export failures are logged and noted in the completion message.
+- **Audit Trail (🔍 Summary) Internal Server Error** — `/api/jobs/{job_id}/audit-report` endpoint used `json.loads(raw)` directly on the state column, which is zlib-compressed since v2.4.3. Fixed: endpoint now uses `_decode_state()` which handles both compressed and legacy plain-JSON formats.
+- **Cross-job reuse analysis endpoint** — same `json.loads(raw)` bug in `/api/jobs/reuse-analysis`; fixed with `_decode_state()`.
+- **PDF report was 100+ pages** — `buildReportMarkdown` in `app.js` embedded the full content of every generated source file as a fenced code block. A single Low-complexity job produced a 105-page PDF. Fixed: Step 7 section now shows a file inventory (filename + line count) with a note pointing to the output folder. Code belongs in the export package, not the governance PDF.
+- **Logo / title "⚡ Informatica PowerCenter Converter" navigated to blank page** — `setMainView('home')` was used instead of `setMainView('landing')`. Fixed.
+
+### Changed
+
+- `_step_12_final_export` — `fire_webhook` and `fire_email` calls also wrapped in try/except (non-blocking); a notification failure no longer prevents job completion.
 
 ---
 
-## [2.18.23] — 2026-03-14 — Batch expand/collapse fix + batch sample XML repairs
+## [2.24.0] — 2026-03-18 — Conversion Readiness scoring system
 
-### Fixed
+### Added
 
-- **Batch group expand/collapse collapsing on live refresh**: The 5-second polling timer (`_histLiveTimer`) called `loadHistory()` → `applyHistoryFilter()` which rebuilt `tbody.innerHTML` from scratch, resetting every batch group to `display:none`. Fix: introduced `_expandedBatches Set` updated by `toggleBatchGroup()` on every click; `_histBatchGroup()` now reads the Set when rendering initial `display` and arrow `transform` values, so expanded groups survive re-renders.
-- **4 batch sample XMLs** (`app/sample_xml/batch/03–06`) rewritten in correct Informatica PowerCenter export format. Previous versions used non-standard schemas (`<FIELD>`, `<SOURCEFIELD>`, `<METAINFO>` blocks; one had no `<MAPPING>` block at all). All four now have `SOURCE`/`TARGET` at `FOLDER` level, complete `TRANSFORMFIELD` port lists, `INSTANCE` references, and a `CONNECTOR` for every field at every hop.
+- **Source Completeness Score (Score 2, 0–100)** — computed deterministically at the end of Step 1 (XML parse) from six structural signals extracted from the parsed graph:
+  - Expression Coverage (35 pts): fraction of Expression-transformation ports with non-trivial logic
+  - Joiner Conditions (20 pts): fraction of Joiner transformations with a `Join Condition` TABLEATTRIBUTE defined
+  - Router Conditions (15 pts): fraction of Router transformations with Group Filter Conditions defined
+  - Lookup Conditions (15 pts): fraction of Lookup transformations with a `Lookup Condition` TABLEATTRIBUTE defined
+  - Unresolved Parameters (10 pts): −1 pt per unresolved `$$PARAM`, capped at 10
+  - SQL Complexity (5 pts): full 5 if no custom SQL; 3 if short SQL (≤500 chars); 0 if complex SQL
+  - Stored on `ParseReport.completeness_score` (float) and `ParseReport.completeness_signals` (per-signal detail dict).
+
+- **Pattern Confidence Score (Score 1, 0–100)** — numeric equivalent of the `pattern_confidence` label already produced in Step 2: `HIGH=90`, `MEDIUM=65`, `LOW=40`, `NONE=15`. Stored on `ComplexityReport.pattern_confidence_score`.
+
+- **Combined Conversion Readiness (0–100)** — weighted average: `Score1 × 0.40 + Score2 × 0.60`. Label thresholds: `85–100 = HIGH ✅`, `65–84 = MEDIUM ⚠️`, `40–64 = LOW 🔴`, `0–39 = CRITICAL ❌`. Stored on `ComplexityReport.conversion_readiness`.
+
+- **UI — Step 1 Source Completeness panel** — six-signal breakdown with per-signal score bars shown inside the Step 1 Parse Report card.
+
+- **UI — Step 2 Conversion Readiness panel** — two-score side-by-side tile (Pattern Confidence vs Source Completeness) plus combined score with a colour-coded progress bar, shown inside the Step 2 Complexity Classification card.
+
+- **Gate 1 soft-block** — when `conversion_readiness < 65`, the "Approve — Proceed to Conversion" button is disabled. A warning banner with a `Approved Fixes` textarea appears. Typing ≥20 characters unlocks the button, ensuring reviewers acknowledge the gaps before approving. Jobs with MEDIUM/HIGH readiness are unaffected.
+
+- **AUDIT_REPORT §1 Job Metadata** — three new rows: `Score 1 — Pattern Confidence`, `Score 2 — Source Completeness`, `Combined Conversion Readiness` (with numeric value and label).
+
+- **AUDIT_REPORT §9 Pattern Library** — `Confidence` row now shows the numeric score in parentheses alongside the label.
+
+### Changed
+
+- `ParseReport` schema gains two new optional fields (v2.24.0, non-breaking, both have defaults): `completeness_score: float = 100.0` and `completeness_signals: Dict[str, Any] = {}`.
+- `ComplexityReport` schema gains two new optional fields (v2.24.0, non-breaking, both have defaults): `pattern_confidence_score: float = 65.0` and `conversion_readiness: float = 65.0`.
+
+---
+
+## [2.23.0] — 2026-03-18 — etl_patterns gap analysis and library hardening
+
+### Added
+
+- **`etl_patterns/utils/date_utils.py`** — null-safe date helpers covering every common Informatica date function: `to_date()`, `add_to_date()`, `date_diff()`, `trunc_date()`, `to_char_date()`, `last_day()`, `is_date()`. Accepts both Informatica format tokens (`MM/DD/YYYY`) and Python strftime patterns.
+- **`etl_patterns/utils/numeric_utils.py`** — null-safe numeric helpers: `safe_round()`, `trunc_num()`, `safe_abs()`, `safe_mod()`, `ceil_num()`, `floor_num()`. Matches Informatica `ROUND`, `TRUNC`, `ABS`, `MOD`, `CEIL`, `FLOOR` semantics including NULL propagation.
+- **IO reader/writer stubs** — `XmlFileReader`, `JsonFileReader`, `ExcelFileReader` (readers) and `XmlFileWriter`, `JsonFileWriter`, `ExcelFileWriter` (writers) added to both factory maps. Raises `NotImplementedError` at runtime with a workaround message; previously raised `ConfigError: Unknown source/target type`.
+- **Stage D gap types** — `gap_date_utils` and `gap_numeric_utils` added to `review_agent.py` adoption-gap prefix list, `REUSE_SYSTEM` inventory, and the JSON schema `pattern_type` enum.
+- **Step 7 prompt** — `_ETL_LIBRARY_SECTION` in `_common.py` now lists all date and numeric utility imports and 12 new Informatica→etl_patterns mapping rows.
+
+### Changed
+
+- **Decision matrix §7.2** — added `etl_patterns class` column; added row 11 (unclassified / NONE); promoted Joiner ×1 from ⚠️ to ✅ in row 5 (upsert) so join-style mappings without a target name match land on `UpsertPattern` (MEDIUM) rather than cascading to a wrong pattern.
+- **`etl_patterns/README.md`** — added utility module table; corrected IO types section to distinguish fully-implemented vs roadmap stubs.
+- **`DESIGN_PATTERN_LIBRARY.md`** — added v2.19.0 change-log entry.
+
+---
+
+## [2.22.0] — 2026-03-14 — Bidirectional migration / greenfield authoring
+
+### Added
+
+- **✨ New Mapping tab** in the UI — generate Informatica PowerCenter XML from an ETL pattern config without touching Informatica Designer. Choose a pattern, fill in the YAML config, click "Generate Informatica XML", and download the result.
+- **`GET /api/patterns`** — lists all 10 ETL patterns with their names, descriptions, and Pydantic config schemas (JSON Schema format).
+- **`POST /api/patterns/{name}/generate-xml`** — accepts a YAML pattern config + mapping name, validates against the Pydantic schema, calls Claude to generate a well-formed Informatica PowerCenter XML, validates the result with `xml.etree.ElementTree`, and returns the XML.
+- **`etl_patterns/schemas.py`** — Pydantic v2 config models for all 10 patterns: `TruncateAndLoadConfig`, `IncrementalAppendConfig`, `UpsertConfig`, `Scd2Config`, `LookupEnrichConfig`, `AggregationLoadConfig`, `FilterAndRouteConfig`, `UnionConsolidateConfig`, `ExpressionTransformConfig`, `PassThroughConfig`. Exports `PATTERN_SCHEMAS` and `PATTERN_DESCRIPTIONS` registries.
+- **`app/backend/agents/xml_generator.py`** — `XmlGeneratorAgent(BaseAgent)` with few-shot Informatica XML examples embedded in the prompt; validates output is parseable before returning.
+- **`app/backend/routers/patterns.py`** — new sub-router mounted at `/api`.
+- **`pattern_generation_log`** table in DB — records every XML generation call (pattern name, mapping name, duration, success/failure, XML length).
+
+---
+
+## [2.21.0] — 2026-03-14 — Data equivalence validation
+
+### Added
+
+- **Expression boundary tests** (`tests/test_expressions_{mapping}.py`) — auto-generated pytest stubs (with `TODO` fill-in comments) for every Expression transformation detected in the mapping. Covers IIF NULL/TRUE/FALSE branches, DECODE exact/default/NULL, date function boundary values (leap year, month end), string function edge cases (empty string, NULL, boundary index), and aggregation NULL exclusion behavior.
+- **Golden CSV comparison script** (`tests/compare_golden.py`) — standalone self-contained Python script (stdlib + pandas). CLI: `python compare_golden.py --expected informatica_output.csv --actual generated.csv [--threshold 99.5] [--sample 20] [--ignore-row-count]`. Outputs: row count diff, schema diff, field-by-field match rates, mismatch sample, heuristics (float rounding, date format, trim/case differences). Embeds the expected target field list from the S2T workbook as reference comments.
+- Both files are written automatically during Step 11 (test generation) and downloadable via `GET /api/jobs/{id}/tests/download/tests/{filename}`.
+
+---
+
+## [2.20.0] — 2026-03-14 — Checkpoint-based resume at gate rejection
+
+### Added
+
+- **Restart-from-step dropdown** on the Gate 1 and Gate 3 rejection forms. Instead of always blocking the job, reviewers can restart from a specific prior step without re-uploading the XML.
+  - Gate 1 options: Step 1 (re-parse), Step 2 (re-classify), Step 3 (re-document), or Full restart (block job)
+  - Gate 3 options: Step 6 (re-assign stack), Step 7 (re-convert), Step 10 (re-review equivalence), or Full restart
+- **`resume_from_step(job_id, filename, step_number, state)`** async generator in `orchestrator.py` — reconstructs `_PipelineCtx` from the persisted state and dispatches to the correct `_step_N()` function.
+- **`VALID_RESTART_STEPS_GATE1`** and **`VALID_RESTART_STEPS_GATE3`** constants in `models/schemas.py`.
+- Audit log records `restart_from_step` in `extra_json` for every checkpoint restart.
+
+### Changed
+
+- `SignOffRequest` and `CodeSignOffRequest` schemas gain optional `restart_from_step: int` field.
+- Gate 1 REJECT with no `restart_from_step` → existing BLOCKED behavior (unchanged).
+- Gate 3 REJECT with no `restart_from_step` → existing BLOCKED behavior (unchanged).
+
+---
+
+## [2.6.0] — 2026-03-14 — Architecture hardening (P0/P1/P2)
+
+### Added
+
+- **`call_claude_with_retry()`** in `agents/_client.py` — exponential backoff wrapper for all Anthropic API calls; retries on `RateLimitError`, `APIConnectionError`, `APITimeoutError`, and `InternalServerError` with jittered delays up to 60 s.
+- **`EmitError(BaseException)`** in `orchestrator.py` — raised when all 3 DB-write retries are exhausted inside an `emit()` closure; inherits `BaseException` so it is never silently swallowed by `except Exception` blocks.
+- **`_CorruptedState`** sentinel class in `db/database.py` — returned by `_decode_state()` on JSON parse failure; triggers `state_corrupted = 1` flag on the affected job row without raising.
+- **`state_corrupted INTEGER NOT NULL DEFAULT 0`** column in the `jobs` table (auto-migrated at startup via v2.19.0 migration).
+- **`BaseAgent`** abstract base class in `agents/base.py` with `_call_claude()` and `_call_claude_json()` helpers; all 8 agent modules (`conversion_agent`, `review_agent`, `security_agent`, `test_agent`, `session_parser_agent`, `s2t_agent`, `documentation_agent`, `verification_agent`) now subclass it while preserving their module-level function signatures as backward-compat shims.
+- **`_PipelineCtx` dataclass** in `orchestrator.py` — shared state container passed between all extracted step functions; holds `job_id`, `filename`, `emit`, `log`, `pipeline_mode`, and optional per-step output fields.
+- **20 named `_step_N()` async generator functions** in `orchestrator.py` — each public orchestrator entry point (`run_pipeline`, `resume_after_signoff`, etc.) is now a thin delegator; step logic is isolated and independently testable.
+- **`app/backend/routers/`** package — `routes.py` (2 234 lines) split into 7 domain-focused sub-routers (`upload`, `jobs`, `gates`, `batch`, `logs`, `exports`, `misc`) plus a `_helpers.py` module for shared state and validation utilities.
+
+### Changed
+
+- `org_config_loader.py` — replaced `@lru_cache(maxsize=1)` with a TTL mtime cache (`_TTL_SECS = 60`); config changes on disk are picked up within 60 s without a process restart.
+- `app/backend/routes.py` — rewritten as a backward-compat shim that assembles the 7 sub-routers; existing callers in `main.py` and `watcher.py` are unchanged.
+- All `emit()` closures in `orchestrator.py` now include a 3-attempt retry loop before raising `EmitError`.
 
 ---
 
@@ -185,160 +275,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/playwright/auth.spec.js` renamed to `tests/playwright/z_auth.spec.js` (guarantees alphabetical-last execution).
 - `_SUITE_FILES` in `routes.py` updated to `tests/playwright/z_auth.spec.js`.
 - All doc references (`playwright.config.js`, `tests/playwright/README.md`) updated to match.
-
----
-
-## [2.18.14] — 2026-03-13 — Individual dropzone label cleanup
-
-### Fixed
-
-- Simplified the Individual upload dropzone label to a single clear line — removed multi-line hint text that was cluttering the drop area.
-
----
-
-## [2.18.12] — 2026-03-13 — CSP fix: allow cdnjs.cloudflare.com for JSZip
-
-### Fixed
-
-- The Content Security Policy `script-src` directive was restricted to `'self'` + `'unsafe-inline'`, blocking the JSZip CDN tag added in v2.18.11. Added `https://cdnjs.cloudflare.com` to `script-src` so folder→ZIP packaging works in batch mode.
-
----
-
-## [2.18.11] — 2026-03-13 — Batch folder-select: client-side ZIP packaging via JSZip
-
-### Added
-
-- **Select Folder** button in batch upload mode — users can now pick a folder directly instead of pre-packaging a ZIP. The browser reads all files via `webkitdirectory`, JSZip packages them client-side preserving subfolder structure, and the ZIP is submitted to the existing `POST /api/jobs/batch` endpoint unchanged. The existing Select ZIP button and drag-drop zone remain for users who already have a ZIP ready. Tips panel updated to explain both options.
-
----
-
-## [2.18.9] — 2026-03-13 — Clean submit flow + batch-aware History panel + Back button
-
-### Added
-
-- **Batch-aware History panel**: batch submissions now render as collapsible group rows (`📦 Batch` header) showing batch ID, mapping count, overall status badge, and date. Expanding a batch shows one child row per mapping with indent, status badge, tier, and View button. Individual (non-batch) jobs render as flat rows unchanged.
-- **Back to History button**: `openJobFromHistory()` inserts a `← Back to History` link at the top of the stepper panel, so users can return to their list after drilling into a job.
-- **Live refresh in History**: if any visible jobs are still running, the panel polls `/api/jobs` every 5 seconds and re-renders; polling stops automatically when all jobs complete. Timer is cancelled on panel switch.
-
-### Changed
-
-- Submit flow (Individual, ZIP, and Batch) no longer auto-navigates to the stepper on success. Instead, shows a toast (`✓ Job queued — track it in Job History`) and calls `resetSubmitForm()` to clear all file selections and reset the Start button — preventing re-submission without a new file.
-
----
-
-## [2.18.8] — 2026-03-13 — Cookie quote-strip + Tests panel layout fixes
-
-### Fixed
-
-- **`getPersonaCookie()` returning quoted value**: the browser wraps cookie values in RFC-6265 double quotes (`"Asin D"`) in some contexts. The extra quotes caused the Tests nav item to not appear, submitter name to pre-fill with quotes, and the persona chip to render incorrectly. Fixed by stripping surrounding double-quotes from the raw cookie string.
-- **`panelTests` rendering children horizontally** (appearing blank): `setMainView()` was clearing `flexDirection` to `''` on non-review panels, which removed the `flex-direction: column` from the Tests panel inline style. Fixed by only explicitly setting `column` for review and tests panels; all others retain their HTML-defined inline direction.
-- **`panelLanding` bleeding through on load**: added `display:none` to the initial HTML so it starts hidden and is only revealed by `setMainView('landing')`.
-
----
-
-## [2.18.7] — 2026-03-13 — In-UI Playwright test runner (admin persona)
-
-### Added
-
-- **🧪 Tests nav button** — visible only for the Asin D (admin) persona. Opens `panelTests` with a suite toggle grid, Run Selected button, live SSE log stream, and results bar (passed / failed / skipped).
-- Suite toggles for all 7 spec files: Auth, Landing, Navigation, Submission, History, Review Queue, Security & Headers — each showing approximate test count.
-- Live log colours PASS lines green, FAIL lines red, SKIP lines yellow via ANSI-style parsing.
-- **`GET /run-tests?suites=...`** SSE endpoint (admin-only, 403 if persona ≠ Asin D) — shells out `npx playwright test --reporter=line <specs>`, streams each stdout line, then sends a `done` event with final counts.
-
----
-
-## [2.18.6] — 2026-03-13 — Docs + test updates for 5-persona lineup
-
-### Changed
-
-- `app/README.md` and `app/.env.example` clarified that `APP_PASSWORD` is one shared password for all personas.
-- Playwright `auth.spec.js` and `helpers.js` updated: persona count references changed from 4 to 5, Priya Nair added to all relevant assertions.
-- `ICT_Test_Plan_v2.18.docx` updated: 5-persona table, gate reviewer assignments (Priya = Gate 1, James = Gate 2, Sarah = Gate 3), AUTH-01/05 counts corrected.
-
----
-
-## [2.18.5] — 2026-03-13 — 5th persona: Priya Nair (Business Analyst, Gate 1 Reviewer)
-
-### Added
-
-- **Priya Nair** added to the login persona pick list (teal `#22d3ee`, initials `PN`).
-- Gate reviewer re-assignment: Priya → Gate 1 (business logic), James → Gate 2 (security), Sarah → Gate 3 (release). Maya Patel updated to Submitter role.
-- `_VALID_PERSONAS` whitelist in `main.py` updated; `PERSONA_META` and Playwright `PERSONAS` array updated to match.
-
----
-
-## [2.18.4] — 2026-03-13 — Expanded Playwright pipeline test coverage (103 tests total)
-
-### Added
-
-- 33 new pipeline test cases (PIPE-16–48) added to `tests/playwright/pipeline.spec.js` covering: Source Qualifier patterns (pass-through, SQL override, multi-SQ, flat file), all core Informatica transformations (Expression, Aggregator, Joiner, Lookup connected/unconnected, Filter, Router, Sorter, Sequence Generator, Normalizer, Update Strategy), SCD Type 1 & 2, incremental load, error/reject routing, complexity tier verification, security scan scenarios (hardcoded creds, SQL injection, PII, clean), parameter files, workflow session extraction, multi-mapping batch scenarios.
-- `ICT_Test_Plan_v2.18.docx` regenerated: test count 70 → 103, new Section 6b for pipeline tests.
-
-### Changed
-
-- Persona renamed from "Aravind Doma" → "Asin D" across all Playwright spec files and helpers.
-
----
-
-## [2.18.3] — 2026-03-13 — Playwright e2e test suite (60+ tests, 7 spec files)
-
-### Added
-
-- Full Playwright end-to-end test suite under `tests/playwright/`:
-  - `z_auth.spec.js` — AUTH-01–09: login, 4 personas, cookies, logout, rate limiting
-  - `landing.spec.js` — LAND-01–07: greeting, action cards, live stats, nav
-  - `navigation.spec.js` — NAV-01–06: top nav, sidebar chip, view switching
-  - `submission.spec.js` — SUB-01–08: upload modes, prefill, button state
-  - `history.spec.js` — HIST-01–07: table, search, filter, click-through
-  - `review.spec.js` — REV-01–07: queue panel, gate filters, approve/reject
-  - `security.spec.js` — SEC-01–06: unauth API, HTTP headers, health check
-- `playwright.config.js` — Chromium headless, 60s timeout, HTML reporter.
-- `tests/playwright/helpers.js` — `login()`, `logout()`, `goToView()`, `uploadFile()`, `submitJob()`, `waitForStatus()`, `PERSONAS` constant.
-- `tests/playwright/README.md` — setup and run instructions.
-- Run with: `export APP_PASSWORD=... && npm run test:e2e`
-
----
-
-## [2.18.2] — 2026-03-13 — Persona display + sign-out in sidebar footer
-
-### Added
-
-- Sidebar footer now shows the signed-in persona (avatar initials, name, role) with a **Sign out** button that redirects to `/logout` — consistent with the top-nav persona chip so logout is always reachable regardless of which main-area panel is active.
-
----
-
-## [2.18.1] — 2026-03-13 — Persona login page + landing page with action cards
-
-### Added
-
-- **Persona login page**: replaced the bare password form with a persona pick list (4 users: Asin D / Data Engineer, Sarah Chen / Migration Lead, James Park / Security Architect, Maya Patel / Platform Engineer) plus a shared password field. Selected persona stored in a JS-readable cookie after successful login. Animated background orbs, avatar initials, selection highlight.
-- **Landing page** (new default view after login): personalised greeting by time of day + first name from persona cookie; three action cards (Submit a Conversion, Review Queue, Job History); live stats row (total jobs, in-progress, complete, awaiting review); Review Queue CTA updates with pending count.
-- **Nav bar**: Home button (returns to landing page); persona chip on right side (avatar initials, name, role); sign-out button → `/logout`; persona name auto-fills submitter name field in upload form.
-
----
-
-## [2.18.0] — 2026-03-13 — UX overhaul: sidebar simplification + Job History + submitter fields
-
-### Added
-
-- **Job History page** — full-width table with filename, submitter, team, ticket, status, tier, and date. Supports text search, status filter, and pagination.
-- **Submitter fields** on the upload form: name, team, ticket/reference, notes — all stored on the job and displayed in History.
-- **Top nav bar**: Dashboard | Job History | Review Queue (with badge).
-- Review Queue moved to a full-width main-area panel.
-
-### Changed
-
-- Sidebar simplified to upload panel only — job list, search, filter, pagination, and review queue all removed from sidebar.
-- DB schema: `submitter`, `submitter_team`, `ticket_ref`, `notes` columns added via v2.18.0 migration; `complexity_tier` first-class column added.
-
----
-
-## [2.17.5] — 2026-03-13 — Critical fix: NameError crash at Step 3 + silent API error swallowing
-
-### Fixed
-
-- **NameError crash entering Step 3 (documentation)**: `state` was referenced but never defined at the `should_skip_step(3)` guard in `orchestrator.py`, silently killing every job as it tried to enter the documentation step. Fixed by using the local `complexity` variable for `_tier` and `None` for `_pattern` (pattern classification is not yet available at this stage).
-- **Silent API error swallowing in heartbeat loop**: `asyncio.wait_for(asyncio.shield(_doc_task))` propagated non-timeout exceptions (API rate-limit, auth errors) as-is, bypassing the `except asyncio.TimeoutError` handler and the downstream error logger. Added `except Exception: break` so all non-timeout errors fall through to the existing handler where they are logged and surfaced to the UI as `FAILED`.
 
 ---
 

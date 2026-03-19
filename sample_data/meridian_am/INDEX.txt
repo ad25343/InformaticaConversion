@@ -115,6 +115,12 @@ MEDIUM MAPPINGS (20) — Lookups, Aggregations, SCD2
 35.  m_bridge_portfolio_security
     Portfolio-security bridge (multi-share classes)
 
+m_fct_nav_reusable_lkp
+    NAV USD conversion using unconnected lookup (:LKP syntax) and reusable EXP (EXP_AUDIT_COLS REUSABLE=YES)
+
+m_fct_top_holdings_rank
+    Top 10 holdings per portfolio using Sorter (market value desc) + Rank (top 10)
+
 ================================================================================
 COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Union
 ================================================================================

@@ -246,6 +246,10 @@ def _eval_arithmetic(expr: str, row: dict) -> Any:
     operators like ``==``, ``!=``, ``>`` work correctly on string columns
     (e.g. ``{STATUS} == 'A'`` → ``'I' == 'A'`` → False).
     Numeric values use ``str(val)`` to avoid unnecessary quoting.
+
+    Uses an AST-based safe evaluator — no arbitrary code execution.
+    Permitted node types: BinOp, UnaryOp, Compare, BoolOp, Constant,
+    Name (None/True/False literals only).
     """
     def _sub(m: re.Match) -> str:
         val = _resolve_col(m.group(1), row)
@@ -257,7 +261,32 @@ def _eval_arithmetic(expr: str, row: dict) -> Any:
 
     substituted = _COL_REF.sub(_sub, expr)
     try:
-        result = eval(substituted, {"__builtins__": {}})  # noqa: S307
+        tree = ast.parse(substituted, mode="eval")
+    except SyntaxError as exc:
+        raise ExpressionError(
+            f"Arithmetic expression failed: {expr!r} (substituted: {substituted!r}): {exc}"
+        ) from exc
+
+    _SAFE_NAMES = frozenset({"None", "True", "False"})
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expression):
+            continue
+        if isinstance(node, ast.Constant):
+            continue
+        if isinstance(node, ast.Name) and node.id in _SAFE_NAMES:
+            continue
+        if isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare,
+                              ast.BoolOp, ast.operator, ast.unaryop,
+                              ast.cmpop, ast.boolop)):
+            continue
+        raise ExpressionError(
+            f"Arithmetic expression contains disallowed construct "
+            f"({type(node).__name__}): {expr!r}"
+        )
+
+    try:
+        result = eval(compile(tree, "<expr>", "eval"), {"__builtins__": None}, {})  # noqa: S307
         return result
     except Exception as exc:
         raise ExpressionError(

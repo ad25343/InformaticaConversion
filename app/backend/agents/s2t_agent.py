@@ -20,6 +20,7 @@ from typing import Optional
 import re
 
 from ..models.schemas import ParseReport
+from .base import BaseAgent
 
 
 # ── Output directory ─────────────────────────────────────────────────────
@@ -37,7 +38,18 @@ STATUS_UNMAPPED_SRC = "Unmapped Source"  # source field has no downstream target
 STATUS_UNMAPPED_TGT = "Unmapped Target"  # target field has no upstream source
 
 
-def build_s2t(
+class S2TAgent(BaseAgent):
+
+    def build_s2t(
+        self,
+        parse_report: ParseReport,
+        graph: dict,
+        job_id: str,
+    ) -> dict:
+        return _build_s2t_impl(parse_report, graph, job_id)
+
+
+def _build_s2t_impl(
     parse_report: ParseReport,
     graph: dict,
     job_id: str,
@@ -203,6 +215,15 @@ def build_s2t(
         "excel_filename":     excel_filename,
         "excel_path":         str(excel_path),
     }
+
+
+# Backward-compat shim — keeps orchestrator.py call sites unchanged
+def build_s2t(
+    parse_report: ParseReport,
+    graph: dict,
+    job_id: str,
+) -> dict:
+    return S2TAgent().build_s2t(parse_report, graph, job_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
