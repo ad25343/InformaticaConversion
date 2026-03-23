@@ -130,24 +130,203 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.6.0] — 2026-03-14 — Architecture hardening (P0/P1/P2)
+## [2.19.0] — 2026-03-14 — Security hardening + sample-data validator
+
+### Fixed (Security)
+
+- **`eval()` replaced with AST-safe evaluator** in `etl_patterns/expression.py` — walks the AST before execution; rejects any node type outside `BinOp`, `UnaryOp`, `Compare`, `BoolOp`, `Constant`, and `Name(None/True/False)`; uses `__builtins__=None` to eliminate attribute-traversal vectors. (CRITICAL)
+- **SQL injection via f-string identifier interpolation** fixed in `etl_patterns/utils/watermark_manager.py` and `etl_patterns/patterns/scd2.py` — all table names, column names, and schema-qualified identifiers are validated against `^[A-Za-z_][A-Za-z0-9_.]*$` before interpolation. (CRITICAL)
+- **Weak `SECRET_KEY` now raises `RuntimeError` at startup** in `auth.py` — if `APP_PASSWORD` is set but `SECRET_KEY` still equals the placeholder value, the server refuses to start. (HIGH)
+- **`download_test_file` endpoint** given the same extension whitelist as `download_file`. (HIGH)
 
 ### Added
 
-- **`call_claude_with_retry()`** in `agents/_client.py` — exponential backoff wrapper for all Anthropic API calls; retries on `RateLimitError`, `APIConnectionError`, `APITimeoutError`, and `InternalServerError` with jittered delays up to 60 s.
-- **`EmitError(BaseException)`** in `orchestrator.py` — raised when all 3 DB-write retries are exhausted inside an `emit()` closure; inherits `BaseException` so it is never silently swallowed by `except Exception` blocks.
-- **`_CorruptedState`** sentinel class in `db/database.py` — returned by `_decode_state()` on JSON parse failure; triggers `state_corrupted = 1` flag on the affected job row without raising.
-- **`state_corrupted INTEGER NOT NULL DEFAULT 0`** column in the `jobs` table (auto-migrated at startup via v2.19.0 migration).
-- **`BaseAgent`** abstract base class in `agents/base.py` with `_call_claude()` and `_call_claude_json()` helpers; all 8 agent modules (`conversion_agent`, `review_agent`, `security_agent`, `test_agent`, `session_parser_agent`, `s2t_agent`, `documentation_agent`, `verification_agent`) now subclass it while preserving their module-level function signatures as backward-compat shims.
-- **`_PipelineCtx` dataclass** in `orchestrator.py` — shared state container passed between all extracted step functions; holds `job_id`, `filename`, `emit`, `log`, `pipeline_mode`, and optional per-step output fields.
-- **20 named `_step_N()` async generator functions** in `orchestrator.py` — each public orchestrator entry point (`run_pipeline`, `resume_after_signoff`, etc.) is now a thin delegator; step logic is isolated and independently testable.
-- **`app/backend/routers/`** package — `routes.py` (2 234 lines) split into 7 domain-focused sub-routers (`upload`, `jobs`, `gates`, `batch`, `logs`, `exports`, `misc`) plus a `_helpers.py` module for shared state and validation utilities.
+- **`sample_data_validator.py`** — leader + 10-agent validator system that runs a comprehensive audit across all 4 test projects. Agents cover: XML schema, instance/connector completeness, mapping-workflow pairing, parameter coverage, tier coverage, session/workflow validity, cross-references, scenario coverage, symmetry, and manifest/index sync.
+- **5 new sample mappings** closing 7 transformation-type coverage gaps: Sequence Generator (`m_fct_txn_sk_seq`), Update Strategy/CDC (`m_stg_claim_cdc`), SQL override with watermark (`m_stg_po_incremental`), Reusable EXP + Unconnected Lookup (`m_fct_nav_reusable_lkp`), Sorter + Rank (`m_fct_top_holdings_rank`). Each includes a workflow XML and `all_mappings/` copy.
+- **`$$LAST_EXTRACT_DT`** parameter added to all 12 parameter files (3 envs × 4 projects); `$$LAST_LOAD_DT` and `$$BATCH_ID` added to meridian_am and nexus_scm.
+- 16 misnamed workflow files corrected (`wf_` prefix → `wf_m_` prefix) to match the mapping name convention; 17 workflow XMLs regenerated with valid XML and correct `MAPPINGNAME` attribute.
+- `INDEX.txt` files synced across all 4 projects to reflect actual files on disk.
+- 68 missing `<INSTANCE>` elements added to firstbank mapping XMLs (agent-discovered gap).
+
+---
+
+## [2.18.26] — 2026-03-14 — Sample-data full audit and repair (all 662 files)
+
+### Fixed
+
+- **Deep type-aware audit** across all 662 XML files — mappings, parameter files, and workflows each checked against their own structural rules.
+- **34 mapping XMLs missing `<INSTANCE>` elements** (9 unique templates × tiered + `all_mappings/` copies) — injected from `CONNECTOR` `FROMINSTANCE`/`TOINSTANCE` pairs.
+- **3 firstbank parameter files** (`params_firstbank_dev/prod/uat.xml`) rewritten from non-standard `<PARAMETERFILE>/<SESFOLDER>/<SESSION>/<PARAMETER>` format to correct `<POWERMART>/<REPOSITORY>/<PARAMFILE>/<PARAM>` format with all values preserved.
+- Final state: **662 / 662 files clean** — 434 mapping XMLs, 12 parameter files, 216 workflow files.
+
+### Chore
+
+- `jobs.db`, `jobs.db-wal`, `jobs.db-shm`, and `jobs/` added to `.gitignore`.
+
+---
+
+## [2.18.25] — 2026-03-14 — Performance rules in prompts + Stage C perf review
+
+### Added
+
+- **`## Performance Rules` blocks** in all three conversion system prompts (PySpark, dbt, Python/Pandas) covering partition strategy, broadcast joins, UDF ban, `collect()` avoidance, materialisation selection, incremental strategy, chunked I/O, and `iterrows()` ban.
+- **Stage C — Performance Review** in `review_agent.py` — advisory anti-pattern scan running after Stage B, never blocking. Result stored as `perf_review` on `CodeReviewReport`.
+- **`PerfReviewCheck` / `PerfReviewReport`** Pydantic models added to `schemas.py`.
+- **Scale anti-pattern scan** (7th check) in `_validate_conversion_files()` — non-blocking `ℹ️ SCALE:` flags for `collect()`, `read_csv` without `chunksize`, and `iterrows()`.
+
+---
+
+## [2.18.24] — 2026-03-14 — Sample-data connector completeness (433 mapping XMLs)
+
+### Fixed
+
+- **Systematic connector gap** across all 4 test projects: only the primary key field was wired end-to-end; all other target fields had no `<CONNECTOR>` reaching the target. Fix applied to 433 files (400 changed): `CONNECTOR` elements added for every unconnected `TARGETFIELD`, missing `TRANSFORMFIELD` output ports added, `INSTANCE` elements added to every `MAPPING` block.
+- `sample_data/firstbank/all_mappings/m_stg_customer_file_load.xml` added (was missing).
+
+---
+
+## [2.18.23] — 2026-03-14 — Batch expand/collapse fix + batch sample XML repairs
+
+### Fixed
+
+- **Batch group expand/collapse collapsing on live refresh**: introduced `_expandedBatches Set` updated by `toggleBatchGroup()`; `_histBatchGroup()` reads the Set on render so expanded groups survive the 5-second live-polling re-render cycle.
+- **4 batch sample XMLs** (`app/sample_xml/batch/03–06`) rewritten in correct Informatica PowerCenter export format — proper `SOURCE`/`TARGET` at `FOLDER` level, complete `TRANSFORMFIELD` port lists, `INSTANCE` references, and a `CONNECTOR` for every field at every hop.
+
+---
+
+## [2.18.14] — 2026-03-13 — Individual dropzone label cleanup
+
+### Fixed
+
+- Simplified the Individual upload dropzone label to a single clear line.
+
+---
+
+## [2.18.12] — 2026-03-13 — CSP fix: allow cdnjs.cloudflare.com for JSZip
+
+### Fixed
+
+- `script-src` CSP directive extended to include `https://cdnjs.cloudflare.com` so the JSZip CDN tag added in v2.18.11 loads correctly.
+
+---
+
+## [2.18.11] — 2026-03-13 — Batch folder-select: client-side ZIP packaging via JSZip
+
+### Added
+
+- **Select Folder** button in batch upload — picks a folder via `webkitdirectory`, packages client-side into a ZIP via JSZip preserving subfolder structure, submits to the existing `POST /api/jobs/batch` endpoint. Select ZIP + drag-drop remain available.
+
+---
+
+## [2.18.9] — 2026-03-13 — Clean submit flow + batch-aware History panel + Back button
+
+### Added
+
+- **Batch-aware History**: batch submissions render as collapsible `📦 Batch` group rows; expanding shows one child row per mapping. Individual jobs render as flat rows.
+- **Back to History** link injected at the top of the stepper panel when a job is opened from History.
+- **Live refresh**: History polls every 5 seconds while any visible job is running; stops automatically when all complete.
 
 ### Changed
 
-- `org_config_loader.py` — replaced `@lru_cache(maxsize=1)` with a TTL mtime cache (`_TTL_SECS = 60`); config changes on disk are picked up within 60 s without a process restart.
-- `app/backend/routes.py` — rewritten as a backward-compat shim that assembles the 7 sub-routers; existing callers in `main.py` and `watcher.py` are unchanged.
-- All `emit()` closures in `orchestrator.py` now include a 3-attempt retry loop before raising `EmitError`.
+- Submit (all three paths) no longer auto-navigates to the stepper; shows a toast and calls `resetSubmitForm()` instead.
+
+---
+
+## [2.18.8] — 2026-03-13 — Cookie quote-strip + Tests panel layout fixes
+
+### Fixed
+
+- `getPersonaCookie()` strips RFC-6265 surrounding double-quotes so persona matching works correctly in all browsers.
+- `panelTests` `flex-direction: column` no longer cleared by `setMainView()` (children were rendering horizontally, appearing blank).
+- `panelLanding` starts hidden to prevent bleed-through on load.
+
+---
+
+## [2.18.7] — 2026-03-13 — In-UI Playwright test runner (admin persona)
+
+### Added
+
+- **🧪 Tests** nav item (Asin D only) with suite toggles, Run Selected button, live SSE log stream (colour-coded pass/fail/skip), results bar, and HTML report link.
+- `GET /run-tests?suites=...` SSE endpoint (admin-only) — shells out `npx playwright test`, streams output, sends `done` event with final counts.
+
+---
+
+## [2.18.6] — 2026-03-13 — 5-persona lineup docs + test updates
+
+### Changed
+
+- `APP_PASSWORD` clarified as one shared password for all personas across README, `.env.example`, and Playwright README.
+- Playwright test counts and persona assertions updated to reflect 5 personas. `ICT_Test_Plan_v2.18.docx` updated with gate assignments (Priya = Gate 1, James = Gate 2, Sarah = Gate 3).
+
+---
+
+## [2.18.5] — 2026-03-13 — 5th persona: Priya Nair (Gate 1 Reviewer)
+
+### Added
+
+- **Priya Nair** (Business Analyst) added to login persona list (teal `#22d3ee`). Gate assignments updated: Priya → Gate 1, James → Gate 2, Sarah → Gate 3. Maya Patel → Submitter role.
+
+---
+
+## [2.18.4] — 2026-03-13 — Expanded pipeline test coverage (103 tests)
+
+### Added
+
+- 33 new pipeline tests (PIPE-16–48): all core Informatica transformation types, SCD Type 1 & 2, incremental load, security scenarios, parameter files, multi-mapping batch.
+- `ICT_Test_Plan_v2.18.docx` regenerated: 70 → 103 tests.
+
+### Changed
+
+- Persona renamed Aravind Doma → Asin D across all spec files and helpers.
+
+---
+
+## [2.18.3] — 2026-03-13 — Playwright e2e test suite (60+ tests, 7 spec files)
+
+### Added
+
+- Full Playwright suite under `tests/playwright/`: `z_auth`, `landing`, `navigation`, `submission`, `history`, `review`, `security` spec files. `playwright.config.js`, `helpers.js`, `README.md`. Run with `npm run test:e2e`.
+
+---
+
+## [2.18.2] — 2026-03-13 — Persona display + sign-out in sidebar footer
+
+### Added
+
+- Sidebar footer shows signed-in persona (avatar, name, role) with a Sign out button.
+
+---
+
+## [2.18.1] — 2026-03-13 — Persona login page + landing page
+
+### Added
+
+- **Persona login page**: pick list of 4 personas + shared password; animated background.
+- **Landing page**: personalised greeting, three action cards, live stats row.
+- **Nav bar**: Home button, persona chip, sign-out; persona name auto-fills submitter field.
+
+---
+
+## [2.18.0] — 2026-03-13 — UX overhaul: Job History + submitter fields + top nav
+
+### Added
+
+- **Job History page**: full-width table with search, status filter, pagination. Submitter name/team/ticket/notes stored and displayed.
+- **Top nav**: Dashboard | Job History | Review Queue (with badge).
+
+### Changed
+
+- Sidebar simplified to upload panel only.
+- DB: `submitter_name`, `submitter_team`, `ticket_ref`, `notes`, `complexity_tier` columns added via v2.18.0 migration.
+
+---
+
+## [2.17.5] — 2026-03-13 — Critical fix: NameError at Step 3 + silent API error swallowing
+
+### Fixed
+
+- **NameError at Step 3**: `state` referenced before definition in `orchestrator.py`; silently killed every job entering the documentation step. Fixed by using `complexity` variable for `_tier` and `None` for `_pattern`.
+- **Silent API errors in heartbeat**: `asyncio.wait_for(asyncio.shield(_doc_task))` swallowed non-timeout exceptions (rate-limit, auth). Added `except Exception: break` to surface them as `FAILED` status.
 
 ---
 
@@ -2253,3 +2432,27 @@ that base URL instead of `https://api.github.com`.
 | `GITHUB_REPO` | `""` | `owner/repo` — e.g. `myorg/data-migration` (required) |
 | `GITHUB_BASE_BRANCH` | `main` | Branch the PR targets |
 | `GITHUB_API_URL` | `https://api.github.com` | Override for GitHub Enterprise Server |
+
+---
+
+## [2.6.0-arch] — 2026-03-14 — Architecture hardening (P0/P1/P2)
+
+> **Note**: This entry uses the internal Claude Code release label (v2.6.0) from the
+> epic-bouman refactor branch. The corresponding product releases are v2.20.0 – v2.25.0.
+
+### Added
+
+- **`call_claude_with_retry()`** in `agents/_client.py` — exponential backoff wrapper for all Anthropic API calls; retries on `RateLimitError`, `APIConnectionError`, `APITimeoutError`, and `InternalServerError` with jittered delays up to 60 s.
+- **`EmitError(BaseException)`** in `orchestrator.py` — raised when all 3 DB-write retries are exhausted inside an `emit()` closure; inherits `BaseException` so it is never silently swallowed by `except Exception` blocks.
+- **`_CorruptedState`** sentinel class in `db/database.py` — returned by `_decode_state()` on JSON parse failure; triggers `state_corrupted = 1` flag on the affected job row without raising.
+- **`state_corrupted INTEGER NOT NULL DEFAULT 0`** column in the `jobs` table (auto-migrated at startup via v2.19.0 migration).
+- **`BaseAgent`** abstract base class in `agents/base.py` with `_call_claude()` and `_call_claude_json()` helpers; all 8 agent modules (`conversion_agent`, `review_agent`, `security_agent`, `test_agent`, `session_parser_agent`, `s2t_agent`, `documentation_agent`, `verification_agent`) now subclass it while preserving their module-level function signatures as backward-compat shims.
+- **`_PipelineCtx` dataclass** in `orchestrator.py` — shared state container passed between all extracted step functions; holds `job_id`, `filename`, `emit`, `log`, `pipeline_mode`, and optional per-step output fields.
+- **20 named `_step_N()` async generator functions** in `orchestrator.py` — each public orchestrator entry point (`run_pipeline`, `resume_after_signoff`, etc.) is now a thin delegator; step logic is isolated and independently testable.
+- **`app/backend/routers/`** package — `routes.py` (2 234 lines) split into 7 domain-focused sub-routers (`upload`, `jobs`, `gates`, `batch`, `logs`, `exports`, `misc`) plus a `_helpers.py` module for shared state and validation utilities.
+
+### Changed
+
+- `org_config_loader.py` — replaced `@lru_cache(maxsize=1)` with a TTL mtime cache (`_TTL_SECS = 60`); config changes on disk are picked up within 60 s without a process restart.
+- `app/backend/routes.py` — rewritten as a backward-compat shim that assembles the 7 sub-routers; existing callers in `main.py` and `watcher.py` are unchanged.
+- All `emit()` closures in `orchestrator.py` now include a 3-attempt retry loop before raising `EmitError`.
