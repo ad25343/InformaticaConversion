@@ -1081,3 +1081,15 @@ curl -X POST http://localhost:8000/api/patterns/upsert/generate-xml \
     "mapping_name": "m_dim_branch"
   }'
 ```
+
+---
+
+## Related documentation
+
+| Doc | What it covers |
+|---|---|
+| [`MAPPING_WF_PARAM_GUIDE.md`](MAPPING_WF_PARAM_GUIDE.md) | How Mapping XML, Workflow XML, and Parameter files work together — conversion planning, batch strategy, best practices |
+| [`DESIGN_PATTERN_LIBRARY.md`](DESIGN_PATTERN_LIBRARY.md) | All 10 ETL patterns in detail — transformation inputs, generated code shape, decision logic |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Technical design — pipeline internals, API surface, data model, security architecture |
+| [`TESTING_GUIDE.md`](TESTING_GUIDE.md) | How to test converted code — golden comparison, boundary tests, equivalence validation |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | Full version history |
