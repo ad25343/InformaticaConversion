@@ -364,7 +364,7 @@ async function showJobInsights(jobId, filename) {
         </div>
 
         <!-- ID + Status bar -->
-        <div style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div onclick="openJob('${jobId}')" title="Click to view full details" style="padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;cursor:pointer" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
           <span style="font-family:monospace;font-size:14px;font-weight:700;color:var(--accent)">${shortId(jobId)}</span>
           <span class="badge ${badgeCls}">${badgeLabel}</span>
           ${tier ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:${tierColor}22;color:${tierColor};border:1px solid ${tierColor}44">${tier} Complexity</span>` : ''}
