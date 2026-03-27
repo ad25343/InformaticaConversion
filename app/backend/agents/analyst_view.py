@@ -1,325 +1,253 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-Analyst View Generator — deterministic extraction from the parsed graph.
+Analyst View Generator — PRD / Systems Requirements style document.
 
-Produces a structured, tabular Markdown document aimed at analysts, testers,
-and developers.  Covers: source tables, target tables, joins, lookups, filters,
-key business expressions, and parameters.
+Uses a lightweight Claude call to produce an analyst-readable requirements
+document from the Pass 1 documentation output.  The goal is a document that
+analysts, testers, and developers can read without needing to parse raw
+transformation details.
 
-No Claude calls — purely deterministic.  Fast and free.
+Graph field names (from parser_agent.py):
+  source/target: "name", "db_type", "owner", "fields"
+  transformation: "name", "type", "ports", "expressions", "table_attribs"
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
 from ..models.schemas import ParseReport, SessionParseReport
+from ._client import make_client
+from ..config import settings as _cfg
 
 log = logging.getLogger("conversion.analyst_view")
 
-# Expression length cap for the "Key Expressions" section
-_EXPR_MAX_CHARS = 200
-_MAX_EXPRESSIONS = 20
+MODEL = _cfg.claude_model
+_ANALYST_MAX_TOKENS = 8_000  # keep it tight — this is a summary, not full docs
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Prompt ───────────────────────────────────────────────────────────────────
 
-def _esc_pipe(val: str) -> str:
-    """Escape pipe characters for markdown table cells and collapse whitespace."""
-    return val.replace("|", "\\|").replace("\n", " ").strip()
+_ANALYST_SYSTEM = """You are a senior data analyst writing a Systems Requirements Document
+for an Informatica PowerCenter mapping that will be converted to modern code.
+
+Your audience: analysts, testers, QA leads, and developers who need to understand
+WHAT this mapping does — not HOW Informatica implements it.
+
+Write in clear English prose with structured sections. Use tables only where they
+add clarity (e.g., field-level rules). Do NOT reproduce raw expressions verbatim —
+translate them into plain English business rules.
+
+Output ONLY the Markdown document — no preamble, no commentary outside the doc."""
+
+_ANALYST_PROMPT = """Produce a Systems Requirements Document for this Informatica mapping.
+
+## Mapping Name
+{mapping_name}
+
+## Structured Summary
+{structured_summary}
+
+## Full Technical Documentation (reference only — do NOT copy)
+{documentation_md}
+
+## Instructions
+
+Write a PRD-style requirements document with these sections:
+
+# {mapping_name} — Systems Requirements
+
+## 1. Purpose & Business Context
+2-3 sentences: what does this mapping do in business terms? What data does it
+produce and why?
+
+## 2. Source Systems
+For each source table: name, owner/schema, what data it provides, how many fields.
+If there is a Source Qualifier filter or custom SQL, explain in plain English what
+rows are selected and why.
+
+## 3. Target Systems
+For each target table: name, owner/schema, what data it receives, load strategy
+(insert/update/upsert/delete).
+
+## 4. Data Flow & Transformation Rules
+Walk through the mapping logic in business terms:
+- How are sources joined? (join type and business meaning of the condition)
+- What lookups are performed and why? (reference table, what's being enriched)
+- What filters are applied and why? (business rule behind the filter)
+- What calculations / derivations are performed? (in plain English)
+- What aggregations if any?
+
+## 5. Key Business Rules
+Numbered list of the critical business rules this mapping enforces.
+Each rule: one plain English sentence.
+
+## 6. Parameters & Runtime Dependencies
+What parameters affect behavior? What connections/credentials are needed?
+Any environment-specific values?
+
+## 7. Testing Considerations
+What should a tester validate? Edge cases, boundary conditions, null handling,
+expected row counts, reconciliation points.
+
+Keep the document concise — aim for 1-3 pages, not 10. Prioritize clarity over
+completeness. If something is ambiguous in the source data, say so explicitly.
+"""
 
 
-def _trunc(val: str, limit: int = _EXPR_MAX_CHARS) -> str:
-    """Truncate a string, appending ellipsis if it exceeds the limit."""
-    val = val.replace("\n", " ").strip()
-    return val if len(val) <= limit else val[:limit] + "…"
+# ── Structured summary builder ───────────────────────────────────────────────
 
-
-def _get_transformations(graph: dict) -> list[dict]:
-    """Flatten all transformations from all mappings in the graph."""
+def _build_structured_summary(graph: dict, parse_report: ParseReport,
+                               session_parse_report: Optional[SessionParseReport]) -> str:
+    """Build a compact structured summary from the graph for Claude context."""
+    lines: list[str] = []
     txns: list[dict] = []
     for mapping in graph.get("mappings", []):
         txns.extend(mapping.get("transformations", []))
-    return txns
 
-
-def _by_type(txns: list[dict], *types: str) -> list[dict]:
-    """Filter transformations whose type contains any of the given substrings (case-insensitive)."""
-    lower_types = [t.lower() for t in types]
-    return [t for t in txns if any(lt in t.get("type", "").lower() for lt in lower_types)]
-
-
-# ── Section builders ─────────────────────────────────────────────────────────
-
-def _section_sources(graph: dict, txns: list[dict]) -> str:
-    """Source tables with any custom SQL overrides."""
-    lines = ["## Source Tables", ""]
+    # Sources
     sources = graph.get("sources", [])
-    sqs = _by_type(txns, "source qualifier")
-
-    # Build a lookup of SQ SQL overrides keyed by SQ name
-    sq_sql: dict[str, str] = {}
-    for sq in sqs:
-        sql = sq.get("table_attribs", {}).get("Sql Query", "").strip()
-        if sql:
-            sq_sql[sq["name"]] = sql
-
-    if not sources and not sqs:
-        lines.append("_No source tables detected._")
-        return "\n".join(lines)
-
-    lines.append("| # | Source Table | Database Type | Custom SQL Override |")
-    lines.append("|---|-------------|---------------|---------------------|")
     if sources:
-        for i, src in enumerate(sources, 1):
-            name = _esc_pipe(src.get("name", "unknown"))
-            db_type = _esc_pipe(src.get("databaseType", src.get("database_type", "—")))
-            # Try to match SQ by name convention (SQ_<sourcename> or similar)
-            sql_override = "—"
-            for sq_name, sql in sq_sql.items():
-                if name.lower() in sq_name.lower() or sq_name.lower() in name.lower():
-                    sql_override = f"`{_trunc(_esc_pipe(sql))}`"
-                    break
-            lines.append(f"| {i} | {name} | {db_type} | {sql_override} |")
-    else:
-        # Fallback: use Source Qualifier transformations
-        for i, sq in enumerate(sqs, 1):
-            name = _esc_pipe(sq["name"])
-            sql = sq.get("table_attribs", {}).get("Sql Query", "").strip()
-            sql_col = f"`{_trunc(_esc_pipe(sql))}`" if sql else "—"
-            lines.append(f"| {i} | {name} | — | {sql_col} |")
+        lines.append("### Sources")
+        for s in sources:
+            fields = s.get("fields", [])
+            lines.append(f"- {s.get('name', '?')} (owner: {s.get('owner', '—')}, "
+                         f"db: {s.get('db_type', '—')}, {len(fields)} fields)")
 
-    return "\n".join(lines)
-
-
-def _section_targets(graph: dict, txns: list[dict]) -> str:
-    """Target tables with load type."""
-    lines = ["## Target Tables", ""]
+    # Targets
     targets = graph.get("targets", [])
+    if targets:
+        lines.append("### Targets")
+        for t in targets:
+            fields = t.get("fields", [])
+            lines.append(f"- {t.get('name', '?')} (owner: {t.get('owner', '—')}, "
+                         f"db: {t.get('db_type', '—')}, {len(fields)} fields)")
 
-    if not targets:
-        lines.append("_No target tables detected._")
-        return "\n".join(lines)
-
-    lines.append("| # | Target Table | Database Type | Load Type |")
-    lines.append("|---|-------------|---------------|-----------|")
-    for i, tgt in enumerate(targets, 1):
-        name = _esc_pipe(tgt.get("name", "unknown"))
-        db_type = _esc_pipe(tgt.get("databaseType", tgt.get("database_type", "—")))
-        # Target load type may come from matching target transformation attribs
-        load_type = "—"
-        for t in txns:
-            if t.get("type", "").lower() == "target" and t.get("name", "").lower() == name.lower():
-                lt = t.get("table_attribs", {}).get("Target Load Type", "")
-                if lt:
-                    load_type = _esc_pipe(lt)
-                break
-        lines.append(f"| {i} | {name} | {db_type} | {load_type} |")
-
-    return "\n".join(lines)
-
-
-def _section_joins(txns: list[dict]) -> str:
-    """Join conditions from Joiner transformations."""
-    joiners = _by_type(txns, "joiner")
-    if not joiners:
-        return ""
-
-    lines = ["## Joins", ""]
-    lines.append("| # | Joiner Name | Join Type | Condition |")
-    lines.append("|---|------------|-----------|-----------|")
-    for i, j in enumerate(joiners, 1):
-        name = _esc_pipe(j["name"])
-        attribs = j.get("table_attribs", {})
-        join_type = _esc_pipe(attribs.get("Join Type", attribs.get("Join type", "NORMAL")))
-        # Map Informatica join types to readable names
-        jt_map = {"NORMAL": "Inner", "MASTER OUTER": "Left Outer",
-                   "DETAIL OUTER": "Right Outer", "FULL OUTER": "Full Outer"}
-        join_type_display = jt_map.get(join_type.upper(), join_type)
-        condition = attribs.get("Join Condition", "").strip()
-        cond_display = f"`{_trunc(_esc_pipe(condition))}`" if condition else "—"
-        lines.append(f"| {i} | {name} | {join_type_display} | {cond_display} |")
-
-    return "\n".join(lines)
-
-
-def _section_lookups(txns: list[dict]) -> str:
-    """Lookup transformations with conditions and return ports."""
-    lookups = _by_type(txns, "lookup")
-    if not lookups:
-        return ""
-
-    lines = ["## Lookups", ""]
-    lines.append("| # | Lookup Name | Source Table | Condition | Return Ports |")
-    lines.append("|---|-----------|-------------|-----------|--------------|")
-    for i, lkp in enumerate(lookups, 1):
-        name = _esc_pipe(lkp["name"])
-        attribs = lkp.get("table_attribs", {})
-        src_table = _esc_pipe(attribs.get("Lookup table name",
-                              attribs.get("Lookup Table Name", "—")))
-        condition = attribs.get("Lookup Condition",
-                    attribs.get("Lookup condition", "")).strip()
-        cond_display = f"`{_trunc(_esc_pipe(condition))}`" if condition else "—"
-        # Return ports = output ports (non-input)
-        out_ports = [p["name"] for p in lkp.get("ports", [])
-                     if p.get("porttype", "").upper() in ("OUTPUT", "INPUT/OUTPUT")]
-        ports_display = ", ".join(out_ports[:5])
-        if len(out_ports) > 5:
-            ports_display += f" (+{len(out_ports)-5} more)"
-        lines.append(f"| {i} | {name} | {src_table} | {cond_display} | {_esc_pipe(ports_display) or '—'} |")
-
-    return "\n".join(lines)
-
-
-def _section_filters(txns: list[dict]) -> str:
-    """Filter and Router conditions."""
-    filters = _by_type(txns, "filter")
-    routers = _by_type(txns, "router")
-    if not filters and not routers:
-        return ""
-
-    lines = ["## Filters & Routers", ""]
-    lines.append("| # | Name | Type | Condition |")
-    lines.append("|---|------|------|-----------|")
-    idx = 1
-
-    for f in filters:
-        name = _esc_pipe(f["name"])
-        condition = f.get("table_attribs", {}).get("Filter Condition", "").strip()
-        if not condition:
-            # Sometimes filter condition is in the port expression
-            for p in f.get("ports", []):
-                if p.get("expression", "").strip():
-                    condition = p["expression"].strip()
-                    break
-        cond_display = f"`{_trunc(_esc_pipe(condition))}`" if condition else "—"
-        lines.append(f"| {idx} | {name} | Filter | {cond_display} |")
-        idx += 1
-
-    for r in routers:
-        name = _esc_pipe(r["name"])
-        attribs = r.get("table_attribs", {})
-        # Router groups use "Group Filter Condition 1", "Group Filter Condition 2", etc.
-        group_conditions = []
-        for k, v in sorted(attribs.items()):
-            if "group filter condition" in k.lower() and v.strip():
-                group_conditions.append(v.strip())
-        if group_conditions:
-            for gc in group_conditions:
-                cond_display = f"`{_trunc(_esc_pipe(gc))}`"
-                lines.append(f"| {idx} | {name} | Router | {cond_display} |")
-                idx += 1
-        else:
-            lines.append(f"| {idx} | {name} | Router | — |")
-            idx += 1
-
-    return "\n".join(lines)
-
-
-def _section_expressions(txns: list[dict]) -> str:
-    """Key non-trivial expressions (derived fields, calculations)."""
-    expr_rows: list[tuple[str, str, str, str]] = []  # (txn_name, txn_type, port, expression)
-
+    # Transformation type summary
+    type_counts: dict[str, int] = {}
     for t in txns:
-        ttype = t.get("type", "")
+        ttype = t.get("type", "Unknown")
+        type_counts[ttype] = type_counts.get(ttype, 0) + 1
+    if type_counts:
+        lines.append("### Transformations")
+        for ttype, count in sorted(type_counts.items()):
+            lines.append(f"- {ttype}: {count}")
+
+    # Key conditions
+    for t in txns:
+        attribs = t.get("table_attribs", {})
+        ttype = t.get("type", "").lower()
         tname = t.get("name", "")
-        for expr in t.get("expressions", []):
-            raw = expr.get("expression", "").strip()
-            port = expr.get("port", "")
-            # Skip trivial: empty, or just a field name (no operators/functions)
-            if not raw or (raw.isidentifier() and "(" not in raw):
-                continue
-            # Skip if expression is just the port name (passthrough)
-            if raw.upper() == port.upper():
-                continue
-            expr_rows.append((tname, ttype, port, raw))
 
-    if not expr_rows:
-        return ""
+        if "joiner" in ttype:
+            jc = attribs.get("Join Condition", "").strip()
+            jt = attribs.get("Join Type", attribs.get("Join type", "NORMAL")).strip()
+            if jc:
+                lines.append(f"### Join: {tname}")
+                lines.append(f"- Type: {jt}")
+                lines.append(f"- Condition: {jc}")
 
-    # Sort by expression length (most complex first), cap at _MAX_EXPRESSIONS
-    expr_rows.sort(key=lambda r: len(r[3]), reverse=True)
-    expr_rows = expr_rows[:_MAX_EXPRESSIONS]
+        elif "lookup" in ttype:
+            lc = (attribs.get("Lookup Condition", "") or
+                  attribs.get("Lookup condition", "")).strip()
+            lt = (attribs.get("Lookup table name", "") or
+                  attribs.get("Lookup Table Name", "")).strip()
+            if lc or lt:
+                lines.append(f"### Lookup: {tname}")
+                if lt:
+                    lines.append(f"- Table: {lt}")
+                if lc:
+                    lines.append(f"- Condition: {lc}")
 
-    lines = ["## Key Business Rules & Expressions", ""]
-    lines.append("| # | Transformation | Port | Expression |")
-    lines.append("|---|---------------|------|------------|")
-    for i, (tname, ttype, port, raw) in enumerate(expr_rows, 1):
-        lines.append(f"| {i} | {_esc_pipe(tname)} ({_esc_pipe(ttype)}) | {_esc_pipe(port)} | `{_trunc(_esc_pipe(raw))}` |")
+        elif "filter" in ttype:
+            fc = attribs.get("Filter Condition", "").strip()
+            if not fc:
+                for p in t.get("ports", []):
+                    expr = p.get("expression", "").strip()
+                    if expr and p.get("porttype", "").upper() == "OUTPUT":
+                        fc = expr
+                        break
+            if fc:
+                lines.append(f"### Filter: {tname}")
+                lines.append(f"- Condition: {fc}")
 
-    if len(expr_rows) == _MAX_EXPRESSIONS:
-        lines.append(f"\n_Showing top {_MAX_EXPRESSIONS} expressions by complexity. See Step 3b for full details._")
+        elif "source qualifier" in ttype:
+            sql = attribs.get("Sql Query", "").strip()
+            sf = attribs.get("Source Filter", "").strip()
+            uj = attribs.get("User Defined Join", "").strip()
+            if sql or sf or uj:
+                lines.append(f"### Source Qualifier: {tname}")
+                if sql:
+                    lines.append(f"- Custom SQL: {sql[:500]}")
+                if sf:
+                    lines.append(f"- Filter: {sf}")
+                if uj:
+                    lines.append(f"- Join: {uj}")
 
-    return "\n".join(lines)
+    # Parameters
+    unresolved = list(parse_report.unresolved_parameters)
+    resolved = []
+    if session_parse_report:
+        resolved = [(p.name, p.value, p.scope) for p in (session_parse_report.parameters or [])]
+        unresolved.extend(session_parse_report.unresolved_variables or [])
 
-
-def _section_parameters(
-    parse_report: ParseReport,
-    session_parse_report: Optional[SessionParseReport],
-) -> str:
-    """Parameters and variables."""
-    rows: list[tuple[str, str, str]] = []  # (name, value, scope)
-
-    # Resolved parameters from session parse
-    if session_parse_report and session_parse_report.parameters:
-        for p in session_parse_report.parameters:
-            rows.append((p.name, p.value, p.scope))
-
-    # Unresolved from session parse
-    if session_parse_report and session_parse_report.unresolved_variables:
-        for v in session_parse_report.unresolved_variables:
-            rows.append((v, "⚠ UNRESOLVED", "—"))
-
-    # Unresolved from parse report (if not already captured)
-    known = {r[0] for r in rows}
-    for v in parse_report.unresolved_parameters:
-        if v not in known:
-            rows.append((v, "⚠ UNRESOLVED", "—"))
-
-    if not rows:
-        return ""
-
-    lines = ["## Parameters & Variables", ""]
-    lines.append("| # | Parameter | Value | Scope |")
-    lines.append("|---|----------|-------|-------|")
-    for i, (name, value, scope) in enumerate(rows, 1):
-        lines.append(f"| {i} | `{_esc_pipe(name)}` | {_esc_pipe(_trunc(value, 100))} | {_esc_pipe(scope)} |")
+    if resolved or unresolved:
+        lines.append("### Parameters")
+        for name, value, scope in resolved:
+            lines.append(f"- {name} = {value} [{scope}]")
+        for v in unresolved:
+            lines.append(f"- {v} = UNRESOLVED")
 
     return "\n".join(lines)
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-def generate_analyst_view(
+async def generate_analyst_view(
     graph: dict,
     parse_report: ParseReport,
+    documentation_md: str,
     session_parse_report: Optional[SessionParseReport] = None,
 ) -> str:
     """
-    Produce the Analyst View markdown from the parsed graph.
+    Produce a PRD / Systems Requirements Document from the parsed graph
+    and the Pass 1 documentation.
 
-    Returns a structured, tabular Markdown document covering sources, targets,
-    joins, lookups, filters, key expressions, and parameters.
+    Uses a lightweight Claude call (max 8k tokens).
     """
     mapping_names = parse_report.mapping_names or ["(unknown)"]
-    txns = _get_transformations(graph)
+    mapping_name = ", ".join(mapping_names)
 
-    header = f"# Analyst View — {', '.join(mapping_names)}\n"
+    structured_summary = _build_structured_summary(graph, parse_report, session_parse_report)
 
-    sections = [
-        header,
-        _section_sources(graph, txns),
-        _section_targets(graph, txns),
-        _section_joins(txns),
-        _section_lookups(txns),
-        _section_filters(txns),
-        _section_expressions(txns),
-        _section_parameters(parse_report, session_parse_report),
-    ]
+    # Truncate documentation_md to keep the prompt under budget
+    doc_for_prompt = documentation_md
+    if len(doc_for_prompt) > 40_000:
+        doc_for_prompt = doc_for_prompt[:40_000] + "\n\n... [truncated for length]"
 
-    # Filter out empty sections and join with double newlines
-    md = "\n\n".join(s for s in sections if s.strip())
-    log.info("Analyst view generated — %d chars, %d transformations scanned",
-             len(md), len(txns))
-    return md
+    prompt = _ANALYST_PROMPT.format(
+        mapping_name=mapping_name,
+        structured_summary=structured_summary,
+        documentation_md=doc_for_prompt,
+    )
+
+    from .retry import claude_with_retry
+
+    client = make_client()
+    log.info("analyst_view: generating PRD for %s — max_tokens=%d", mapping_name, _ANALYST_MAX_TOKENS)
+
+    message = await claude_with_retry(
+        lambda: client.messages.create(
+            model=MODEL,
+            max_tokens=_ANALYST_MAX_TOKENS,
+            system=_ANALYST_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        ),
+        label="analyst view",
+    )
+
+    text = message.content[0].text
+    log.info("analyst_view: generated — %d chars", len(text))
+    return text

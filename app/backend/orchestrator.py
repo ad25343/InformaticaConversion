@@ -682,11 +682,12 @@ async def _step_3_run_doc_agent(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]
     ctx._doc_truncated = doc_truncated
     ctx._doc_missing_sentinel = doc_missing_sentinel
 
-    # Generate analyst view (deterministic — no Claude call)
+    # Generate analyst view (lightweight Claude call — PRD-style requirements doc)
     try:
         from .agents.analyst_view import generate_analyst_view
-        ctx.analyst_view_md = generate_analyst_view(
-            ctx.graph, ctx.parse_report, ctx.session_parse_report
+        ctx.analyst_view_md = await generate_analyst_view(
+            ctx.graph, ctx.parse_report, ctx.documentation_md,
+            session_parse_report=ctx.session_parse_report,
         )
     except Exception as e:
         ctx.log.warning(f"Analyst view generation failed (non-blocking): {e}", step=3)
