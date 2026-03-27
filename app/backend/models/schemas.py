@@ -171,6 +171,9 @@ class ParseReport(BaseModel):
     mapping_names:         List[str]
     mapplets_detected:     List[str]   = []     # names of every MAPPLET found (def or instance)
     mapplets_expanded:     List[str]   = []     # subset that were successfully inline-expanded
+    # ── v2.24.0 — Source Completeness scoring ─────────────────────────────────
+    completeness_score:    float        = 100.0 # 0–100 Source Completeness (Score 2)
+    completeness_signals:  Dict[str, Any] = {}  # breakdown: signal_name → {score, max, detail}
 
 
 # ─────────────────────────────────────────────
@@ -188,6 +191,9 @@ class ComplexityReport(BaseModel):
     suggested_pattern:    Optional[str] = None  # e.g. "aggregation_load"
     pattern_confidence:   Optional[str] = None  # HIGH | MEDIUM | LOW | NONE
     pattern_rationale:    Optional[str] = None  # brief explanation of why this pattern was chosen
+    # ── v2.24.0 — Conversion Readiness scoring ────────────────────────────
+    pattern_confidence_score: float     = 65.0  # numeric: HIGH=90, MEDIUM=65, LOW=40, NONE=15
+    conversion_readiness:     float     = 65.0  # combined = score1×0.40 + score2×0.60
 
 
 # ─────────────────────────────────────────────
@@ -369,8 +375,9 @@ class CodeReviewReport(BaseModel):
     recommendation:     str   # APPROVED | REVIEW_RECOMMENDED | REQUIRES_FIXES
     summary:            str
     parse_degraded:     bool = False   # True if Step 7 output was degraded
-    equivalence_report: Optional[LogicEquivalenceReport] = None  # v1.3 — XML-grounded check
-    perf_review:        Optional["PerfReviewReport"]     = None  # v2.5.0 — Stage C perf scan
+    equivalence_report: Optional[LogicEquivalenceReport]  = None  # v1.3 — XML-grounded check
+    perf_review:        Optional["PerfReviewReport"]       = None  # v2.5.0 — Stage C perf scan
+    reuse_analysis:     Optional["ReuseAnalysisReport"]    = None  # v2.23.0 — Stage D reuse
 
 
 # ─────────────────────────────────────────────
@@ -601,3 +608,28 @@ class PerfReviewReport(BaseModel):
     checks:  List[PerfReviewCheck]
     clean:   bool
     summary: str
+
+
+# ── v2.23.0 — Reuse / framework analysis models ──────────────────────────────
+
+class ReuseCandidate(BaseModel):
+    """A single reuse / refactor opportunity identified in the generated code."""
+    candidate_id:   str          # e.g. "REUSE_01"
+    pattern_type:   str          # e.g. "gap_null_safe", "lookup_helper", "expression_lib"
+    gap_or_new:     str = "NET_NEW"   # ADOPTION_GAP | NET_NEW
+    location:       str          # filename or function name
+    description:    str          # What the code does
+    reuse_rationale: str         # Why it should be a shared utility / what to use instead
+    suggested_name:  str         # etl_patterns function (gaps) or proposed new name
+    effort:         str          # LOW | MEDIUM | HIGH
+    applicable_stacks: List[str] = []   # ["pyspark", "dbt", "python"]
+
+
+class ReuseAnalysisReport(BaseModel):
+    """Output of the Stage D per-job framework reuse analysis."""
+    candidates:     List[ReuseCandidate]
+    total_found:    int
+    high_value:     int          # candidates with effort=LOW
+    adoption_gaps:  int = 0      # candidates where gap_or_new == ADOPTION_GAP
+    net_new:        int = 0      # candidates where gap_or_new == NET_NEW
+    summary:        str

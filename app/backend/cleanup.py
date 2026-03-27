@@ -37,6 +37,40 @@ CLEANUP_INTERVAL_HOURS = _cfg.cleanup_interval_hours
 _TERMINAL_STATUSES = ("complete", "blocked", "failed")
 
 
+def _delete_single_file(path_fn, job_id: str) -> int:
+    """Delete one artefact file; return 1 if deleted, 0 otherwise."""
+    path = path_fn(job_id)
+    if not (path and path.exists()):
+        return 0
+    try:
+        path.unlink()
+        return 1
+    except OSError as exc:
+        log.warning("Could not delete file for job %s: %s", job_id, exc)
+        return 0
+
+
+def _delete_output_dir(job_id: str, state: dict) -> int:
+    """Remove the output artifact directory; return 1 if removed, 0 otherwise."""
+    out_dir = job_output_dir(job_id, state)
+    if not (out_dir and out_dir.exists() and out_dir.is_dir()):
+        return 0
+    try:
+        shutil.rmtree(out_dir)
+        log.debug("Cleanup: removed output dir %s", out_dir)
+        return 1
+    except OSError as exc:
+        log.warning("Could not remove output dir for job %s (%s): %s", job_id, out_dir, exc)
+        return 0
+
+
+def _delete_job_files(job_id: str, state: dict) -> int:
+    """Delete all artefact files for one job; return total count deleted."""
+    count = sum(_delete_single_file(fn, job_id) for fn in (job_log_path, s2t_excel_path))
+    count += _delete_output_dir(job_id, state)
+    return count
+
+
 async def cleanup_old_jobs() -> dict[str, int]:
     """
     Delete terminal jobs (complete / blocked / failed) created more than
@@ -68,36 +102,14 @@ async def cleanup_old_jobs() -> dict[str, int]:
         return {"deleted_jobs": 0, "deleted_files": 0}
 
     # ── Delete associated files and output directories ──────────────────────
+    from .db.database import _decode_state as _ds
     deleted_files = 0
     job_ids: list[str] = []
     for row in rows:
         job_id = row["job_id"]
         job_ids.append(job_id)
-
-        # Single-file artefacts: log + S2T Excel
-        for path_fn in (job_log_path, s2t_excel_path):
-            path = path_fn(job_id)
-            if path and path.exists():
-                try:
-                    path.unlink()
-                    deleted_files += 1
-                except OSError as exc:
-                    log.warning("Could not delete file for job %s: %s", job_id, exc)
-
-        # Output artifact directory (OUTPUT_DIR/<job_id>/ or watcher sub-path)
-        from .db.database import _decode_state as _ds
         state = _ds(row["state_json"]) if row["state_json"] else {}
-        out_dir = job_output_dir(job_id, state)
-        if out_dir and out_dir.exists() and out_dir.is_dir():
-            try:
-                shutil.rmtree(out_dir)
-                log.debug("Cleanup: removed output dir %s", out_dir)
-                deleted_files += 1
-            except OSError as exc:
-                log.warning(
-                    "Could not remove output dir for job %s (%s): %s",
-                    job_id, out_dir, exc,
-                )
+        deleted_files += _delete_job_files(job_id, state)
 
     # ── Delete rows from DB ─────────────────────────────────────────────────
     # Defensive: job_ids is already checked above, but guard again to prevent

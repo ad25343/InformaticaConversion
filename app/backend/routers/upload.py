@@ -21,9 +21,52 @@ from ._helpers import (
     validate_upload_size, ZipExtractionError,
     extract_informatica_zip,
     _cfg,
+    _normalize_pipeline_mode,
+    _make_pipeline_task, _setup_queue,
 )
 
 router = APIRouter(prefix="")
+
+
+# ─────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────
+
+def _none_if_empty(v: _Opt[str]) -> _Opt[str]:
+    """Return v if truthy, else None. Collapses empty strings to None."""
+    return v or None
+
+
+def _validate_xml_bytes(content: bytes, filename: str) -> str:
+    """Validate mapping content is non-empty XML. Returns decoded string."""
+    if not content:
+        raise HTTPException(400, "Uploaded mapping file is empty.")
+    xml_str = content.decode("utf-8", errors="replace").strip()
+    if not xml_str:
+        raise HTTPException(400, "Uploaded mapping file is empty after decoding.")
+    if not xml_str.lstrip().startswith("<"):
+        raise HTTPException(400, "Uploaded file does not appear to be valid XML — "
+                               "it must start with an XML element or declaration.")
+    return xml_str
+
+
+async def _read_optional_upload(upload: _Opt[UploadFile], label: str) -> _Opt[str]:
+    """Read and return decoded content of an optional upload, or None if absent."""
+    if not (upload and upload.filename):
+        return None
+    content = await upload.read()
+    validate_upload_size(content, label=upload.filename)
+    logger.info("%s uploaded: filename=%s size=%d bytes", label, upload.filename, len(content))
+    return content.decode("utf-8", errors="replace")
+
+
+async def _start_pipeline(job_id: str, filename: str) -> None:
+    """Create a progress queue and launch the pipeline task."""
+    queue = _setup_queue(job_id)
+    task = await _make_pipeline_task(
+        job_id, orchestrator.run_pipeline(job_id, filename), queue
+    )
+    _active_tasks[job_id] = task
 
 
 # ─────────────────────────────────────────────
@@ -58,84 +101,44 @@ async def create_job(
 
     mapping_content = await file.read()
     validate_upload_size(mapping_content, label=file.filename)
+    xml_str = _validate_xml_bytes(mapping_content, file.filename)
 
-    # Validate the file is non-empty and looks like XML before doing anything else
-    if not mapping_content:
-        raise HTTPException(400, "Uploaded mapping file is empty.")
-    xml_str = mapping_content.decode("utf-8", errors="replace").strip()
-    if not xml_str:
-        raise HTTPException(400, "Uploaded mapping file is empty after decoding.")
-    if not xml_str.lstrip().startswith("<"):
-        raise HTTPException(400, "Uploaded file does not appear to be valid XML — "
-                               "it must start with an XML element or declaration.")
-
-    workflow_str: _Opt[str] = None
-    if workflow_file and workflow_file.filename:
-        wf_content = await workflow_file.read()
-        validate_upload_size(wf_content, label=workflow_file.filename)
-        workflow_str = wf_content.decode("utf-8", errors="replace")
-        logger.info("Workflow file uploaded: filename=%s size=%d bytes",
-                    workflow_file.filename, len(wf_content))
-
-    param_str: _Opt[str] = None
-    if parameter_file and parameter_file.filename:
-        pf_content = await parameter_file.read()
-        validate_upload_size(pf_content, label=parameter_file.filename)
-        param_str = pf_content.decode("utf-8", errors="replace")
-        logger.info("Parameter file uploaded: filename=%s size=%d bytes",
-                    parameter_file.filename, len(pf_content))
-
-    # Normalise and validate pipeline_mode
-    _pm = (pipeline_mode or "full").strip().lower()
-    if _pm not in ("full", "docs_only"):
-        _pm = "full"
+    workflow_str = await _read_optional_upload(workflow_file, "Workflow file")
+    param_str = await _read_optional_upload(parameter_file, "Parameter file")
+    _pm = _normalize_pipeline_mode(pipeline_mode)
 
     job_id = await db.create_job(
-        file.filename,
-        xml_str,
+        file.filename, xml_str,
         workflow_xml_content=workflow_str,
         parameter_file_content=param_str,
-        submitter_name=submitter_name or None,
-        submitter_team=submitter_team or None,
-        submitter_notes=submitter_notes or None,
+        submitter_name=_none_if_empty(submitter_name),
+        submitter_team=_none_if_empty(submitter_team),
+        submitter_notes=_none_if_empty(submitter_notes),
     )
 
-    # Stamp pipeline_mode + readable output-folder hints immediately after creation
-    mapping_stem  = Path(file.filename).stem
+    mapping_stem = Path(file.filename).stem
     await db.update_job(job_id, "pending", 0, {
-        "pipeline_mode":       _pm,
-        "watcher_output_dir":  "individual",
+        "pipeline_mode":        _pm,
+        "watcher_output_dir":   "individual",
         "watcher_mapping_stem": f"{mapping_stem}_{job_id[:8]}",
     })
 
-    logger.info("Job created: job_id=%s filename=%s size=%d bytes has_workflow=%s has_params=%s submitter=%s mode=%s",
-                job_id, file.filename, len(mapping_content),
-                workflow_str is not None, param_str is not None,
-                submitter_name or "(anonymous)", _pm)
+    logger.info(
+        "Job created: job_id=%s filename=%s size=%d bytes "
+        "has_workflow=%s has_params=%s submitter=%s mode=%s",
+        job_id, file.filename, len(mapping_content),
+        workflow_str is not None, param_str is not None,
+        submitter_name or "(anonymous)", _pm,
+    )
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _progress_queues[job_id] = queue
-
-    async def _run():
-        try:
-            async for progress in orchestrator.run_pipeline(job_id, file.filename):
-                await queue.put(progress)
-        except orchestrator.EmitError as _emit_exc:
-            # DB write exhausted all retries — surface the failure event to the
-            # SSE stream so the UI shows a clean error rather than hanging.
-            await queue.put(_emit_exc.event)
-        finally:
-            await queue.put(None)  # sentinel — always sent, even after EmitError
-
-    task = asyncio.create_task(_run())
-    _active_tasks[job_id] = task
+    await _start_pipeline(job_id, file.filename)
 
     return {
-        "job_id":        job_id,
-        "filename":      file.filename,
-        "has_workflow":  workflow_str is not None,
-        "has_params":    param_str is not None,
-        "status":        "started",
+        "job_id":       job_id,
+        "filename":     file.filename,
+        "has_workflow": workflow_str is not None,
+        "has_params":   param_str is not None,
+        "status":       "started",
     }
 
 
@@ -186,6 +189,18 @@ async def stream_progress(job_id: str):
 # ZIP Upload (v1.1+)
 # ─────────────────────────────────────────────
 
+def _build_zip_warnings(extracted) -> list[str]:
+    """Combine extraction warnings with skipped-file notice."""
+    warnings = list(extracted.warnings)
+    if extracted.skipped:
+        warnings.append(
+            f"Skipped {len(extracted.skipped)} unclassified entries: "
+            + ", ".join(extracted.skipped[:5])
+            + ("…" if len(extracted.skipped) > 5 else "")
+        )
+    return warnings
+
+
 @router.post("/jobs/zip")
 async def create_job_from_zip(
     file:            UploadFile = File(...),
@@ -223,22 +238,17 @@ async def create_job_from_zip(
     except ZipExtractionError as exc:
         raise HTTPException(400, str(exc))
 
-    warnings = extracted.warnings
-    if extracted.skipped:
-        warnings = warnings + [
-            f"Skipped {len(extracted.skipped)} unclassified entries: "
-            + ", ".join(extracted.skipped[:5])
-            + ("…" if len(extracted.skipped) > 5 else "")
-        ]
+    warnings = _build_zip_warnings(extracted)
+    effective_filename = extracted.mapping_filename or file.filename
 
     job_id = await db.create_job(
-        extracted.mapping_filename or file.filename,
+        effective_filename,
         extracted.mapping_xml,
         workflow_xml_content=extracted.workflow_xml,
         parameter_file_content=extracted.parameter_file,
-        submitter_name=submitter_name or None,
-        submitter_team=submitter_team or None,
-        submitter_notes=submitter_notes or None,
+        submitter_name=_none_if_empty(submitter_name),
+        submitter_team=_none_if_empty(submitter_team),
+        submitter_notes=_none_if_empty(submitter_notes),
     )
 
     logger.info(
@@ -247,18 +257,7 @@ async def create_job_from_zip(
         extracted.mapping_filename, extracted.workflow_filename, extracted.param_filename,
     )
 
-    queue: asyncio.Queue = asyncio.Queue()
-    _progress_queues[job_id] = queue
-
-    async def _run():
-        async for progress in orchestrator.run_pipeline(
-            job_id, extracted.mapping_filename or file.filename
-        ):
-            await queue.put(progress)
-        await queue.put(None)
-
-    task = asyncio.create_task(_run())
-    _active_tasks[job_id] = task
+    await _start_pipeline(job_id, effective_filename)
 
     return {
         "job_id":            job_id,

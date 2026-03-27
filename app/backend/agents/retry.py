@@ -36,6 +36,11 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def _should_abort(exc: Exception, attempt: int, max_attempts: int) -> bool:
+    """Return True if we should give up (non-retryable error or last attempt)."""
+    return not _is_retryable(exc) or attempt == max_attempts - 1
+
+
 async def claude_with_retry(
     call_fn,
     *,
@@ -55,20 +60,17 @@ async def claude_with_retry(
     Raises:
         The last exception if all attempts fail or the error is non-retryable.
     """
+    call_label = label if label else "call"
     for attempt in range(max_attempts):
         try:
             return await call_fn()
         except Exception as exc:
-            non_retryable = not _is_retryable(exc)
-            last_attempt   = attempt == max_attempts - 1
-
-            if non_retryable or last_attempt:
+            if _should_abort(exc, attempt, max_attempts):
                 raise
-
             delay = base_delay * (2 ** attempt) + random.uniform(0, 2)
             log.warning(
                 "claude_retry: %s — attempt %d/%d failed (%s: %s). Retrying in %.1fs.",
-                label or "call", attempt + 1, max_attempts,
+                call_label, attempt + 1, max_attempts,
                 type(exc).__name__, str(exc)[:120], delay,
             )
             await asyncio.sleep(delay)

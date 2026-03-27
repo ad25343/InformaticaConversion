@@ -71,6 +71,94 @@ class TestAgent(BaseAgent):
         return _generate_tests_impl(conversion_output, s2t, verification, graph)
 
 
+_UNMAPPED_STATUSES = frozenset(("Unmapped Target", "Unmapped Source"))
+
+
+def _collect_coverage_notes(
+    missing_fields: list[str],
+    fields_missing: int,
+    filter_checks: list,
+    filters_missing: int,
+) -> list[str]:
+    """Build warning notes for missing fields and filters."""
+    notes: list[str] = []
+    if missing_fields:
+        notes.append(
+            f"⚠️ {fields_missing} target field(s) not found in generated code: "
+            f"{', '.join(missing_fields)}. Review Step 7 output carefully."
+        )
+    if filters_missing > 0:
+        notes.append(
+            f"⚠️ {filters_missing} filter condition(s) may not be reflected in code: "
+            + "; ".join(c.filter_description for c in filter_checks if not c.covered)
+        )
+    return notes
+
+
+def _filter_mapped_records(s2t: dict) -> list:
+    """Return S2T records excluding unmapped sources and targets."""
+    return [r for r in s2t.get("records", []) if r.get("status") not in _UNMAPPED_STATUSES]
+
+
+def _field_coverage_pct(fields_covered: int, field_checks: list) -> float:
+    """Return coverage percentage, defaulting to 100.0 when there are no checks."""
+    return round(100 * fields_covered / len(field_checks), 1) if field_checks else 100.0
+
+
+def _missing_field_names(field_checks: list) -> list:
+    """Return list of target_field names that are not covered."""
+    return [c.target_field for c in field_checks if not c.covered]
+
+
+def _compute_field_stats(field_checks: list) -> tuple[int, int, list, float]:
+    """Return (fields_covered, fields_missing, missing_fields, coverage_pct)."""
+    fields_covered = sum(1 for c in field_checks if c.covered)
+    fields_missing = len(field_checks) - fields_covered
+    missing_fields = _missing_field_names(field_checks)
+    coverage_pct = _field_coverage_pct(fields_covered, field_checks)
+    return fields_covered, fields_missing, missing_fields, coverage_pct
+
+
+def _compute_filter_stats(filter_checks: list) -> tuple[int, int]:
+    """Return (filters_covered, filters_missing)."""
+    filters_covered = sum(1 for c in filter_checks if c.covered)
+    filters_missing = len(filter_checks) - filters_covered
+    return filters_covered, filters_missing
+
+
+def _get_s2t_records(s2t: dict) -> list:
+    """Return s2t records list, or empty list if s2t is falsy."""
+    return s2t.get("records", []) if s2t else []
+
+
+def _add_boundary_and_comparison_artifacts(
+    conversion_output: ConversionOutput,
+    s2t: dict,
+    graph: dict,
+    test_files: dict,
+    notes: list,
+) -> None:
+    """Add expression boundary tests and golden comparison script to test_files and notes."""
+    mapping_name = conversion_output.mapping_name or "mapping"
+    expr_tests, expr_notes = generate_expression_boundary_tests(
+        graph=graph,
+        mapping_name=mapping_name,
+        stack=conversion_output.target_stack,
+    )
+    test_files.update(expr_tests)
+    notes.extend(expr_notes)
+
+    test_files["tests/compare_golden.py"] = generate_comparison_script(
+        mapping_name=mapping_name,
+        s2t_records=_get_s2t_records(s2t),
+    )
+    notes.append(
+        "📊 compare_golden.py generated — run OUTSIDE the tool after capturing "
+        "Informatica output CSV and generated-code output CSV. "
+        "See docs/TESTING_GUIDE.md for instructions."
+    )
+
+
 def _generate_tests_impl(
     conversion_output: ConversionOutput,
     s2t: dict,
@@ -91,33 +179,18 @@ def _generate_tests_impl(
     graph : dict
         The parsed Informatica graph (for source filter attributes).
     """
-    stack = conversion_output.target_stack
-    files = conversion_output.files  # {filename: content}
+    stack  = conversion_output.target_stack
+    files  = conversion_output.files
+    mapped = _filter_mapped_records(s2t)
 
-    records = s2t.get("records", [])
-    mapped  = [r for r in records if r.get("status") not in
-               ("Unmapped Target", "Unmapped Source")]
-
-    # ── Discover the real structure of what was generated ─────────────────────
-    discovered = discover_generated_artifacts(files, stack)
-
-    # ── 1. Field coverage ─────────────────────────────────────────────────────
-    field_checks = check_field_coverage(mapped, files)
-
-    fields_covered = sum(1 for c in field_checks if c.covered)
-    fields_missing = len(field_checks) - fields_covered
-    missing_fields = [c.target_field for c in field_checks if not c.covered]
-    coverage_pct   = (round(100 * fields_covered / len(field_checks), 1)
-                      if field_checks else 100.0)
-
-    # ── 2. Filter coverage ────────────────────────────────────────────────────
+    discovered     = discover_generated_artifacts(files, stack)
+    field_checks   = check_field_coverage(mapped, files)
     source_filters = extract_source_filters(graph)
     filter_checks  = check_filter_coverage(source_filters, files)
 
-    filters_covered = sum(1 for c in filter_checks if c.covered)
-    filters_missing = len(filter_checks) - filters_covered
+    fields_covered, fields_missing, missing_fields, coverage_pct = _compute_field_stats(field_checks)
+    filters_covered, filters_missing = _compute_filter_stats(filter_checks)
 
-    # ── 3. Test file generation ───────────────────────────────────────────────
     test_files, notes = generate_tests_from_artifacts(
         discovered=discovered,
         files=files,
@@ -127,38 +200,8 @@ def _generate_tests_impl(
         stack=stack,
     )
 
-    # ── 4. Component A — Expression boundary tests (v2.13) ────────────────────
-    expr_tests, expr_notes = generate_expression_boundary_tests(
-        graph=graph,
-        mapping_name=conversion_output.mapping_name or "mapping",
-        stack=stack,
-    )
-    test_files.update(expr_tests)
-    notes.extend(expr_notes)
-
-    # ── 5. Component B — Golden CSV comparison script (v2.13) ─────────────────
-    s2t_records = s2t.get("records", []) if s2t else []
-    comparison_script = generate_comparison_script(
-        mapping_name=conversion_output.mapping_name or "mapping",
-        s2t_records=s2t_records,
-    )
-    test_files["tests/compare_golden.py"] = comparison_script
-    notes.append(
-        "📊 compare_golden.py generated — run OUTSIDE the tool after capturing "
-        "Informatica output CSV and generated-code output CSV. "
-        "See docs/TESTING_GUIDE.md for instructions."
-    )
-
-    if missing_fields:
-        notes.append(
-            f"⚠️ {fields_missing} target field(s) not found in generated code: "
-            f"{', '.join(missing_fields)}. Review Step 7 output carefully."
-        )
-    if filters_missing > 0:
-        notes.append(
-            f"⚠️ {filters_missing} filter condition(s) may not be reflected in code: "
-            + "; ".join(c.filter_description for c in filter_checks if not c.covered)
-        )
+    _add_boundary_and_comparison_artifacts(conversion_output, s2t, graph, test_files, notes)
+    notes.extend(_collect_coverage_notes(missing_fields, fields_missing, filter_checks, filters_missing))
 
     return TestReport(
         mapping_name=conversion_output.mapping_name or "",

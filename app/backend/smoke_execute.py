@@ -49,6 +49,54 @@ class SmokeResult:
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _file_bucket(name: str) -> str:
+    """Return 'py', 'sql', 'yml', or '' for an unrecognised extension."""
+    if name.endswith((".py", ".pyx")):
+        return "py"
+    if name.endswith(".sql"):
+        return "sql"
+    if name.endswith((".yml", ".yaml")) and name != "profiles.yml":
+        return "yml"
+    return ""
+
+
+def _partition_files(
+    files: dict[str, str],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Split *files* into (py_files, sql_files, yml_files) by extension."""
+    py_files:  dict[str, str] = {}
+    sql_files: dict[str, str] = {}
+    yml_files: dict[str, str] = {}
+    buckets = {"py": py_files, "sql": sql_files, "yml": yml_files}
+    for k, v in files.items():
+        bucket = _file_bucket(k)
+        if bucket:
+            buckets[bucket][k] = v
+    return py_files, sql_files, yml_files
+
+
+def _run_python_checks(py_files: dict[str, str]) -> list[SmokeResult]:
+    """Compile all Python/PySpark files via py_compile."""
+    return [_check_py_compile(fname, content) for fname, content in py_files.items()]
+
+
+def _run_dbt_checks(
+    sql_files: dict[str, str],
+    yml_files: dict[str, str],
+    run_dbt_parse: bool,
+) -> list[SmokeResult]:
+    """Run SQL structure checks and optional dbt parse on dbt SQL models."""
+    results = [_check_sql_structure(fname, content) for fname, content in sql_files.items()]
+    if run_dbt_parse:
+        results.extend(_check_dbt_parse(sql_files, yml_files))
+    return results
+
+
+def _run_yaml_checks(yml_files: dict[str, str]) -> list[SmokeResult]:
+    """Parse all YAML files for structural validity."""
+    return [_check_yaml(fname, content) for fname, content in yml_files.items()]
+
+
 def smoke_execute_files(
     files: dict[str, str],
     target_stack: TargetStack,
@@ -68,28 +116,14 @@ def smoke_execute_files(
     -------
     list[SmokeResult] — one entry per file checked; empty list if no checks apply.
     """
-    results: list[SmokeResult] = []
+    py_files, sql_files, yml_files = _partition_files(files)
 
-    py_files  = {k: v for k, v in files.items() if k.endswith((".py", ".pyx"))}
-    sql_files = {k: v for k, v in files.items() if k.endswith(".sql")}
-    yml_files = {k: v for k, v in files.items()
-                 if k.endswith((".yml", ".yaml")) and k != "profiles.yml"}
+    results: list[SmokeResult] = _run_python_checks(py_files)
 
-    # Python / PySpark files → py_compile
-    for fname, content in py_files.items():
-        results.append(_check_py_compile(fname, content))
-
-    # dbt SQL models → ast-parse the Jinja/SQL structure (and optionally dbt parse)
     if target_stack == TargetStack.DBT and sql_files:
-        for fname, content in sql_files.items():
-            results.append(_check_sql_structure(fname, content))
-        if run_dbt_parse:
-            results.extend(_check_dbt_parse(sql_files, yml_files))
+        results.extend(_run_dbt_checks(sql_files, yml_files, run_dbt_parse))
 
-    # YAML files → yaml.safe_load
-    for fname, content in yml_files.items():
-        results.append(_check_yaml(fname, content))
-
+    results.extend(_run_yaml_checks(yml_files))
     return results
 
 
@@ -169,6 +203,65 @@ def _check_yaml(fname: str, content: str) -> SmokeResult:
         return SmokeResult(fname, "yaml_load", False, str(e))
 
 
+_DBT_PROJECT_YML = textwrap.dedent("""\
+    name: smoke_test
+    version: '1.0.0'
+    config-version: 2
+    model-paths: ["models"]
+    profile: smoke_test
+""")
+
+_DBT_PROFILES_YML = textwrap.dedent("""\
+    smoke_test:
+      target: dev
+      outputs:
+        dev:
+          type: duckdb
+          path: ':memory:'
+          threads: 1
+""")
+
+
+def _dbt_is_available() -> bool:
+    """Return True if dbt is installed and callable; False otherwise."""
+    try:
+        subprocess.run(
+            ["dbt", "--version"],
+            capture_output=True, text=True, check=True, timeout=10,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _write_dbt_project(root: Path, sql_files: dict[str, str], yml_files: dict[str, str]) -> list[str]:
+    """Write minimal dbt project files; return list of SQL model stems written."""
+    (root / "dbt_project.yml").write_text(_DBT_PROJECT_YML)
+    (root / "profiles.yml").write_text(_DBT_PROFILES_YML)
+    models_dir = root / "models"
+    models_dir.mkdir()
+    written: list[str] = []
+    for fname, content in sql_files.items():
+        stem = Path(fname).name
+        (models_dir / stem).write_text(content)
+        written.append(stem)
+    for fname, content in yml_files.items():
+        (models_dir / Path(fname).name).write_text(content)
+    return written
+
+
+def _run_dbt_parse_proc(root: Path, written: list[str]) -> SmokeResult:
+    """Execute 'dbt parse' in *root* and return the corresponding SmokeResult."""
+    proc = subprocess.run(
+        ["dbt", "parse", "--project-dir", str(root), "--profiles-dir", str(root)],
+        capture_output=True, text=True, timeout=60,
+    )
+    label = f"{len(written)} model(s)"
+    if proc.returncode == 0:
+        return SmokeResult(label, "dbt_parse", True, f"dbt parse succeeded: {', '.join(written)}")
+    return SmokeResult(label, "dbt_parse", False, (proc.stderr or proc.stdout)[:500])
+
+
 def _check_dbt_parse(
     sql_files: dict[str, str],
     yml_files: dict[str, str],
@@ -180,91 +273,36 @@ def _check_dbt_parse(
     Creates a minimal dbt project structure so 'dbt parse' can work
     without a real profiles.yml or database connection.
     """
-    results: list[SmokeResult] = []
-
-    # Check dbt is available
-    try:
-        subprocess.run(
-            ["dbt", "--version"],
-            capture_output=True, text=True, check=True, timeout=10
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        results.append(SmokeResult(
-            "dbt_parse", "dbt_parse", True,
-            "dbt not installed — skipping dbt parse check"
-        ))
-        return results
+    if not _dbt_is_available():
+        return [SmokeResult("dbt_parse", "dbt_parse", True, "dbt not installed — skipping dbt parse check")]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-
-        # Minimal dbt_project.yml
-        (root / "dbt_project.yml").write_text(textwrap.dedent("""\
-            name: smoke_test
-            version: '1.0.0'
-            config-version: 2
-            model-paths: ["models"]
-            profile: smoke_test
-        """))
-
-        # Minimal profiles.yml (uses DuckDB via dbt-duckdb if available,
-        # otherwise falls back to empty — dbt parse doesn't need a live DB)
-        (root / "profiles.yml").write_text(textwrap.dedent("""\
-            smoke_test:
-              target: dev
-              outputs:
-                dev:
-                  type: duckdb
-                  path: ':memory:'
-                  threads: 1
-        """))
-
-        models_dir = root / "models"
-        models_dir.mkdir()
-
-        # Write SQL models (use basename only — dbt doesn't allow nested paths in parse)
-        written: list[str] = []
-        for fname, content in sql_files.items():
-            stem = Path(fname).name
-            (models_dir / stem).write_text(content)
-            written.append(stem)
-
-        # Write schema YAMLs
-        for fname, content in yml_files.items():
-            (models_dir / Path(fname).name).write_text(content)
-
-        proc = subprocess.run(
-            ["dbt", "parse", "--project-dir", str(root), "--profiles-dir", str(root)],
-            capture_output=True, text=True, timeout=60
-        )
-
-        if proc.returncode == 0:
-            results.append(SmokeResult(
-                f"{len(written)} model(s)", "dbt_parse", True,
-                f"dbt parse succeeded: {', '.join(written)}"
-            ))
-        else:
-            results.append(SmokeResult(
-                f"{len(written)} model(s)", "dbt_parse", False,
-                (proc.stderr or proc.stdout)[:500]
-            ))
-
-    return results
+        written = _write_dbt_project(root, sql_files, yml_files)
+        return [_run_dbt_parse_proc(root, written)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Convenience: human-readable summary
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _format_result_line(r: SmokeResult) -> str:
+    """Format one SmokeResult as a single display line."""
+    icon   = "✅" if r.passed else "❌"
+    detail = f"  {r.detail}" if r.detail else ""
+    return f"  {icon} [{r.tool}] {r.filename}{detail}"
+
+
+def _count_passed(results: list[SmokeResult]) -> int:
+    """Return the number of passing results."""
+    return sum(r.passed for r in results)
+
+
 def format_smoke_results(results: list[SmokeResult]) -> str:
     """Return a plain-text summary suitable for logging or test output."""
     if not results:
         return "No smoke checks applicable."
-    lines = []
-    passed = sum(1 for r in results if r.passed)
-    lines.append(f"Smoke execution: {passed}/{len(results)} checks passed")
-    for r in results:
-        icon = "✅" if r.passed else "❌"
-        detail = f"  {r.detail}" if r.detail else ""
-        lines.append(f"  {icon} [{r.tool}] {r.filename}{detail}")
+    passed = _count_passed(results)
+    lines  = [f"Smoke execution: {passed}/{len(results)} checks passed"]
+    lines.extend(_format_result_line(r) for r in results)
     return "\n".join(lines)

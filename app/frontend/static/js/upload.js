@@ -71,19 +71,12 @@ function setUploadMode(mode) {
   uploadMode = mode;
   document.getElementById('panelFiles').style.display = mode === 'files' ? '' : 'none';
   document.getElementById('panelBatch').style.display = mode === 'batch' ? '' : 'none';
-  document.getElementById('panelNewMapping').style.display = mode === 'new_mapping' ? '' : 'none';
   const tabFiles = document.getElementById('tabFiles');
   const tabBatch = document.getElementById('tabBatch');
-  const tabNewMapping = document.getElementById('tabNewMapping');
   tabFiles.className = mode === 'files' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   tabBatch.className = mode === 'batch' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-  tabNewMapping.className = mode === 'new_mapping' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
   if (mode === 'files')  startBtn.disabled = !selectedFile;
   if (mode === 'batch')  startBtn.disabled = !selectedBatchFile;
-  if (mode === 'new_mapping') {
-    startBtn.disabled = true;
-    loadPatternsForTab();
-  }
   // Update tips box based on mode
   const tips = document.getElementById('submitTipsBox');
   if (!tips) return;
@@ -97,10 +90,6 @@ function setUploadMode(mode) {
       • <strong>Select ZIP</strong> — or supply your own ZIP with one subfolder per mapping.<br/>
       • Up to 3 jobs run concurrently. Large batches are queued automatically.<br/>
       • Track each child job individually in Job History once submitted.`,
-    new_mapping: `<strong style="color:var(--text)">💡 New Mapping tips:</strong><br/>
-      • Pick a <strong>pattern</strong> — the YAML template is pre-filled with the required fields.<br/>
-      • Edit the YAML to match your source and target connections.<br/>
-      • Click <strong>Generate Informatica XML</strong> to produce a PowerCenter-compatible XML export.`,
   };
   tips.innerHTML = tipsMap[mode] || tipsMap.files;
 }

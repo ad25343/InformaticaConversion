@@ -64,6 +64,59 @@ class ZipParseResult:
         self.warnings: list[str] = []
 
 
+def _is_metadata_entry(name: str) -> bool:
+    """Return True for macOS / Windows metadata entries that should be skipped."""
+    lower = name.lower()
+    return (lower.startswith("__macosx/") or
+            lower.startswith(".") or
+            lower.endswith(".ds_store"))
+
+
+# Maps FileType to (content_attr, filename_attr, human_label)
+_FILE_TYPE_SLOTS: dict[FileType, tuple[str, str, str]] = {
+    FileType.MAPPING:   ("mapping_xml",    "mapping_filename",  "Mapping XML"),
+    FileType.WORKFLOW:  ("workflow_xml",   "workflow_filename", "Workflow XML"),
+    FileType.PARAMETER: ("parameter_file", "param_filename",    "parameter"),
+}
+
+
+def _store_entry_in_result(
+    result: ZipParseResult, detected: FileType, name: str, text: str,
+) -> None:
+    """Store *text* for *detected* type if slot empty; append duplicate warning if not."""
+    content_attr, name_attr, label = _FILE_TYPE_SLOTS[detected]
+    existing = getattr(result, name_attr)
+    if existing is not None:
+        result.warnings.append(
+            f"Multiple {label} files found — using first detected "
+            f"('{existing}'). Ignoring '{name}'."
+        )
+        log.warning("Duplicate %s entry ignored: %s", label.lower(), name)
+    else:
+        setattr(result, content_attr, text)
+        setattr(result, name_attr, name)
+
+
+def _apply_single_entry_to_result(result: ZipParseResult, name: str, text: str) -> None:
+    """Classify one decoded text entry and store it in *result* (in-place)."""
+    detected = _detect_type(text)
+    log.debug("Entry '%s' detected as %s", name, detected.value)
+    if detected in _FILE_TYPE_SLOTS:
+        _store_entry_in_result(result, detected, name, text)
+    else:
+        log.debug("Unclassified entry skipped: %s", name)
+        result.skipped.append(name)
+
+
+def _decode_zip_entry(name: str, content_bytes: bytes) -> Optional[str]:
+    """Decode bytes to UTF-8 string; return None and log on failure."""
+    try:
+        return content_bytes.decode("utf-8", errors="replace")
+    except Exception:
+        log.warning("Could not decode entry as UTF-8, skipping: %s", name)
+        return None
+
+
 def extract_informatica_zip(zip_bytes: bytes) -> ZipParseResult:
     """
     Safely extract and classify files from a ZIP archive.
@@ -89,68 +142,21 @@ def extract_informatica_zip(zip_bytes: bytes) -> ZipParseResult:
     fastapi.HTTPException (413) — if total extracted bytes exceed the ZIP bomb limit
         (raised inside safe_zip_extract via the security module)
     """
-    # ── 1. Extract safely (Zip Slip + Zip Bomb + symlink protection) ─────────
     extracted: dict[str, bytes] = safe_zip_extract(zip_bytes)
     log.info("ZIP extracted: %d entries", len(extracted))
 
     result = ZipParseResult()
 
-    # ── 2. Classify each entry by its content ────────────────────────────────
     for name, content_bytes in extracted.items():
-        # Skip macOS / Windows metadata files
-        lower = name.lower()
-        if lower.startswith("__macosx/") or lower.startswith(".") or lower.endswith(".ds_store"):
+        if _is_metadata_entry(name):
             log.debug("Skipping metadata entry: %s", name)
             continue
-
-        try:
-            text = content_bytes.decode("utf-8", errors="replace")
-        except Exception:
-            log.warning("Could not decode entry as UTF-8, skipping: %s", name)
+        text = _decode_zip_entry(name, content_bytes)
+        if text is None:
             result.skipped.append(name)
             continue
+        _apply_single_entry_to_result(result, name, text)
 
-        detected = _detect_type(text)
-        log.debug("Entry '%s' detected as %s", name, detected.value)
-
-        if detected == FileType.MAPPING:
-            if result.mapping_xml is not None:
-                result.warnings.append(
-                    f"Multiple Mapping XML files found — using first detected "
-                    f"('{result.mapping_filename}'). Ignoring '{name}'."
-                )
-                log.warning("Duplicate mapping entry ignored: %s", name)
-            else:
-                result.mapping_xml = text
-                result.mapping_filename = name
-
-        elif detected == FileType.WORKFLOW:
-            if result.workflow_xml is not None:
-                result.warnings.append(
-                    f"Multiple Workflow XML files found — using first detected "
-                    f"('{result.workflow_filename}'). Ignoring '{name}'."
-                )
-                log.warning("Duplicate workflow entry ignored: %s", name)
-            else:
-                result.workflow_xml = text
-                result.workflow_filename = name
-
-        elif detected == FileType.PARAMETER:
-            if result.parameter_file is not None:
-                result.warnings.append(
-                    f"Multiple parameter files found — using first detected "
-                    f"('{result.param_filename}'). Ignoring '{name}'."
-                )
-                log.warning("Duplicate parameter entry ignored: %s", name)
-            else:
-                result.parameter_file = text
-                result.param_filename = name
-
-        else:
-            log.debug("Unclassified entry skipped: %s", name)
-            result.skipped.append(name)
-
-    # ── 3. Sanity check ──────────────────────────────────────────────────────
     if result.mapping_xml is None:
         raise ZipExtractionError(
             "No Informatica Mapping XML (<MAPPING> element) found inside the ZIP. "
@@ -164,8 +170,156 @@ def extract_informatica_zip(zip_bytes: bytes) -> ZipParseResult:
         result.param_filename,
         len(result.skipped),
     )
-
     return result
+
+
+def _assign_to_folder(
+    name: str,
+    content_bytes: bytes,
+    folders: dict[str, dict[str, bytes]],
+    top_level_files: list[str],
+) -> None:
+    """Place one ZIP entry into *folders* or *top_level_files* based on its path."""
+    parts = name.split("/")
+    if len(parts) < 2 or parts[0] == "":
+        top_level_files.append(name)
+        log.debug("Ignoring top-level (non-folder) entry: %s", name)
+        return
+    folder   = parts[0]
+    rel_path = "/".join(parts[1:])
+    if rel_path:
+        folders.setdefault(folder, {})[rel_path] = content_bytes
+
+
+def _group_by_folder(
+    extracted: dict[str, bytes],
+) -> tuple[dict[str, dict[str, bytes]], list[str]]:
+    """Group extracted ZIP entries by top-level folder; return (folders, top_level_files)."""
+    folders: dict[str, dict[str, bytes]] = {}
+    top_level_files: list[str] = []
+    for name, content_bytes in extracted.items():
+        if _is_metadata_entry(name):
+            log.debug("Skipping metadata entry: %s", name)
+            continue
+        _assign_to_folder(name.replace("\\", "/"), content_bytes, folders, top_level_files)
+    return folders, top_level_files
+
+
+def _classify_folder_entries(
+    folder_name: str,
+    entries: dict[str, bytes],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], list[str]]:
+    """Decode and bucket entries by file type. Returns (mapping_xmls, workflow_xmls, params, skipped)."""
+    mapping_xmls:    dict[str, str] = {}
+    workflow_xmls:   dict[str, str] = {}
+    parameter_files: dict[str, str] = {}
+    skipped:         list[str]      = []
+
+    _buckets = {
+        FileType.MAPPING:   mapping_xmls,
+        FileType.WORKFLOW:  workflow_xmls,
+        FileType.PARAMETER: parameter_files,
+    }
+
+    for rel_path, content_bytes in sorted(entries.items()):
+        text = _decode_zip_entry(f"{folder_name}/{rel_path}", content_bytes)
+        if text is None:
+            skipped.append(f"{folder_name}/{rel_path}")
+            continue
+        detected = _detect_type(text)
+        log.debug("Batch entry '%s/%s' detected as %s", folder_name, rel_path, detected.value)
+        bucket = _buckets.get(detected)
+        if bucket is not None:
+            bucket[rel_path] = text
+        else:
+            skipped.append(f"{folder_name}/{rel_path}")
+    return mapping_xmls, workflow_xmls, parameter_files, skipped
+
+
+def _pick_first_with_warning(
+    items: dict[str, str],
+    folder_name: str,
+    label: str,
+    content_attr: str,
+    name_attr: str,
+    result: "ZipParseResult",
+) -> None:
+    """Store first item of *items* on *result*; append warnings for extras."""
+    for idx, (rel_path, text) in enumerate(items.items()):
+        if idx == 0:
+            setattr(result, content_attr, text)
+            setattr(result, name_attr, f"{folder_name}/{rel_path}")
+        else:
+            first = getattr(result, name_attr)
+            result.warnings.append(
+                f"Folder '{folder_name}': multiple {label} found — "
+                f"using '{first}', ignoring '{rel_path}'."
+            )
+
+
+def _process_standard_folder(
+    folder_name: str,
+    mapping_xmls: dict[str, str],
+    workflow_xmls: dict[str, str],
+    parameter_files: dict[str, str],
+    skipped_in_folder: list[str],
+) -> "ZipParseResult":
+    """Build a ZipParseResult for a standard one-mapping-per-folder structure."""
+    result = ZipParseResult()
+    result.warnings = []
+    result.skipped  = list(skipped_in_folder)
+    _pick_first_with_warning(mapping_xmls,    folder_name, "Mapping XMLs",    "mapping_xml",    "mapping_filename",  result)
+    _pick_first_with_warning(workflow_xmls,   folder_name, "Workflow XMLs",   "workflow_xml",   "workflow_filename", result)
+    _pick_first_with_warning(parameter_files, folder_name, "parameter files", "parameter_file", "param_filename",   result)
+    log.info(
+        "Batch folder '%s': mapping=%s workflow=%s params=%s",
+        folder_name, result.mapping_filename, result.workflow_filename, result.param_filename,
+    )
+    return result
+
+
+def _process_flat_folder(
+    folder_name: str, mapping_xmls: dict[str, str],
+) -> list["ZipParseResult"]:
+    """Expand a flat folder of mapping XMLs into one ZipParseResult per file."""
+    log.info(
+        "Batch folder '%s': flat-folder mode — %d mapping XML(s) → %d job(s)",
+        folder_name, len(mapping_xmls), len(mapping_xmls),
+    )
+    results = []
+    for rel_path, text in mapping_xmls.items():
+        r = ZipParseResult()
+        r.mapping_xml      = text
+        r.mapping_filename = f"{folder_name}/{rel_path}"
+        r.warnings         = []
+        r.skipped          = []
+        results.append(r)
+    return results
+
+
+def _is_flat_folder(
+    mapping_xmls: dict, workflow_xmls: dict, parameter_files: dict,
+) -> bool:
+    """Return True when folder has multiple mappings and no workflow/params (flat mode)."""
+    return len(mapping_xmls) > 1 and not workflow_xmls and not parameter_files
+
+
+def _process_folder(
+    folder_name: str,
+    entries: dict[str, bytes],
+) -> list["ZipParseResult"]:
+    """Classify one folder's entries and return the ZipParseResult(s) for it."""
+    mapping_xmls, workflow_xmls, parameter_files, skipped_in_folder = (
+        _classify_folder_entries(folder_name, entries)
+    )
+    if not mapping_xmls:
+        log.warning("Batch ZIP: folder '%s' has no Mapping XML — skipping", folder_name)
+        return []
+    if _is_flat_folder(mapping_xmls, workflow_xmls, parameter_files):
+        return _process_flat_folder(folder_name, mapping_xmls)
+    return [_process_standard_folder(
+        folder_name, mapping_xmls, workflow_xmls, parameter_files, skipped_in_folder
+    )]
 
 
 def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
@@ -206,38 +360,10 @@ def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
     ZipExtractionError  — if the archive fails security checks or no valid
                           mapping folders are found at all.
     """
-    # ── 1. Extract safely (Zip Slip + Zip Bomb + symlink protection) ─────────
     extracted: dict[str, bytes] = safe_zip_extract(zip_bytes)
     log.info("Batch ZIP extracted: %d entries", len(extracted))
 
-    # ── 2. Group entries by top-level folder ─────────────────────────────────
-    # key: folder name (str), value: dict[relative_path -> bytes]
-    folders: dict[str, dict[str, bytes]] = {}
-    top_level_files: list[str] = []
-
-    for name, content_bytes in extracted.items():
-        # Skip macOS / Windows metadata
-        lower = name.lower()
-        if lower.startswith("__macosx/") or lower.startswith(".") or lower.endswith(".ds_store"):
-            log.debug("Skipping metadata entry: %s", name)
-            continue
-
-        # Normalise path separators to forward-slash
-        name = name.replace("\\", "/")
-        parts = name.split("/")
-
-        if len(parts) < 2 or parts[0] == "":
-            # Top-level file — not inside any subfolder
-            top_level_files.append(name)
-            log.debug("Ignoring top-level (non-folder) entry: %s", name)
-            continue
-
-        folder = parts[0]
-        rel_path = "/".join(parts[1:])
-        if not rel_path:
-            continue  # directory entry only
-
-        folders.setdefault(folder, {})[rel_path] = content_bytes
+    folders, top_level_files = _group_by_folder(extracted)
 
     if top_level_files:
         log.warning(
@@ -251,107 +377,9 @@ def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
             "Each mapping must be in its own subfolder (e.g. mapping1/mapping.xml)."
         )
 
-    # ── 3. Classify each folder ───────────────────────────────────────────────
     results: list[ZipParseResult] = []
-
     for folder_name in sorted(folders.keys()):
-        entries = folders[folder_name]
-
-        # First pass: decode everything and bucket by file type.
-        mapping_xmls:   dict[str, str] = {}   # rel_path → text
-        workflow_xmls:  dict[str, str] = {}
-        parameter_files: dict[str, str] = {}
-        skipped_in_folder: list[str] = []
-
-        for rel_path, content_bytes in sorted(entries.items()):
-            try:
-                text = content_bytes.decode("utf-8", errors="replace")
-            except Exception:
-                log.warning("Could not decode '%s/%s' as UTF-8, skipping", folder_name, rel_path)
-                skipped_in_folder.append(f"{folder_name}/{rel_path}")
-                continue
-
-            detected = _detect_type(text)
-            log.debug("Batch entry '%s/%s' detected as %s", folder_name, rel_path, detected.value)
-
-            if detected == FileType.MAPPING:
-                mapping_xmls[rel_path] = text
-            elif detected == FileType.WORKFLOW:
-                workflow_xmls[rel_path] = text
-            elif detected == FileType.PARAMETER:
-                parameter_files[rel_path] = text
-            else:
-                skipped_in_folder.append(f"{folder_name}/{rel_path}")
-
-        if not mapping_xmls:
-            log.warning("Batch ZIP: folder '%s' has no Mapping XML — skipping", folder_name)
-            continue
-
-        # ── Flat-folder mode ────────────────────────────────────────────────
-        # When a folder contains MULTIPLE mapping XMLs and no workflow/params
-        # files (i.e. the user dropped a flat directory of XMLs rather than
-        # one subfolder-per-mapping), expand each XML into its own job.
-        # This is the common case when selecting a folder via the browser's
-        # webkitdirectory picker.
-        if len(mapping_xmls) > 1 and not workflow_xmls and not parameter_files:
-            log.info(
-                "Batch folder '%s': flat-folder mode — %d mapping XML(s) → %d job(s)",
-                folder_name, len(mapping_xmls), len(mapping_xmls),
-            )
-            for rel_path, text in mapping_xmls.items():
-                r = ZipParseResult()
-                r.mapping_xml      = text
-                r.mapping_filename = f"{folder_name}/{rel_path}"
-                r.warnings         = []
-                r.skipped          = []
-                results.append(r)
-            continue
-
-        # ── Standard one-mapping-per-folder mode ────────────────────────────
-        folder_result = ZipParseResult()
-        folder_result.warnings = []
-        folder_result.skipped  = list(skipped_in_folder)
-
-        # Pick the first (alphabetically) mapping XML; warn about extras.
-        for idx, (rel_path, text) in enumerate(mapping_xmls.items()):
-            if idx == 0:
-                folder_result.mapping_xml      = text
-                folder_result.mapping_filename = f"{folder_name}/{rel_path}"
-            else:
-                folder_result.warnings.append(
-                    f"Folder '{folder_name}': multiple Mapping XMLs found — "
-                    f"using '{folder_result.mapping_filename}', ignoring '{rel_path}'."
-                )
-
-        # Pick first workflow / parameter file; warn about extras.
-        for idx, (rel_path, text) in enumerate(workflow_xmls.items()):
-            if idx == 0:
-                folder_result.workflow_xml      = text
-                folder_result.workflow_filename = f"{folder_name}/{rel_path}"
-            else:
-                folder_result.warnings.append(
-                    f"Folder '{folder_name}': multiple Workflow XMLs found — "
-                    f"using '{folder_result.workflow_filename}', ignoring '{rel_path}'."
-                )
-
-        for idx, (rel_path, text) in enumerate(parameter_files.items()):
-            if idx == 0:
-                folder_result.parameter_file = text
-                folder_result.param_filename = f"{folder_name}/{rel_path}"
-            else:
-                folder_result.warnings.append(
-                    f"Folder '{folder_name}': multiple parameter files found — "
-                    f"using '{folder_result.param_filename}', ignoring '{rel_path}'."
-                )
-
-        log.info(
-            "Batch folder '%s': mapping=%s workflow=%s params=%s",
-            folder_name,
-            folder_result.mapping_filename,
-            folder_result.workflow_filename,
-            folder_result.param_filename,
-        )
-        results.append(folder_result)
+        results.extend(_process_folder(folder_name, folders[folder_name]))
 
     if not results:
         raise ZipExtractionError(

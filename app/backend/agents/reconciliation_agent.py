@@ -36,6 +36,16 @@ from ..models.schemas import (
 )
 
 
+def _resolve_source_tables(
+    source_tables: Optional[list[str]],
+    parse_report: ParseReport,
+) -> list[str]:
+    """Return source_tables if provided, otherwise derive from parse_report."""
+    if source_tables is None:
+        return list(parse_report.mapping_names) + _extract_source_qualifiers(parse_report)
+    return source_tables
+
+
 def generate_reconciliation_report(
     parse_report: ParseReport,
     conversion_output: ConversionOutput,
@@ -65,68 +75,23 @@ def generate_reconciliation_report(
     ReconciliationReport
     """
     mapping_name = conversion_output.mapping_name
-    all_code     = _combined_code(conversion_output.files)
-    all_code_low = all_code.lower()
+    all_code_low = _combined_code(conversion_output.files).lower()
 
     mismatched:   list[dict] = []
     verified:     int        = 0
     total_checks: int        = 0
 
-    # ── 1. Target field coverage ──────────────────────────────────────────
-    field_issues: list[str] = []
+    v, t, m = _check_field_coverage_items(s2t_field_list or [], all_code_low)
+    verified += v; total_checks += t; mismatched.extend(m)
 
-    if s2t_field_list:
-        for field in s2t_field_list:
-            total_checks += 1
-            # Case-insensitive search — field names may appear as col("FIELD"),
-            # df["FIELD"], or just FIELD in SQL SELECT
-            if field.lower() in all_code_low:
-                verified += 1
-            else:
-                field_issues.append(field)
-                mismatched.append({
-                    "type":    "TARGET_FIELD",
-                    "field":   field,
-                    "detail":  f"Target field '{field}' not found in any generated file.",
-                })
+    v, t, m = _check_source_table_coverage(
+        _resolve_source_tables(source_tables, parse_report), all_code_low,
+    )
+    verified += v; total_checks += t; mismatched.extend(m)
 
-    # ── 2. Source table / qualifier coverage ──────────────────────────────
-    if source_tables is None:
-        # Extract from objects_found: keys that sound like source objects
-        source_tables = [
-            name for name in parse_report.mapping_names
-        ] + _extract_source_qualifiers(parse_report)
+    v, t, m = _check_expression_coverage(documented_expressions or [], all_code_low)
+    verified += v; total_checks += t; mismatched.extend(m)
 
-    for table in source_tables:
-        if not table:
-            continue
-        total_checks += 1
-        if table.lower() in all_code_low:
-            verified += 1
-        else:
-            mismatched.append({
-                "type":   "SOURCE_TABLE",
-                "field":  table,
-                "detail": f"Source object '{table}' not referenced in any generated file.",
-            })
-
-    # ── 3. Expression / business rule coverage ────────────────────────────
-    if documented_expressions:
-        for expr in documented_expressions:
-            if not expr.strip():
-                continue
-            total_checks += 1
-            if expr.lower() in all_code_low:
-                verified += 1
-            else:
-                mismatched.append({
-                    "type":   "EXPRESSION",
-                    "field":  expr,
-                    "detail": f"Expression '{expr}' not found in generated code — "
-                              "business rule may not be implemented.",
-                })
-
-    # ── 4. Stub completeness check ────────────────────────────────────────
     stub_files = _detect_stub_files(conversion_output.files)
     if stub_files:
         mismatched.append({
@@ -136,32 +101,8 @@ def generate_reconciliation_report(
                       "Manual completion required.",
         })
 
-    # ── Compute match_rate ────────────────────────────────────────────────
-    if total_checks > 0:
-        match_rate = round((verified / total_checks) * 100, 1)
-    else:
-        match_rate = 100.0  # nothing to check → structurally clean
-
-    # ── Determine final status ────────────────────────────────────────────
-    if match_rate == 100.0 and not stub_files:
-        final_status = "RECONCILED"
-        root_cause   = None
-        resolution   = None
-    elif match_rate >= 80.0:
-        final_status = "PARTIAL"
-        root_cause   = _describe_root_cause(mismatched)
-        resolution   = (
-            "Review mismatched fields above. "
-            "Some target fields or source references may require manual mapping or renaming."
-        )
-    else:
-        final_status = "PENDING_EXECUTION"
-        root_cause   = _describe_root_cause(mismatched)
-        resolution   = (
-            "Significant structural gaps detected. "
-            "Re-review the conversion output against the original mapping documentation "
-            "before executing the generated code."
-        )
+    match_rate = round((verified / total_checks) * 100, 1) if total_checks > 0 else 100.0
+    final_status, root_cause, resolution = _determine_status(match_rate, stub_files, mismatched)
 
     return ReconciliationReport(
         mapping_name=mapping_name,
@@ -169,13 +110,97 @@ def generate_reconciliation_report(
             f"Structural reconciliation of {len(conversion_output.files)} generated file(s) "
             f"against mapping '{mapping_name}'"
         ),
-        informatica_rows=None,    # requires live execution
-        converted_rows=None,      # requires live execution
+        informatica_rows=None,
+        converted_rows=None,
         match_rate=match_rate,
         mismatched_fields=mismatched,
         root_cause=root_cause,
         resolution=resolution,
         final_status=final_status,
+    )
+
+
+def _check_field_coverage_items(
+    fields: list[str],
+    all_code_low: str,
+) -> tuple[int, int, list[dict]]:
+    """Check target field coverage. Returns (verified, total, mismatched)."""
+    mismatched: list[dict] = []
+    verified = 0
+    for field in fields:
+        if field.lower() in all_code_low:
+            verified += 1
+        else:
+            mismatched.append({
+                "type":   "TARGET_FIELD",
+                "field":  field,
+                "detail": f"Target field '{field}' not found in any generated file.",
+            })
+    return verified, len(fields), mismatched
+
+
+def _check_source_table_coverage(
+    source_tables: list[str],
+    all_code_low: str,
+) -> tuple[int, int, list[dict]]:
+    """Check source table/qualifier coverage. Returns (verified, total, mismatched)."""
+    non_empty = [t for t in source_tables if t]
+    mismatched: list[dict] = []
+    verified = 0
+    for table in non_empty:
+        if table.lower() in all_code_low:
+            verified += 1
+        else:
+            mismatched.append({
+                "type":   "SOURCE_TABLE",
+                "field":  table,
+                "detail": f"Source object '{table}' not referenced in any generated file.",
+            })
+    return verified, len(non_empty), mismatched
+
+
+def _check_expression_coverage(
+    expressions: list[str],
+    all_code_low: str,
+) -> tuple[int, int, list[dict]]:
+    """Check documented expression coverage. Returns (verified, total, mismatched)."""
+    non_empty = [e for e in expressions if e.strip()]
+    mismatched: list[dict] = []
+    verified = 0
+    for expr in non_empty:
+        if expr.lower() in all_code_low:
+            verified += 1
+        else:
+            mismatched.append({
+                "type":   "EXPRESSION",
+                "field":  expr,
+                "detail": f"Expression '{expr}' not found in generated code — "
+                          "business rule may not be implemented.",
+            })
+    return verified, len(non_empty), mismatched
+
+
+def _determine_status(
+    match_rate: float,
+    stub_files: list[str],
+    mismatched: list[dict],
+) -> tuple[str, Optional[str], Optional[str]]:
+    """Return (final_status, root_cause, resolution) based on match_rate."""
+    if match_rate == 100.0 and not stub_files:
+        return "RECONCILED", None, None
+    if match_rate >= 80.0:
+        return (
+            "PARTIAL",
+            _describe_root_cause(mismatched),
+            "Review mismatched fields above. "
+            "Some target fields or source references may require manual mapping or renaming.",
+        )
+    return (
+        "PENDING_EXECUTION",
+        _describe_root_cause(mismatched),
+        "Significant structural gaps detected. "
+        "Re-review the conversion output against the original mapping documentation "
+        "before executing the generated code.",
     )
 
 
@@ -219,20 +244,60 @@ def _detect_stub_files(files: dict[str, str]) -> list[str]:
     Return filenames where >60% of code lines are TODO/FIXME/STUB markers.
     Mirrors the logic in _validate_conversion_files for consistency.
     """
-    stubs = []
-    for fname, content in files.items():
-        stripped = content.strip()
-        if not stripped or len(stripped) > 150_000:
-            continue
-        lines = [l.strip() for l in stripped.splitlines() if l.strip()]
-        code_lines = [
-            l for l in lines
-            if l and not l.startswith("#") and not l.startswith('"""') and not l.startswith("'''")
-        ]
-        todo_lines = [l for l in lines if "TODO" in l.upper() or "FIXME" in l.upper() or "STUB" in l.upper()]
-        if code_lines and len(todo_lines) / max(len(code_lines), 1) > 0.6:
-            stubs.append(fname)
-    return stubs
+    return [
+        fname for fname, content in files.items()
+        if _is_stub_file(content)
+    ]
+
+
+def _non_empty_lines(stripped: str) -> list[str]:
+    """Return stripped non-empty lines from content."""
+    return [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+
+
+def _count_code_and_todo(lines: list[str]) -> tuple[int, int]:
+    """Return (code_line_count, todo_line_count) for the given lines."""
+    code_count = sum(1 for ln in lines if _is_code_line(ln))
+    todo_count = sum(1 for ln in lines if _is_todo_line(ln))
+    return code_count, todo_count
+
+
+def _stub_ratio(lines: list[str]) -> float:
+    """Return the ratio of TODO/FIXME/STUB lines to code lines."""
+    code_count, todo_count = _count_code_and_todo(lines)
+    if not code_count:
+        return 0.0
+    return todo_count / code_count
+
+
+def _is_stub_file(content: str) -> bool:
+    """Return True if >60% of code lines in content are TODO/FIXME/STUB markers."""
+    stripped = content.strip()
+    if not stripped:
+        return False
+    if len(stripped) > 150_000:
+        return False
+    lines = _non_empty_lines(stripped)
+    return _stub_ratio(lines) > 0.6
+
+
+def _is_code_line(line: str) -> bool:
+    """Return True if line is a non-comment code line."""
+    return bool(line) and not line.startswith("#") and not line.startswith('"""') and not line.startswith("'''")
+
+
+def _is_todo_line(line: str) -> bool:
+    """Return True if line contains a TODO/FIXME/STUB marker."""
+    upper = line.upper()
+    return "TODO" in upper or "FIXME" in upper or "STUB" in upper
+
+
+_ROOT_CAUSE_MESSAGES: dict[str, str] = {
+    "TARGET_FIELD":       "{n} target field(s) not found in generated code",
+    "SOURCE_TABLE":       "{n} source object(s) not referenced",
+    "EXPRESSION":         "{n} business expression(s) missing",
+    "STUB_COMPLETENESS":  "One or more files are predominantly TODO stubs",
+}
 
 
 def _describe_root_cause(mismatched: list[dict]) -> str:
@@ -241,14 +306,9 @@ def _describe_root_cause(mismatched: list[dict]) -> str:
         t = m.get("type", "UNKNOWN")
         type_counts[t] = type_counts.get(t, 0) + 1
 
-    parts = []
-    if type_counts.get("TARGET_FIELD"):
-        parts.append(f"{type_counts['TARGET_FIELD']} target field(s) not found in generated code")
-    if type_counts.get("SOURCE_TABLE"):
-        parts.append(f"{type_counts['SOURCE_TABLE']} source object(s) not referenced")
-    if type_counts.get("EXPRESSION"):
-        parts.append(f"{type_counts['EXPRESSION']} business expression(s) missing")
-    if type_counts.get("STUB_COMPLETENESS"):
-        parts.append("One or more files are predominantly TODO stubs")
-
+    parts = [
+        _ROOT_CAUSE_MESSAGES[k].format(n=n)
+        for k, n in type_counts.items()
+        if k in _ROOT_CAUSE_MESSAGES
+    ]
     return "; ".join(parts) if parts else "Unknown structural mismatch"

@@ -5,21 +5,113 @@ Batch sub-router: batch upload, retrieval, deletion, and startup recovery.
 """
 from __future__ import annotations
 import asyncio
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form
 
 from ._helpers import (
     db, logger, orchestrator, jobs_limiter,
     _active_tasks, _progress_queues, _batch_job_ids,
-    _batch_semaphore, _BATCH_CONCURRENCY, _GATE_WAITING_STATUSES,
+    _batch_semaphore, _GATE_WAITING_STATUSES,
     _resume_batch_job, _compute_batch_status,
     validate_upload_size, ZipExtractionError, extract_batch_zip,
     JobStatus,
-    s2t_excel_path,
+    _normalize_pipeline_mode,
+    _build_mappings_payload,
+    _stamp_batch_output_hints,
+    _cleanup_s2t_files,
 )
 
 router = APIRouter(prefix="")
+
+
+# ─────────────────────────────────────────────
+# Batch pipeline runner helpers
+# ─────────────────────────────────────────────
+
+async def _handle_batch_crash(j_id: str, exc: Exception) -> None:
+    """Mark a crashed batch job as FAILED and push a synthetic progress event."""
+    try:
+        await db.update_job(j_id, JobStatus.FAILED.value, -1,
+                            {"error": f"Batch runner crashed: {exc}"})
+    except Exception:  # pragma: no cover
+        logger.exception("Failed to mark crashed batch job as FAILED: job_id=%s", j_id)
+    await _progress_queues[j_id].put(
+        {"step": -1, "status": JobStatus.FAILED.value, "message": f"Pipeline crashed: {exc}"}
+    )
+
+
+def _maybe_release_semaphore(semaphore_held_ref: list, status: str) -> None:
+    """Release the batch semaphore if held and job has hit a gate-wait status."""
+    if semaphore_held_ref[0] and status in _GATE_WAITING_STATUSES:
+        _batch_semaphore.release()
+        semaphore_held_ref[0] = False
+
+
+async def _run_with_semaphore(j_id: str, fname: str) -> None:
+    """
+    Acquire batch semaphore, run pipeline, release slot at gates or on completion.
+
+    v2.18.17 — Release the semaphore slot when the job hits a human review gate
+    (awaiting_review / awaiting_security_review / awaiting_code_review) instead
+    of holding it for the entire duration of human think-time.  The slot is
+    reacquired by _resume_batch_job() when the reviewer approves the gate.
+    """
+    await _batch_semaphore.acquire()
+    semaphore_held_ref = [True]
+    try:
+        async for progress in orchestrator.run_pipeline(j_id, fname):
+            await _progress_queues[j_id].put(progress)
+            _maybe_release_semaphore(semaphore_held_ref, progress.get("status", ""))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Batch pipeline crashed unexpectedly: job_id=%s error=%s", j_id, exc, exc_info=True)
+        await _handle_batch_crash(j_id, exc)
+    finally:
+        if semaphore_held_ref[0]:
+            _batch_semaphore.release()
+        await _progress_queues[j_id].put(None)
+
+
+async def _run_with_semaphore_recovery(j_id: str, fname: str) -> None:
+    """Identical semantics to _run_with_semaphore; used during startup recovery."""
+    await _batch_semaphore.acquire()
+    semaphore_held_ref = [True]
+    try:
+        async for progress in orchestrator.run_pipeline(j_id, fname):
+            await _progress_queues[j_id].put(progress)
+            _maybe_release_semaphore(semaphore_held_ref, progress.get("status", ""))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Batch pipeline crashed unexpectedly: job_id=%s error=%s", j_id, exc, exc_info=True)
+        await _handle_batch_crash(j_id, exc)
+    finally:
+        if semaphore_held_ref[0]:
+            _batch_semaphore.release()
+        await _progress_queues[j_id].put(None)
+
+
+# ─────────────────────────────────────────────
+# Batch job entry helpers
+# ─────────────────────────────────────────────
+
+def _register_batch_jobs(
+    job_ids: list, mapping_results, fallback_filename: str
+) -> list[dict]:
+    """Set up progress queues + batch tracking; return job entry list."""
+    job_entries = []
+    for job_id, parsed in zip(job_ids, mapping_results):
+        mapping_fname = parsed.mapping_filename or fallback_filename
+        _progress_queues[job_id] = asyncio.Queue()
+        _batch_job_ids.add(job_id)
+        job_entries.append({"job_id": job_id, "filename": mapping_fname})
+    return job_entries
+
+
+def _launch_batch_tasks(job_entries: list[dict], batch_id: str) -> None:
+    """Create asyncio tasks for each batch job entry."""
+    for entry in job_entries:
+        task = asyncio.create_task(_run_with_semaphore(entry["job_id"], entry["filename"]))
+        _active_tasks[entry["job_id"]] = task
+        logger.info("Batch job started: batch_id=%s job_id=%s filename=%s",
+                    batch_id, entry["job_id"], entry["filename"])
 
 
 # ─────────────────────────────────────────────
@@ -64,123 +156,29 @@ async def create_batch_jobs(
     if not mapping_results:
         raise HTTPException(400, "No valid mapping folders found in the batch ZIP.")
 
-    # Normalise pipeline_mode
-    _batch_pm = (pipeline_mode or "full").strip().lower()
-    if _batch_pm not in ("full", "docs_only"):
-        _batch_pm = "full"
+    _batch_pm = _normalize_pipeline_mode(pipeline_mode)
 
     # GAP #4 — Create batch record + all jobs atomically in one transaction.
-    # If any insertion fails, the whole batch is rolled back — no orphaned jobs.
-    mappings_payload = [
-        {
-            "filename":       parsed.mapping_filename or file.filename,
-            "xml":            parsed.mapping_xml,
-            "workflow_xml":   parsed.workflow_xml,
-            "parameter_file": parsed.parameter_file,
-        }
-        for parsed in mapping_results
-    ]
+    mappings_payload = _build_mappings_payload(mapping_results, file.filename)
     try:
         batch_id, job_ids = await db.create_batch_atomic(file.filename, mappings_payload)
     except Exception as exc:
         logger.error("Atomic batch creation failed: %s", exc, exc_info=True)
         raise HTTPException(500, f"Failed to create batch jobs: {exc}")
 
-    logger.info(
-        "Batch created (atomic): batch_id=%s source_zip=%s mapping_count=%d",
-        batch_id, file.filename, len(mapping_results),
-    )
+    logger.info("Batch created (atomic): batch_id=%s source_zip=%s mapping_count=%d",
+                batch_id, file.filename, len(mapping_results))
 
-    # Stamp output-folder hints so job_exporter groups all mappings under one
-    # human-readable folder instead of 17 anonymous UUID directories:
-    #   OUTPUT_DIR/batch_<short_id>/<mapping_stem>/input|output|docs|logs/
-    # This mirrors the watcher batch layout (watcher_output_dir / watcher_mapping_stem).
     batch_dir_name = f"batch_{batch_id[:8]}"
-    for job_id, parsed in zip(job_ids, mapping_results):
-        mapping_fname = parsed.mapping_filename or file.filename
-        mapping_stem  = Path(mapping_fname).stem
-        try:
-            await db.update_job(
-                job_id, "pending", 0,
-                {
-                    "watcher_output_dir":   batch_dir_name,
-                    "watcher_mapping_stem": mapping_stem,
-                    "pipeline_mode":        _batch_pm,
-                },
-            )
-        except Exception as hint_exc:  # non-fatal — missing hints just fall back to UUID path
-            logger.warning(
-                "Could not stamp output hints (non-fatal): job_id=%s error=%s",
-                job_id, hint_exc,
-            )
-
-    job_entries: list[dict] = []
-    for job_id, parsed in zip(job_ids, mapping_results):
-        mapping_fname = parsed.mapping_filename or file.filename
-        queue: asyncio.Queue = asyncio.Queue()
-        _progress_queues[job_id] = queue
-        job_entries.append({"job_id": job_id, "filename": mapping_fname, "parsed": parsed})
-        # Register as batch job so sign-off endpoints reacquire the semaphore on resume.
-        _batch_job_ids.add(job_id)
-
-    # Launch all pipelines concurrently (semaphore caps at BATCH_CONCURRENCY in-flight).
-    #
-    # GAP #8 — Wrap in try/except/finally so the sentinel is always placed on the
-    # queue even when the async generator or semaphore acquisition itself raises.
-    #
-    # v2.18.17 — Release the semaphore slot when the job hits a human review gate
-    # (awaiting_review / awaiting_security_review / awaiting_code_review) instead
-    # of holding it for the entire duration of human think-time.  The slot is
-    # reacquired by _resume_batch_job() when the reviewer approves the gate.
-    # This lets all N mappings advance to their first gate concurrently rather
-    # than serialising behind the semaphore during human review.
-    async def _run_with_semaphore(j_id: str, fname: str):
-        await _batch_semaphore.acquire()
-        semaphore_held = True
-        try:
-            async for progress in orchestrator.run_pipeline(j_id, fname):
-                await _progress_queues[j_id].put(progress)
-                # Release the slot as soon as the job is waiting for a human —
-                # the semaphore is reacquired when the gate is approved.
-                if semaphore_held and progress.get("status") in _GATE_WAITING_STATUSES:
-                    _batch_semaphore.release()
-                    semaphore_held = False
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Batch pipeline crashed unexpectedly: job_id=%s error=%s",
-                j_id, exc, exc_info=True,
-            )
-            # Mark the job FAILED in the DB so the batch status rolls up correctly.
-            try:
-                await db.update_job(j_id, JobStatus.FAILED.value, -1,
-                                    {"error": f"Batch runner crashed: {exc}"})
-            except Exception:  # pragma: no cover
-                logger.exception("Failed to mark crashed batch job as FAILED: job_id=%s", j_id)
-            # Push a synthetic FAILED progress event so any open SSE stream closes cleanly.
-            await _progress_queues[j_id].put(
-                {"step": -1, "status": JobStatus.FAILED.value,
-                 "message": f"Pipeline crashed: {exc}"}
-            )
-        finally:
-            # Always release the semaphore if we still hold it (normal completion or crash).
-            if semaphore_held:
-                _batch_semaphore.release()
-            # Sentinel always placed — closes the SSE generator regardless of outcome.
-            await _progress_queues[j_id].put(None)
-
-    for entry in job_entries:
-        task = asyncio.create_task(
-            _run_with_semaphore(entry["job_id"], entry["filename"])
-        )
-        _active_tasks[entry["job_id"]] = task
-        logger.info("Batch job started: batch_id=%s job_id=%s filename=%s",
-                    batch_id, entry["job_id"], entry["filename"])
+    await _stamp_batch_output_hints(job_ids, mapping_results, batch_dir_name, _batch_pm)
+    job_entries = _register_batch_jobs(job_ids, mapping_results, file.filename)
+    _launch_batch_tasks(job_entries, batch_id)
 
     return {
         "batch_id":      batch_id,
-        "output_folder": batch_dir_name,   # e.g. "batch_a1b2c3d4" under OUTPUT_DIR
+        "output_folder": batch_dir_name,
         "mapping_count": len(job_entries),
-        "jobs": [{"job_id": e["job_id"], "filename": e["filename"]} for e in job_entries],
+        "jobs":          job_entries,
         "status":        "running",
     }
 
@@ -217,17 +215,8 @@ async def delete_batch(batch_id: str):
     if count == 0:
         raise HTTPException(404, "Batch not found or all jobs already deleted")
 
-    # Clean up any S2T artefacts for each batch job
     batch_jobs = await db.get_batch_jobs(batch_id)
-    cleaned_s2t = 0
-    for j in batch_jobs:
-        s2t_path = s2t_excel_path(j["job_id"])
-        if s2t_path and s2t_path.exists():
-            try:
-                s2t_path.unlink()
-                cleaned_s2t += 1
-            except OSError:
-                pass
+    cleaned_s2t = _cleanup_s2t_files(batch_jobs)
 
     logger.info("Batch soft-deleted: batch_id=%s jobs_deleted=%d s2t_cleaned=%d",
                 batch_id, count, cleaned_s2t)
@@ -255,49 +244,17 @@ async def recover_batch_jobs() -> dict:
 
     Returns a summary dict for startup logging.
     """
-    # -- Gate-waiting: just restore the tracking set; no task needed --
     gate_job_ids = await db.get_gate_waiting_batch_jobs()
     for jid in gate_job_ids:
         _batch_job_ids.add(jid)
 
-    # -- Pending: re-queue each job --
     pending_jobs = await db.get_pending_batch_jobs()
     requeued = 0
     for pj in pending_jobs:
-        j_id   = pj["job_id"]
-        fname  = pj["filename"]
-        queue: asyncio.Queue = asyncio.Queue()
-        _progress_queues[j_id] = queue
+        j_id = pj["job_id"]
+        fname = pj["filename"]
+        _progress_queues[j_id] = asyncio.Queue()
         _batch_job_ids.add(j_id)
-
-        async def _run_with_semaphore_recovery(j_id: str, fname: str):
-            await _batch_semaphore.acquire()
-            semaphore_held = True
-            try:
-                async for progress in orchestrator.run_pipeline(j_id, fname):
-                    await _progress_queues[j_id].put(progress)
-                    if semaphore_held and progress.get("status") in _GATE_WAITING_STATUSES:
-                        _batch_semaphore.release()
-                        semaphore_held = False
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "Batch pipeline crashed unexpectedly: job_id=%s error=%s",
-                    j_id, exc, exc_info=True,
-                )
-                try:
-                    await db.update_job(j_id, JobStatus.FAILED.value, -1,
-                                        {"error": f"Batch runner crashed: {exc}"})
-                except Exception:  # pragma: no cover
-                    logger.exception("Failed to mark crashed batch job as FAILED: job_id=%s", j_id)
-                await _progress_queues[j_id].put(
-                    {"step": -1, "status": JobStatus.FAILED.value,
-                     "message": f"Pipeline crashed: {exc}"}
-                )
-            finally:
-                if semaphore_held:
-                    _batch_semaphore.release()
-                await _progress_queues[j_id].put(None)
-
         task = asyncio.create_task(_run_with_semaphore_recovery(j_id, fname))
         _active_tasks[j_id] = task
         requeued += 1
@@ -306,7 +263,4 @@ async def recover_batch_jobs() -> dict:
             j_id, pj["batch_id"], fname,
         )
 
-    return {
-        "requeued":    requeued,
-        "gate_restored": len(gate_job_ids),
-    }
+    return {"requeued": requeued, "gate_restored": len(gate_job_ids)}

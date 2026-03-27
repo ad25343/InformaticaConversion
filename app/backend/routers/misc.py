@@ -21,6 +21,8 @@ from ._helpers import (
     knowledge_base_stats,
     JobStatus,
     _cfg,
+    _escape_csv,
+    _gate_waiting_label,
 )
 
 router = APIRouter(prefix="")
@@ -92,6 +94,75 @@ async def get_security_knowledge():
 
 
 # ─────────────────────────────────────────────
+# Migration Progress helpers
+# ─────────────────────────────────────────────
+
+_PIPELINE_STATUSES = frozenset({
+    "parsing", "classifying", "documenting", "verifying",
+    "assigning_stack", "converting", "validating", "security_scanning",
+    "reviewing", "testing",
+})
+
+_TIER_MAP = {"Low": "LOW", "Medium": "MEDIUM", "High": "HIGH", "Very High": "VERY_HIGH"}
+
+
+def _classify_status(status: str) -> str:
+    """Map a raw job status to a status-count key."""
+    if status == "pending":
+        return "not_started"
+    if status in _PIPELINE_STATUSES:
+        return "in_pipeline"
+    _gate_map = {
+        JobStatus.AWAITING_REVIEW.value: "awaiting_gate_1",
+        JobStatus.AWAITING_SEC_REVIEW.value: "awaiting_gate_2",
+        JobStatus.AWAITING_CODE_REVIEW.value: "awaiting_gate_3",
+        JobStatus.COMPLETE.value: "complete",
+        JobStatus.BLOCKED.value: "blocked",
+        JobStatus.FAILED.value: "failed",
+    }
+    return _gate_map.get(status, "")
+
+
+def _tally_rows(rows) -> tuple[dict, dict]:
+    """Count status and tier occurrences from DB rows."""
+    status_counts = {
+        "not_started": 0, "in_pipeline": 0,
+        "awaiting_gate_1": 0, "awaiting_gate_2": 0, "awaiting_gate_3": 0,
+        "complete": 0, "blocked": 0, "failed": 0,
+    }
+    tier_counts = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "unknown": 0}
+    for row in rows:
+        tier = _TIER_MAP.get(row["complexity_tier"] or "", "unknown")
+        if tier in tier_counts:
+            tier_counts[tier] += 1
+        bucket = _classify_status(row["status"])
+        if bucket:
+            status_counts[bucket] += 1
+    return status_counts, tier_counts
+
+
+async def _fetch_completed_7d() -> int:
+    """Return number of jobs completed in the last 7 days."""
+    seven_days_ago = (_datetime.utcnow() - __import__("datetime").timedelta(days=7)).isoformat()
+    async with db._connect() as conn:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status = ? AND updated_at >= ? AND deleted_at IS NULL",
+            (JobStatus.COMPLETE.value, seven_days_ago),
+        ) as cur:
+            result = await cur.fetchone()
+    return result[0] if result else 0
+
+
+def _estimate_eta(remaining: int, throughput_per_day: float) -> tuple:
+    """Return (estimated_days, estimated_date) or (None, None)."""
+    if throughput_per_day <= 0:
+        return None, None
+    estimated_days = round(remaining / throughput_per_day, 1)
+    completion_date = _datetime.utcnow() + __import__("datetime").timedelta(days=estimated_days)
+    return estimated_days, completion_date.date().isoformat()
+
+
+# ─────────────────────────────────────────────
 # Migration Progress (v2.17.2)
 # ─────────────────────────────────────────────
 
@@ -108,96 +179,26 @@ async def get_migration_progress():
     try:
         async with db._connect() as conn:
             conn.row_factory = __import__("aiosqlite").Row
-
-            # Fetch all non-deleted jobs with minimal fields
             async with conn.execute(
                 "SELECT status, complexity_tier, created_at, updated_at "
                 "FROM jobs WHERE deleted_at IS NULL"
             ) as cur:
                 rows = await cur.fetchall()
 
-        # Count statuses and tiers
-        status_counts = {
-            "not_started": 0,
-            "in_pipeline": 0,
-            "awaiting_gate_1": 0,
-            "awaiting_gate_2": 0,
-            "awaiting_gate_3": 0,
-            "complete": 0,
-            "blocked": 0,
-            "failed": 0,
-        }
-        tier_counts = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "unknown": 0}
-
-        # Pipeline statuses (active, not gate, not terminal)
-        pipeline_statuses = {
-            "parsing", "classifying", "documenting", "verifying",
-            "assigning_stack", "converting", "validating", "security_scanning",
-            "reviewing", "testing",
-        }
-
-        for row in rows:
-            status = row["status"]
-            tier = row["complexity_tier"] or "unknown"
-
-            # Map tier names
-            tier_map = {"Low": "LOW", "Medium": "MEDIUM", "High": "HIGH", "Very High": "VERY_HIGH"}
-            tier = tier_map.get(tier, "unknown")
-            if tier in tier_counts:
-                tier_counts[tier] += 1
-
-            if status == "pending":
-                status_counts["not_started"] += 1
-            elif status in pipeline_statuses:
-                status_counts["in_pipeline"] += 1
-            elif status == JobStatus.AWAITING_REVIEW.value:
-                status_counts["awaiting_gate_1"] += 1
-            elif status == JobStatus.AWAITING_SEC_REVIEW.value:
-                status_counts["awaiting_gate_2"] += 1
-            elif status == JobStatus.AWAITING_CODE_REVIEW.value:
-                status_counts["awaiting_gate_3"] += 1
-            elif status == JobStatus.COMPLETE.value:
-                status_counts["complete"] += 1
-            elif status == JobStatus.BLOCKED.value:
-                status_counts["blocked"] += 1
-            elif status == JobStatus.FAILED.value:
-                status_counts["failed"] += 1
-
-        # Calculate throughput (jobs completed in last 7 days)
-        seven_days_ago = (_datetime.utcnow() - __import__("datetime").timedelta(days=7)).isoformat()
-        async with db._connect() as conn:
-            async with conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE status = ? AND updated_at >= ? AND deleted_at IS NULL",
-                (JobStatus.COMPLETE.value, seven_days_ago),
-            ) as cur:
-                result = await cur.fetchone()
-                completed_7d = result[0] if result else 0
-
+        status_counts, tier_counts = _tally_rows(rows)
+        completed_7d = await _fetch_completed_7d()
         throughput_per_day = round(completed_7d / 7.0, 1)
 
-        # Calculate ETA
-        total = len(rows)
-        not_started = status_counts["not_started"]
-        in_pipeline = status_counts["in_pipeline"]
         awaiting_gate = (status_counts["awaiting_gate_1"] +
-                        status_counts["awaiting_gate_2"] +
-                        status_counts["awaiting_gate_3"])
-
-        remaining = not_started + in_pipeline + awaiting_gate
-        estimated_days = None
-        estimated_date = None
-
-        if throughput_per_day > 0:
-            estimated_days = round(remaining / throughput_per_day, 1)
-            completion_date = _datetime.utcnow() + __import__("datetime").timedelta(days=estimated_days)
-            estimated_date = completion_date.date().isoformat()
-
-        now = _datetime.utcnow().isoformat() + "Z"
+                         status_counts["awaiting_gate_2"] +
+                         status_counts["awaiting_gate_3"])
+        remaining = status_counts["not_started"] + status_counts["in_pipeline"] + awaiting_gate
+        estimated_days, estimated_date = _estimate_eta(remaining, throughput_per_day)
 
         return {
-            "total": total,
-            "not_started": not_started,
-            "in_pipeline": in_pipeline,
+            "total": len(rows),
+            "not_started": status_counts["not_started"],
+            "in_pipeline": status_counts["in_pipeline"],
             "awaiting_gate": {
                 "1": status_counts["awaiting_gate_1"],
                 "2": status_counts["awaiting_gate_2"],
@@ -210,12 +211,31 @@ async def get_migration_progress():
             "throughput_per_day": throughput_per_day,
             "estimated_completion_days": estimated_days,
             "estimated_completion_date": estimated_date,
-            "as_of": now,
+            "as_of": _datetime.utcnow().isoformat() + "Z",
         }
 
     except Exception as e:
         logger.error(f"Error fetching migration progress: {e}")
         raise HTTPException(500, f"Error fetching migration progress: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# Export CSV helpers
+# ─────────────────────────────────────────────
+
+def _row_to_csv_line(row) -> str:
+    """Convert a DB row to a CSV line string."""
+    batch_id = row["batch_id"] or ""
+    tier = row["complexity_tier"] or ""
+    status = row["status"]
+    updated = row["updated_at"]
+    waiting_gate = _gate_waiting_label(status)
+    complete_at = updated if status == JobStatus.COMPLETE.value else ""
+    vals = (
+        row["job_id"], row["filename"], batch_id, status, tier,
+        row["created_at"], updated, waiting_gate, complete_at,
+    )
+    return ",".join(_escape_csv(v) for v in vals)
 
 
 @router.get("/progress/export")
@@ -235,42 +255,8 @@ async def export_progress_csv():
             ) as cur:
                 rows = await cur.fetchall()
 
-        # Build CSV
-        csv_lines = ["job_id,filename,batch_id,status,complexity_tier,created_at,updated_at,waiting_at_gate,complete_at"]
-
-        for row in rows:
-            job_id = row["job_id"]
-            filename = row["filename"]
-            batch_id = row["batch_id"] or ""
-            status = row["status"]
-            tier = row["complexity_tier"] or ""
-            created = row["created_at"]
-            updated = row["updated_at"]
-
-            # Determine waiting_at_gate
-            waiting_gate = ""
-            if status == JobStatus.AWAITING_REVIEW.value:
-                waiting_gate = "1"
-            elif status == JobStatus.AWAITING_SEC_REVIEW.value:
-                waiting_gate = "2"
-            elif status == JobStatus.AWAITING_CODE_REVIEW.value:
-                waiting_gate = "3"
-
-            # Use updated_at as proxy for complete_at
-            complete_at = updated if status == JobStatus.COMPLETE.value else ""
-
-            # Escape CSV values
-            def escape_csv(val):
-                if val is None:
-                    return ""
-                val_str = str(val)
-                if "," in val_str or '"' in val_str or "\n" in val_str:
-                    return '"' + val_str.replace('"', '""') + '"'
-                return val_str
-
-            line = f"{escape_csv(job_id)},{escape_csv(filename)},{escape_csv(batch_id)},{escape_csv(status)},{escape_csv(tier)},{escape_csv(created)},{escape_csv(updated)},{escape_csv(waiting_gate)},{escape_csv(complete_at)}"
-            csv_lines.append(line)
-
+        header = "job_id,filename,batch_id,status,complexity_tier,created_at,updated_at,waiting_at_gate,complete_at"
+        csv_lines = [header] + [_row_to_csv_line(row) for row in rows]
         csv_content = "\n".join(csv_lines)
         now = _datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
@@ -302,6 +288,116 @@ _SUITE_FILES = {
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 
+def _parse_playwright_counts(line: str, passed: int, failed: int, skipped: int) -> tuple[int, int, int]:
+    """Extract running totals from a Playwright output line."""
+    import re as _re
+    m_pass  = _re.search(r"(\d+)\s+passed",  line)
+    m_fail  = _re.search(r"(\d+)\s+failed",  line)
+    m_skip  = _re.search(r"(\d+)\s+skipped", line)
+    return (
+        int(m_pass.group(1))  if m_pass  else passed,
+        int(m_fail.group(1))  if m_fail  else failed,
+        int(m_skip.group(1))  if m_skip  else skipped,
+    )
+
+
+def _sse_evt(payload: dict) -> str:
+    """Format one SSE payload line."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _build_playwright_cmd(spec_paths: list[str]) -> list[str]:
+    """Build the npx playwright test command for the given spec paths."""
+    return [
+        "npx", "playwright", "test",
+        "--reporter=list",
+        "--timeout=15000",
+        "--retries=0",
+        "--workers=1",
+    ] + spec_paths
+
+
+def _flush_buf_lines(buf: str, counts: list) -> tuple[list[str], str]:
+    """Split complete lines from buf, update counts, return (line_evts, remaining_buf)."""
+    evts = []
+    while "\n" in buf:
+        line, buf = buf.split("\n", 1)
+        line = line.rstrip("\r")
+        if line:
+            counts[0], counts[1], counts[2] = _parse_playwright_counts(
+                line, counts[0], counts[1], counts[2]
+            )
+            evts.append(_sse_evt({"type": "line", "text": line}))
+    return evts, buf
+
+
+_PLAYWRIGHT_TIMEOUT_MSG = (
+    "No output from test runner after 30 s. "
+    "Playwright may not be installed — try running: "
+    "npx playwright install chromium"
+)
+
+
+async def _chunk_stream(proc, timeout: float) -> AsyncGenerator[bytes | None, None]:
+    """Yield raw chunks from proc.stdout; yields None once on timeout (proc killed)."""
+    while True:
+        try:
+            chunk = await asyncio.wait_for(proc.stdout.read(2048), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            yield None
+            return
+        if not chunk:
+            return
+        yield chunk
+
+
+async def _stream_playwright_output(proc, selected: list[str]) -> AsyncGenerator[str, None]:
+    """Yield SSE events from a running Playwright process until it exits."""
+    counts = [0, 0, 0]  # [passed, failed, skipped]
+    buf = ""
+
+    async for chunk in _chunk_stream(proc, 30.0):
+        if chunk is None:
+            yield _sse_evt({"type": "error", "text": _PLAYWRIGHT_TIMEOUT_MSG})
+            return
+        buf += chunk.decode("utf-8", errors="replace")
+        line_evts, buf = _flush_buf_lines(buf, counts)
+        for evt in line_evts:
+            yield evt
+
+    if buf.strip():
+        yield _sse_evt({"type": "line", "text": buf.strip()})
+
+    await proc.wait()
+    yield _sse_evt({"type": "done", "rc": proc.returncode,
+                    "passed": counts[0], "failed": counts[1], "skipped": counts[2]})
+
+
+async def _make_test_stream(cmd: list[str], selected: list[str]) -> AsyncGenerator[str, None]:
+    """Yield SSE events for a Playwright test run (start, output lines, done/error)."""
+    yield _sse_evt({"type": "start", "suites": selected, "cmd": " ".join(cmd)})
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=_REPO_ROOT,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "FORCE_COLOR": "0", "CI": "1", "NODE_NO_WARNINGS": "1"},
+        )
+        async for event in _stream_playwright_output(proc, selected):
+            yield event
+    except Exception as exc:
+        yield _sse_evt({"type": "error", "text": str(exc)})
+
+
+def _parse_suites(suites_str: str) -> tuple[list[str], list[str]]:
+    """Return (selected suite names, spec file paths) for valid suite names in suites_str."""
+    selected = [s.strip() for s in suites_str.split(",") if s.strip() in _SUITE_FILES]
+    spec_paths = [_SUITE_FILES[s] for s in selected]
+    return selected, spec_paths
+
+
 @router.get("/run-tests")
 async def run_tests(request: Request, suites: str = ""):
     """
@@ -313,110 +409,14 @@ async def run_tests(request: Request, suites: str = ""):
     if persona != "Asin D":
         raise HTTPException(403, "Test runner is restricted to the admin persona.")
 
-    # Build list of spec files to pass to playwright
-    selected = [s.strip() for s in suites.split(",") if s.strip() in _SUITE_FILES]
+    selected, spec_paths = _parse_suites(suites)
     if not selected:
         raise HTTPException(400, "No valid suites specified.")
 
-    spec_paths = [_SUITE_FILES[s] for s in selected]
-    cmd = [
-        "npx", "playwright", "test",
-        "--reporter=list",   # newline-terminated output — safe for SSE streaming
-        "--timeout=15000",   # 15 s per test (fast-fail if server unreachable)
-        "--retries=0",       # no retries in health-check mode
-        "--workers=1",       # serial execution — prevents rate-limiter tests from blocking parallel logins
-    ] + spec_paths
-
-    async def _stream() -> AsyncGenerator[str, None]:
-        import re as _re
-
-        def _evt(payload: dict) -> str:
-            return f"data: {json.dumps(payload)}\n\n"
-
-        yield _evt({"type": "start", "suites": selected, "cmd": " ".join(cmd)})
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=_REPO_ROOT,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env={
-                    **os.environ,
-                    "FORCE_COLOR": "0",
-                    "CI": "1",
-                    # Disable Node/npm stdout buffering
-                    "NODE_NO_WARNINGS": "1",
-                },
-            )
-
-            passed = failed = skipped = 0
-            buf = ""
-            # Read in small chunks so we don't wait for a full newline to arrive.
-            # Playwright can buffer output when stdout is a pipe; chunked reads
-            # unblock the stream as soon as any bytes arrive.
-            READ_TIMEOUT = 30.0   # seconds to wait for ANY new output before giving up
-
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        proc.stdout.read(2048), timeout=READ_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    # Nothing arrived for 30 s — report and kill
-                    yield _evt({
-                        "type": "error",
-                        "text": (
-                            "No output from test runner after 30 s. "
-                            "Playwright may not be installed — try running: "
-                            "npx playwright install chromium"
-                        ),
-                    })
-                    proc.kill()
-                    break
-
-                if not chunk:
-                    break  # EOF — process finished
-
-                buf += chunk.decode("utf-8", errors="replace")
-
-                # Emit complete lines as they accumulate in the buffer
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    line = line.rstrip("\r")
-                    if not line:
-                        continue
-
-                    # Parse Playwright summary: "5 passed (12s)"  /  "2 failed"
-                    m_pass  = _re.search(r"(\d+)\s+passed",  line)
-                    m_fail  = _re.search(r"(\d+)\s+failed",  line)
-                    m_skip  = _re.search(r"(\d+)\s+skipped", line)
-                    if m_pass:  passed  = int(m_pass.group(1))
-                    if m_fail:  failed  = int(m_fail.group(1))
-                    if m_skip:  skipped = int(m_skip.group(1))
-
-                    yield _evt({"type": "line", "text": line})
-
-            # Flush any remaining partial line
-            if buf.strip():
-                yield _evt({"type": "line", "text": buf.strip()})
-
-            await proc.wait()
-            rc = proc.returncode
-
-            yield _evt({
-                "type":    "done",
-                "rc":      rc,
-                "passed":  passed,
-                "failed":  failed,
-                "skipped": skipped,
-            })
-
-        except Exception as exc:
-            yield _evt({"type": "error", "text": str(exc)})
+    cmd = _build_playwright_cmd(spec_paths)
 
     return StreamingResponse(
-        _stream(),
+        _make_test_stream(cmd, selected),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

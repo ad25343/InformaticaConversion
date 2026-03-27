@@ -62,26 +62,7 @@ async function loadHistory() {
   } catch(e) { /* ignore */ }
 }
 
-async function loadReviewQueue() {
-  try {
-    const url = new URL('/api/gates/pending', window.location.origin);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    _reviewQueue = data.jobs || [];
-
-    // Update summary counts
-    document.getElementById('reviewGate1Count').textContent = data.by_gate?.['1'] || 0;
-    document.getElementById('reviewGate2Count').textContent = data.by_gate?.['2'] || 0;
-    document.getElementById('reviewGate3Count').textContent = data.by_gate?.['3'] || 0;
-    document.getElementById('reviewTotalCount').textContent = data.total || 0;
-
-    renderReviewQueueTable();
-  } catch (e) {
-    console.error('Error loading review queue:', e);
-    document.getElementById('reviewQueueTable').innerHTML = `<div style="padding:20px;color:var(--danger)">Error loading review queue: ${e.message}</div>`;
-  }
-}
+// loadReviewQueue is defined in gates.js
 
 // ── Bell badge updater ────────────────────────
 async function updateNotifBell() {
@@ -434,7 +415,31 @@ async function submitReviewDecision(decision) {
   const selectedJobs = _reviewQueue.filter(j => _reviewSelectedJobIds.has(j.job_id));
   if (!selectedJobs.length) return;
 
-  const gates = new Set(selectedJobs.map(j => j.gate));
+  // Blocked/failed jobs: can be cancelled via Reject, but not approved
+  const retryableSelected = selectedJobs.filter(j => j.retryable);
+  if (retryableSelected.length > 0) {
+    if (decision === 'APPROVE') {
+      alert(`${retryableSelected.length} selected job(s) are blocked or failed and cannot be approved — use "↺ Retry Selected" instead.`);
+      return;
+    }
+    // REJECT on blocked/failed = cancel them
+    if (!confirm(`Cancel ${retryableSelected.length} blocked/failed job(s)? This cannot be undone.`)) return;
+    const cancelRes = await fetch('/api/jobs/batch-cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_ids: retryableSelected.map(j => j.job_id), reviewer_name: reviewerName }),
+    });
+    const cancelData = await cancelRes.json();
+    if (!cancelRes.ok) { alert('Cancel failed: ' + (cancelData.detail || cancelRes.statusText)); return; }
+    // If there are also gate jobs selected, fall through to process them
+    const gateSelected = selectedJobs.filter(j => !j.retryable);
+    if (!gateSelected.length) { await loadReviewQueue(); return; }
+    // Narrow selection to gate-only jobs for the rest of the flow
+    _reviewSelectedJobIds.clear();
+    gateSelected.forEach(j => _reviewSelectedJobIds.add(j.job_id));
+  }
+
+  const gates = new Set(selectedJobs.filter(j => !j.retryable).map(j => j.gate));
   if (gates.size > 1) {
     alert('Please select jobs from only one gate at a time');
     return;

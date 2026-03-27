@@ -22,6 +22,44 @@ router = APIRouter(prefix="")
 
 
 # ─────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────
+
+def _safe_filename(name: str) -> str:
+    """Sanitise a mapping name for use in a download filename."""
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+
+
+def _load_manifest_overrides_from_bytes(xlsx_bytes: bytes) -> list:
+    """Write bytes to a temp file, parse overrides, clean up, return list."""
+    from ..agents import manifest_agent
+    import tempfile as _tempfile
+    import os as _os
+
+    with _tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(xlsx_bytes)
+        tmp_path = tmp.name
+    try:
+        return manifest_agent.load_overrides(tmp_path)
+    finally:
+        _os.unlink(tmp_path)
+
+
+def _validate_manifest_job_for_upload(job, job_id: str) -> None:
+    """Raise HTTPException if the job is missing or not in awaiting_review state."""
+    if not job:
+        _validate_job_id(job_id)
+        raise HTTPException(404, "Job not found")
+    if job["status"] != JobStatus.AWAITING_REVIEW.value:
+        raise HTTPException(
+            400,
+            f"Manifest overrides can only be uploaded while the job is awaiting review "
+            f"(current status: {job['status']}). Download the manifest, annotate it, "
+            f"then upload it before submitting your sign-off.",
+        )
+
+
+# ─────────────────────────────────────────────
 # Download converted code
 # ─────────────────────────────────────────────
 
@@ -86,17 +124,7 @@ async def upload_manifest_overrides(job_id: str, file: UploadFile = File(...)):
     after sign-off, resolving lineage gaps before generating code.
     """
     job = await db.get_job(job_id)
-    if not job:
-        _validate_job_id(job_id)
-        raise HTTPException(404, "Job not found")
-
-    if job["status"] != JobStatus.AWAITING_REVIEW.value:
-        raise HTTPException(
-            400,
-            f"Manifest overrides can only be uploaded while the job is awaiting review "
-            f"(current status: {job['status']}). Download the manifest, annotate it, "
-            f"then upload it before submitting your sign-off.",
-        )
+    _validate_manifest_job_for_upload(job, job_id)
 
     fname = (file.filename or "").lower()
     if not fname.endswith(".xlsx"):
@@ -104,40 +132,19 @@ async def upload_manifest_overrides(job_id: str, file: UploadFile = File(...)):
 
     xlsx_bytes = await file.read()
     validate_upload_size(xlsx_bytes, label=file.filename)
-
     if not xlsx_bytes:
         raise HTTPException(400, "Uploaded manifest file is empty")
 
-    # Parse overrides from the annotated xlsx.
-    # load_overrides() takes a file path, so write to a temp file first.
-    from ..agents import manifest_agent
-    import tempfile as _tempfile
-    import os as _os
-
-    with _tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(xlsx_bytes)
-        tmp_path = tmp.name
-
-    try:
-        overrides = manifest_agent.load_overrides(tmp_path)
-    finally:
-        _os.unlink(tmp_path)
-
+    overrides = _load_manifest_overrides_from_bytes(xlsx_bytes)
     overrides_dicts = [o.model_dump() for o in overrides]
 
-    # Store overrides in job state — conversion agent reads state["manifest_overrides"]
-    # at Step 6 (resume_after_signoff) and injects them into the conversion prompt.
     await db.update_job(
-        job_id,
-        JobStatus.AWAITING_REVIEW.value,
-        5,
+        job_id, JobStatus.AWAITING_REVIEW.value, 5,
         {"manifest_overrides": overrides_dicts},
     )
 
-    logger.info(
-        "Manifest overrides uploaded: job_id=%s override_count=%d",
-        job_id, len(overrides_dicts),
-    )
+    logger.info("Manifest overrides uploaded: job_id=%s override_count=%d",
+                job_id, len(overrides_dicts))
 
     return {
         "message": f"Manifest uploaded successfully. {len(overrides_dicts)} override(s) stored.",
@@ -159,9 +166,8 @@ async def download_file(job_id: str, filename: str):
         raise HTTPException(404, f"File '{filename}' not found in conversion output")
 
     # GAP #14 — Validate the filename is safe before serving
-    # Reject path traversal attempts and non-whitelisted extensions
     import pathlib
-    _safe_name = pathlib.PurePosixPath(filename).name  # strip any directory components
+    _safe_name = pathlib.PurePosixPath(filename).name
     _ALLOWED_EXTS = {".py", ".sql", ".yaml", ".yml", ".txt", ".md", ".json", ".sh", ".cfg", ".ini", ".toml"}
     _ext = pathlib.PurePosixPath(_safe_name).suffix.lower()
     if _ext not in _ALLOWED_EXTS:
@@ -222,8 +228,7 @@ async def download_output_zip(job_id: str):
 
     zip_bytes = build_output_zip(state)
     mapping_name = conversion.get("mapping_name", job_id)
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in mapping_name)
-    filename = f"{safe_name}_output.zip"
+    filename = f"{_safe_filename(mapping_name)}_output.zip"
 
     return StreamingResponse(
         iter([zip_bytes]),

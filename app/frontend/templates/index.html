@@ -10,6 +10,24 @@
 <!-- ── Toast notification container ──────────────────────────────────── -->
 <div id="toastContainer"></div>
 
+<!-- ── Persona Picker Modal (shown when no persona cookie) ──────────── -->
+<div id="personaPickerOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.8);align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:36px 40px;width:100%;max-width:520px;box-shadow:0 32px 80px rgba(0,0,0,.6)">
+    <div style="text-align:center;margin-bottom:28px">
+      <div style="font-size:28px;margin-bottom:8px">⚡</div>
+      <h2 style="margin:0 0 6px;font-size:20px;font-weight:700;color:var(--text)">Who are you?</h2>
+      <p style="margin:0;font-size:13px;color:var(--muted)">Select your profile to continue</p>
+    </div>
+    <div id="personaPickerList" style="display:flex;flex-direction:column;gap:8px"></div>
+    <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
+      <input id="personaCustomInput" type="text" placeholder="Or type a custom name…"
+             style="width:100%;box-sizing:border-box;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none"
+             onkeydown="if(event.key==='Enter')pickPersonaCustom()"/>
+      <button onclick="pickPersonaCustom()" style="margin-top:8px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">Continue →</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Global Search Modal ──────────────────────────────────────── -->
 <div id="globalSearchOverlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.65);align-items:flex-start;justify-content:center;padding-top:80px"
      onclick="if(event.target===this)closeGlobalSearch()">
@@ -39,13 +57,13 @@
   <aside class="sidebar">
     <div>
       <div class="logo">
-        <span>⚡ Informatica</span>
+        <span onclick="setMainView('landing')" title="Go to home" style="cursor:pointer">⚡ Informatica</span>
         <span class="notif-bell" id="notifBell" title="Pending gate reviews"
               onclick="setMainView('review')" style="display:none">
           🔔 <span class="notif-badge" id="notifBadge">0</span>
         </span>
       </div>
-      <div class="logo-sub">PowerCenter Converter</div>
+      <div class="logo-sub" onclick="setMainView('landing')" title="Go to home" style="cursor:pointer">PowerCenter Converter</div>
     </div>
     <!-- Compact user tag -->
     <div style="display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border)">
@@ -208,8 +226,6 @@
                     onclick="setUploadMode('files')">📄 Individual</button>
             <button id="tabBatch" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
                     onclick="setUploadMode('batch')">📦 Batch</button>
-            <button id="tabNewMapping" class="btn btn-sm btn-ghost" style="flex:1;font-size:12px;padding:5px 0"
-                    onclick="setUploadMode('new_mapping')">✨ New Mapping</button>
           </div>
 
           <!-- ── Individual files panel ── -->
@@ -234,7 +250,7 @@
               <div style="margin-top:10px">
                 <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Parameter File <span style="font-weight:400">(optional)</span></label>
                 <div class="upload-zone" id="dropzonePF" style="padding:10px">
-                  <input type="file" id="paramInput" accept=".txt,.par,.properties"/>
+                  <input type="file" id="paramInput" accept=".txt,.par,.properties,.xml"/>
                   <div class="upload-label" id="paramLabel" style="font-size:11px">Drop parameter file or click</div>
                 </div>
               </div>
@@ -282,41 +298,6 @@
             <div id="batchWarnings" style="display:none;font-size:11px;color:var(--warn);margin-top:6px"></div>
           </div>
 
-          <!-- ── New Mapping (Phase 3 greenfield authoring) panel ── -->
-          <div id="panelNewMapping" style="display:none">
-            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
-              Author a new Informatica mapping from a pattern template and generate a PowerCenter XML export.
-            </div>
-
-            <div class="form-group" style="margin-bottom:10px">
-              <label>Pattern</label>
-              <select id="newMappingPattern" style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none">
-                <option value="">Loading patterns…</option>
-              </select>
-            </div>
-
-            <div class="form-group" style="margin-bottom:10px">
-              <label>Mapping Name</label>
-              <input id="newMappingName" type="text" placeholder="m_dim_customer_load"
-                     style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none"/>
-            </div>
-
-            <div class="form-group" style="margin-bottom:10px">
-              <label>Config YAML</label>
-              <textarea id="newMappingYaml" rows="12"
-                        style="width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px;font-family:'JetBrains Mono','Fira Code',monospace;outline:none;resize:vertical;line-height:1.5"></textarea>
-            </div>
-
-            <button id="btnGenerateXml" class="btn btn-primary" onclick="generateXml()"
-                    style="width:100%;margin-bottom:8px">Generate Informatica XML</button>
-
-            <pre id="newMappingOutput"
-                 style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:11px;max-height:320px;overflow:auto;white-space:pre;word-break:break-all;margin-bottom:8px"></pre>
-
-            <a id="btnDownloadXml" class="btn btn-success btn-sm" style="display:none;text-decoration:none">
-              ⬇ Download XML
-            </a>
-          </div>
 
           <!-- ── Pipeline mode ── -->
           <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:14px">
@@ -395,14 +376,30 @@
           <select id="histStatusFilter" onchange="applyHistoryFilter()"
                   style="padding:7px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
             <option value="">All statuses</option>
-            <option value="pending">Pending</option>
-            <option value="running">Running</option>
-            <option value="awaiting_review">Analysis Sign-off</option>
-            <option value="awaiting_security_review">Security Sign-off</option>
-            <option value="awaiting_code_review">Final Sign-off</option>
-            <option value="complete">Complete ✓</option>
-            <option value="blocked">Blocked</option>
-            <option value="failed">Failed</option>
+            <optgroup label="— In Progress —">
+              <option value="pending">Pending</option>
+              <option value="parsing">Parsing</option>
+              <option value="classifying">Classifying</option>
+              <option value="documenting">Documenting</option>
+              <option value="verifying">Verifying</option>
+              <option value="assigning_stack">Assigning Stack</option>
+              <option value="converting">Converting</option>
+              <option value="validating">Validating</option>
+              <option value="security_scanning">Security Scan</option>
+              <option value="reviewing">Quality Review</option>
+              <option value="testing">Testing</option>
+            </optgroup>
+            <optgroup label="— Awaiting Sign-off —">
+              <option value="awaiting_review">Analysis Sign-off</option>
+              <option value="awaiting_security_review">Security Sign-off</option>
+              <option value="awaiting_code_review">Final Sign-off</option>
+            </optgroup>
+            <optgroup label="— Terminal —">
+              <option value="complete">Complete ✓</option>
+              <option value="blocked">Blocked</option>
+              <option value="failed">Failed</option>
+              <option value="cancelled">Cancelled</option>
+            </optgroup>
           </select>
           <button class="btn btn-sm btn-ghost" onclick="loadHistory()">🔄</button>
         </div>
@@ -449,32 +446,52 @@
             Analysis Sign-off: <strong id="reviewGate1Count">–</strong> &nbsp;·&nbsp;
             Security Sign-off: <strong id="reviewGate2Count">–</strong> &nbsp;·&nbsp;
             Final Sign-off: <strong id="reviewGate3Count">–</strong> &nbsp;·&nbsp;
+            Blocked: <strong id="reviewBlockedCount" style="color:#f87171">–</strong> &nbsp;·&nbsp;
+            Failed: <strong id="reviewFailedCount" style="color:#fb923c">–</strong> &nbsp;·&nbsp;
             Total: <strong id="reviewTotalCount">–</strong>
           </div>
         </div>
         <button class="btn btn-sm btn-ghost" onclick="loadReviewQueue()">🔄 Refresh</button>
       </div>
 
-      <!-- Gate filter + reviewer row -->
+      <!-- Filter row 1: status filters -->
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn" onclick="setReviewGateFilter(null)">All</button>
-          <button class="btn btn-sm btn-ghost" id="filter1Btn" onclick="setReviewGateFilter(1)">Analysis Sign-off</button>
-          <button class="btn btn-sm btn-ghost" id="filter2Btn" onclick="setReviewGateFilter(2)">Security Sign-off</button>
-          <button class="btn btn-sm btn-ghost" id="filter3Btn" onclick="setReviewGateFilter(3)">Final Sign-off</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="background:var(--accent);color:#fff" id="filterAllBtn"     onclick="setReviewFilter('all')">All</button>
+          <button class="btn btn-sm btn-ghost" id="filter1Btn"       onclick="setReviewFilter('gate1')">Analysis Sign-off</button>
+          <button class="btn btn-sm btn-ghost" id="filter2Btn"       onclick="setReviewFilter('gate2')">Security Sign-off</button>
+          <button class="btn btn-sm btn-ghost" id="filter3Btn"       onclick="setReviewFilter('gate3')">Final Sign-off</button>
+          <button class="btn btn-sm btn-ghost" id="filterBlockedBtn" onclick="setReviewFilter('blocked')" style="color:#f87171">Blocked</button>
+          <button class="btn btn-sm btn-ghost" id="filterFailedBtn"  onclick="setReviewFilter('failed')"  style="color:#fb923c">Failed</button>
         </div>
+        <input type="text" id="reviewSearchInput" placeholder="Search filename, batch, submitter…"
+               oninput="renderReviewQueueTable()"
+               style="flex:1;min-width:180px;max-width:320px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
+      </div>
+
+      <!-- Filter row 2: reviewer + actions -->
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input type="text" id="reviewerNameInput" placeholder="Your reviewer name"
                style="flex:1;min-width:160px;max-width:260px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px"/>
-        <button class="btn btn-success" onclick="submitReviewDecision('APPROVE')">✓ Approve Selected</button>
-        <button class="btn btn-danger"  onclick="submitReviewDecision('REJECT')">✕ Reject Selected</button>
+        <button class="btn btn-success" id="approveSelectedBtn" onclick="submitReviewDecision('APPROVE')">✓ Approve Selected</button>
+        <button class="btn btn-danger"  id="rejectSelectedBtn"  onclick="submitReviewDecision('REJECT')">✕ Reject Selected</button>
+        <button class="btn" onclick="retrySelectedJobs()" id="retrySelectedBtn" style="background:rgba(251,146,60,.15);color:#fb923c;border:1px solid rgba(251,146,60,.4)">↺ Retry Selected</button>
         <button class="btn btn-warn" id="acknowledgeBtn" style="display:none" onclick="submitReviewDecision('ACKNOWLEDGE')">✓ Acknowledge</button>
       </div>
 
       <!-- Jobs table -->
       <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden">
-        <div style="background:var(--surface2);padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:16px 90px 1fr 140px 80px 60px 70px 90px 90px 80px;gap:10px;align-items:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">
+        <div id="reviewQueueHeader" style="background:var(--surface2);padding:10px 14px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:var(--rq-cols,16px 90px 240px 140px 80px 120px 70px 90px 90px 80px);gap:0;align-items:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;user-select:none">
           <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAllReview(this.checked)" style="width:16px;height:16px;cursor:pointer"/>
-          <span>Job ID</span><span>Filename</span><span>Submitter</span><span>Batch</span><span>Gate</span><span>Tier</span><span>Flags</span><span>Waiting</span><span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('job_id')">Job ID<span id="rqs-job_id" class="rq-sort-ind"></span><span class="rq-rsz" data-col="1"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('filename')">Filename<span id="rqs-filename" class="rq-sort-ind"></span><span class="rq-rsz" data-col="2"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('submitter_name')">Submitter<span id="rqs-submitter_name" class="rq-sort-ind"></span><span class="rq-rsz" data-col="3"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('batch_id')">Batch<span id="rqs-batch_id" class="rq-sort-ind"></span><span class="rq-rsz" data-col="4"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('status')">Status<span id="rqs-status" class="rq-sort-ind"></span><span class="rq-rsz" data-col="5"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('complexity_tier')">Tier<span id="rqs-complexity_tier" class="rq-sort-ind"></span><span class="rq-rsz" data-col="6"></span></span>
+          <span class="rq-hcell">Flags<span class="rq-rsz" data-col="7"></span></span>
+          <span class="rq-hcell rq-sortable" onclick="rqSort('waiting_minutes')">Waiting<span id="rqs-waiting_minutes" class="rq-sort-ind"></span><span class="rq-rsz" data-col="8"></span></span>
+          <span></span>
         </div>
         <div id="reviewQueueTable">
           <div style="padding:40px;text-align:center;color:var(--muted)">
@@ -557,13 +574,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 
 <!-- Application scripts (dependency order) -->
-<script src="/static/js/api.js"></script>
-<script src="/static/js/upload.js"></script>
-<script src="/static/js/jobs.js"></script>
-<script src="/static/js/gates.js"></script>
-<script src="/static/js/batch.js"></script>
-<script src="/static/js/newmapping.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/api.js?v=3"></script>
+<script src="/static/js/upload.js?v=3"></script>
+<script src="/static/js/jobs.js?v=3"></script>
+<script src="/static/js/gates.js?v=3"></script>
+<script src="/static/js/batch.js?v=3"></script>
+<script src="/static/js/app.js?v=3"></script>
 
 <!-- ── S2T Full Mapping Modal ───────────────────────────────────── -->
 <div id="s2tModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px">

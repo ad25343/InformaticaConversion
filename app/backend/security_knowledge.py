@@ -77,6 +77,13 @@ def _load_default_rules_from_yaml() -> dict:
 _DEFAULT_RULES = _load_default_rules_from_yaml()
 
 
+def _read_rules_yaml() -> list[dict]:
+    """Open security_rules.yaml and return the raw rule list; may raise on I/O error."""
+    with RULES_PATH.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return data.get("rules", [])
+
+
 def load_rules() -> list[dict]:
     """Return all enabled standing security rules from security_rules.yaml.
 
@@ -86,9 +93,7 @@ def load_rules() -> list[dict]:
         _seed_rules()
 
     try:
-        with RULES_PATH.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        rules = data.get("rules", [])
+        rules = _read_rules_yaml()
         return [r for r in rules if r.get("enabled", True)]
     except Exception as exc:
         log.warning("security_knowledge: failed to load rules: %s", exc)
@@ -135,6 +140,94 @@ def load_top_patterns(limit: int = 20) -> list[dict]:
     return patterns[:limit]
 
 
+def _update_existing_pattern(p: dict, finding: dict, job_id: str, now: str) -> None:
+    """Increment occurrence counters and refresh optional fields on an existing pattern."""
+    p["occurrences"] = p.get("occurrences", 1) + 1
+    p["last_seen"]   = now
+    if job_id not in p.get("job_ids", []):
+        p.setdefault("job_ids", []).append(job_id)
+    if finding.get("text") and len(finding["text"]) > len(p.get("description", "")):
+        p["description"] = finding["text"]
+    if finding.get("remediation"):
+        p["remediation"] = finding["remediation"]
+
+
+def _create_new_pattern(
+    finding: dict,
+    test_id: str,
+    test_name: str,
+    severity: str,
+    job_id: str,
+    now: str,
+) -> dict:
+    """Build and return a fresh pattern dict from a finding."""
+    return {
+        "id":          str(uuid.uuid4()),
+        "test_id":     test_id,
+        "test_name":   test_name,
+        "severity":    severity,
+        "source":      finding.get("source", "unknown"),
+        "description": finding.get("text") or finding.get("description", ""),
+        "remediation": finding.get("remediation", ""),
+        "filename":    finding.get("filename", ""),
+        "occurrences": 1,
+        "first_seen":  now,
+        "last_seen":   now,
+        "job_ids":     [job_id],
+    }
+
+
+def _build_patterns_index(patterns: list[dict]) -> dict[tuple, dict]:
+    """Return a lookup dict keyed by (normalised_id, severity) for deduplication."""
+    return {
+        (_normalise_key(p), p.get("severity", "").upper()): p
+        for p in patterns
+    }
+
+
+def _extract_finding_key(finding: dict) -> tuple[str, str, str, tuple]:
+    """Extract (test_id, test_name, severity, index_key) from a finding dict."""
+    test_id   = (finding.get("test_id") or "").strip()
+    test_name = next(
+        (v.strip() for v in (finding.get("test_name"), finding.get("finding_type")) if v),
+        "",
+    )
+    severity = (finding.get("severity") or "LOW").upper()
+    key      = (_normalise_key({"test_id": test_id, "test_name": test_name}), severity)
+    return test_id, test_name, severity, key
+
+
+def _merge_finding_into_index(
+    finding: dict,
+    index: dict[tuple, dict],
+    patterns: list[dict],
+    job_id: str,
+    now: str,
+) -> None:
+    """Merge one finding into the patterns index (update or create)."""
+    test_id, test_name, severity, key = _extract_finding_key(finding)
+    if key in index:
+        _update_existing_pattern(index[key], finding, job_id, now)
+    else:
+        new_pattern = _create_new_pattern(finding, test_id, test_name, severity, job_id, now)
+        patterns.append(new_pattern)
+        index[key] = new_pattern
+
+
+def _try_auto_promote(job_id: str) -> None:
+    """Attempt to auto-promote recurring patterns; log but do not raise."""
+    try:
+        promoted = promote_patterns_to_rules(threshold=3)
+        if promoted:
+            log.info(
+                "security_knowledge: auto-promoted %d pattern(s) to standing rules "
+                "after recording findings from job %s",
+                promoted, job_id,
+            )
+    except Exception as exc:
+        log.warning("security_knowledge: auto-promotion failed (non-blocking): %s", exc)
+
+
 def record_findings(job_id: str, findings: list[dict]) -> int:
     """
     Merge findings from a completed job into the patterns store.
@@ -151,71 +244,18 @@ def record_findings(job_id: str, findings: list[dict]) -> int:
     data     = _load_patterns_raw()
     patterns = data.get("patterns", [])
     now      = datetime.now(timezone.utc).isoformat()
-    updated  = 0
-
-    # Build lookup: (test_id_or_name_normalised, severity) → pattern
-    index: dict[tuple, dict] = {}
-    for p in patterns:
-        key = (_normalise_key(p), p.get("severity", "").upper())
-        index[key] = p
+    index    = _build_patterns_index(patterns)
 
     for finding in findings:
-        test_id   = (finding.get("test_id") or "").strip()
-        test_name = (finding.get("test_name") or finding.get("finding_type") or "").strip()
-        severity  = (finding.get("severity") or "LOW").upper()
-        key       = (_normalise_key({"test_id": test_id, "test_name": test_name}), severity)
-
-        if key in index:
-            p = index[key]
-            p["occurrences"] = p.get("occurrences", 1) + 1
-            p["last_seen"]   = now
-            if job_id not in p.get("job_ids", []):
-                p.setdefault("job_ids", []).append(job_id)
-            # Keep description/remediation fresh if richer data arrives
-            if finding.get("text") and len(finding["text"]) > len(p.get("description", "")):
-                p["description"] = finding["text"]
-            if finding.get("remediation") and finding["remediation"]:
-                p["remediation"] = finding["remediation"]
-        else:
-            new_pattern = {
-                "id":          str(uuid.uuid4()),
-                "test_id":     test_id,
-                "test_name":   test_name,
-                "severity":    severity,
-                "source":      finding.get("source", "unknown"),
-                "description": finding.get("text") or finding.get("description", ""),
-                "remediation": finding.get("remediation", ""),
-                "filename":    finding.get("filename", ""),
-                "occurrences": 1,
-                "first_seen":  now,
-                "last_seen":   now,
-                "job_ids":     [job_id],
-            }
-            patterns.append(new_pattern)
-            index[key] = new_pattern
-
-        updated += 1
+        _merge_finding_into_index(finding, index, patterns, job_id, now)
 
     data["patterns"] = patterns
     _save_patterns_raw(data)
     log.info("security_knowledge: recorded %d findings from job %s (%d total patterns)",
-             updated, job_id, len(patterns))
+             len(findings), job_id, len(patterns))
 
-    # Auto-promote any patterns that have now hit the recurrence threshold (≥3 jobs).
-    # This closes the feedback loop: scan findings become non-negotiable standing rules
-    # without any manual intervention.
-    try:
-        promoted = promote_patterns_to_rules(threshold=3)
-        if promoted:
-            log.info(
-                "security_knowledge: auto-promoted %d pattern(s) to standing rules "
-                "after recording findings from job %s",
-                promoted, job_id,
-            )
-    except Exception as exc:
-        log.warning("security_knowledge: auto-promotion failed (non-blocking): %s", exc)
-
-    return updated
+    _try_auto_promote(job_id)
+    return len(findings)
 
 
 def _normalise_key(p: dict) -> str:
@@ -229,6 +269,45 @@ def _normalise_key(p: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompt builder — called by conversion_agent.py
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _append_standing_rules_section(lines: list[str], rules: list[dict]) -> None:
+    """Append formatted standing-rules lines to *lines* (mutates in place)."""
+    lines.append("── Standing Rules (always apply) ──────────────────────")
+    for i, r in enumerate(rules, 1):
+        sev  = r.get("severity", "")
+        desc = r.get("description", "")
+        guid = r.get("guidance", "")
+        lines.append(f"{i}. [{sev}] {desc}")
+        if guid:
+            lines.append(f"   → {guid}")
+    lines.append("")
+
+
+def _format_pattern_lines(i: int, p: dict) -> list[str]:
+    """Return formatted lines for one recurring pattern entry."""
+    name  = p.get("test_name") or p.get("test_id") or "unknown"
+    sev   = p.get("severity", "")
+    count = p.get("occurrences", 1)
+    desc  = p.get("description", "")
+    rem   = p.get("remediation", "")
+    out   = [f"{i}. [{sev}] {name}  (seen {count}× across past jobs)"]
+    if desc:
+        out.append(f"   Issue: {desc}")
+    if rem:
+        out.append(f"   Fix:   {rem}")
+    return out
+
+
+def _append_patterns_section(lines: list[str], patterns: list[dict]) -> None:
+    """Append formatted recurring-patterns lines to *lines* (mutates in place)."""
+    lines.append("── Recurring Issues Seen in Past Conversions (fix proactively) ──")
+    lines.append("These issues have appeared in previously converted code.")
+    lines.append("Actively avoid them — do not wait for a security scan to catch them.")
+    lines.append("")
+    for i, p in enumerate(patterns, 1):
+        lines.extend(_format_pattern_lines(i, p))
+    lines.append("")
+
 
 def build_security_context_block(top_n_patterns: int = 15) -> str:
     """
@@ -255,41 +334,112 @@ def build_security_context_block(top_n_patterns: int = 15) -> str:
         "",
     ]
 
-    # ── Standing rules ───────────────────────────────────────────────────────
     if rules:
-        lines.append("── Standing Rules (always apply) ──────────────────────")
-        for i, r in enumerate(rules, 1):
-            sev  = r.get("severity", "")
-            desc = r.get("description", "")
-            guid = r.get("guidance", "")
-            lines.append(f"{i}. [{sev}] {desc}")
-            if guid:
-                lines.append(f"   → {guid}")
-        lines.append("")
-
-    # ── Learned patterns ─────────────────────────────────────────────────────
+        _append_standing_rules_section(lines, rules)
     if patterns:
-        lines.append("── Recurring Issues Seen in Past Conversions (fix proactively) ──")
-        lines.append("These issues have appeared in previously converted code.")
-        lines.append("Actively avoid them — do not wait for a security scan to catch them.")
-        lines.append("")
-        for i, p in enumerate(patterns, 1):
-            name  = p.get("test_name") or p.get("test_id") or "unknown"
-            sev   = p.get("severity", "")
-            count = p.get("occurrences", 1)
-            desc  = p.get("description", "")
-            rem   = p.get("remediation", "")
-            lines.append(f"{i}. [{sev}] {name}  (seen {count}× across past jobs)")
-            if desc:
-                lines.append(f"   Issue: {desc}")
-            if rem:
-                lines.append(f"   Fix:   {rem}")
-        lines.append("")
+        _append_patterns_section(lines, patterns)
 
     lines.append("═══════════════════════════════════════════════════════")
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _load_rules_data_for_promotion() -> dict:
+    """Load rules YAML for duplicate-checking; return empty structure on any error."""
+    try:
+        with RULES_PATH.open("r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {"rules": []}
+    except Exception as exc:
+        log.debug(
+            "Could not read rules file for dedup check (%s: %s) — treating as empty.",
+            type(exc).__name__, exc,
+        )
+        return {"rules": []}
+
+
+def _build_existing_rule_sets(existing_rules: list[dict]) -> tuple[set, set]:
+    """Return (existing_ids, existing_names) sets for deduplication."""
+    existing_ids = {r.get("id", "") for r in existing_rules}
+    existing_names = {
+        (r.get("test_name") or r.get("description", ""))[:60].lower().replace(" ", "_")
+        for r in existing_rules
+    }
+    return existing_ids, existing_names
+
+
+def _clamp_severity(severity: str) -> str:
+    """Return severity clamped to the recognised set."""
+    if severity not in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        return "MEDIUM"
+    return severity
+
+
+def _build_promoted_rule(pattern: dict, rule_id: str, raw_key: str) -> dict:
+    """Construct the rule dict for a newly promoted pattern."""
+    severity    = _clamp_severity(pattern.get("severity", "MEDIUM"))
+    description = pattern.get("description") or pattern.get("test_name") or raw_key
+    guidance    = (
+        pattern.get("remediation")
+        or "Review all occurrences of this pattern in generated code and apply the fix described above."
+    )
+    return {
+        "id":          rule_id,
+        "severity":    severity,
+        "category":    pattern.get("source", "scan-finding"),
+        "description": f"[Auto-promoted from {pattern.get('occurrences', 3)}× scan finding] {description}",
+        "guidance":    guidance,
+        "enabled":     True,
+    }
+
+
+def _try_promote_pattern(
+    pattern: dict,
+    threshold: int,
+    existing_ids: set,
+    existing_names: set,
+    existing_rules: list[dict],
+) -> bool:
+    """
+    Attempt to promote one pattern.  Mutates existing_ids/existing_names/existing_rules
+    and the pattern dict.  Returns True if promoted, False otherwise.
+    """
+    if pattern.get("promoted") or pattern.get("occurrences", 0) < threshold:
+        return False
+
+    raw_key    = _normalise_key(pattern)
+    rule_id    = f"rule_auto_{raw_key[:40]}"
+    short_name = raw_key[:60].lower()
+
+    if rule_id in existing_ids or short_name in existing_names:
+        pattern["promoted"] = True
+        return False
+
+    new_rule = _build_promoted_rule(pattern, rule_id, raw_key)
+    existing_rules.append(new_rule)
+    existing_ids.add(rule_id)
+    existing_names.add(short_name)
+    pattern["promoted"]    = True
+    pattern["promoted_to"] = rule_id
+    log.info(
+        "security_knowledge: promoted pattern '%s' (%dx) to standing rule %s",
+        raw_key, pattern["occurrences"], rule_id,
+    )
+    return True
+
+
+def _save_promoted_rules(rules_data: dict, data: dict, patterns: list[dict]) -> bool:
+    """Persist the updated rules YAML and patterns JSON. Returns False on write error."""
+    try:
+        with RULES_PATH.open("w", encoding="utf-8") as fh:
+            yaml.dump(rules_data, fh, default_flow_style=False,
+                      allow_unicode=True, sort_keys=False)
+    except Exception as exc:
+        log.warning("security_knowledge: could not write promoted rules: %s", exc)
+        return False
+    data["patterns"] = patterns
+    _save_patterns_raw(data)
+    return True
 
 
 def promote_patterns_to_rules(threshold: int = 3) -> int:
@@ -309,86 +459,21 @@ def promote_patterns_to_rules(threshold: int = 3) -> int:
 
     Returns the number of rules newly promoted.
     """
-    data     = _load_patterns_raw()
-    patterns = data.get("patterns", [])
-
-    # Load current rules to check for duplicates
-    try:
-        with RULES_PATH.open("r", encoding="utf-8") as fh:
-            rules_data = yaml.safe_load(fh) or {"rules": []}
-    except Exception as exc:
-        log.debug("Could not read rules file for dedup check (%s: %s) — treating as empty.", type(exc).__name__, exc)
-        rules_data = {"rules": []}
-
+    data           = _load_patterns_raw()
+    patterns       = data.get("patterns", [])
+    rules_data     = _load_rules_data_for_promotion()
     existing_rules = rules_data.get("rules", [])
+    existing_ids, existing_names = _build_existing_rule_sets(existing_rules)
 
-    # Build a set of existing rule identifiers for dedup
-    existing_ids = {r.get("id", "") for r in existing_rules}
-    existing_names = {
-        (r.get("test_name") or r.get("description", ""))[:60].lower().replace(" ", "_")
-        for r in existing_rules
-    }
-
-    promoted = 0
-    for pattern in patterns:
-        if pattern.get("promoted"):
-            continue  # already done
-        if pattern.get("occurrences", 0) < threshold:
-            continue
-
-        # Build a candidate rule ID from the test_name or test_id
-        raw_key = _normalise_key(pattern)
-        rule_id = f"rule_auto_{raw_key[:40]}"
-        short_name = raw_key[:60].lower()
-
-        # Skip if an equivalent rule already exists
-        if rule_id in existing_ids or short_name in existing_names:
-            pattern["promoted"] = True  # mark so we don't re-check
-            continue
-
-        severity = pattern.get("severity", "MEDIUM")
-        # Clamp to recognised severities
-        if severity not in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
-            severity = "MEDIUM"
-
-        description = pattern.get("description") or pattern.get("test_name") or raw_key
-        guidance    = (
-            pattern.get("remediation")
-            or "Review all occurrences of this pattern in generated code and apply the fix described above."
-        )
-
-        new_rule = {
-            "id":          rule_id,
-            "severity":    severity,
-            "category":    pattern.get("source", "scan-finding"),
-            "description": f"[Auto-promoted from {pattern.get('occurrences', threshold)}× scan finding] {description}",
-            "guidance":    guidance,
-            "enabled":     True,
-        }
-
-        existing_rules.append(new_rule)
-        existing_ids.add(rule_id)
-        existing_names.add(short_name)
-        pattern["promoted"]    = True
-        pattern["promoted_to"] = rule_id
-        promoted += 1
-        log.info(
-            "security_knowledge: promoted pattern '%s' (%dx) to standing rule %s",
-            raw_key, pattern["occurrences"], rule_id,
-        )
+    promoted = sum(
+        _try_promote_pattern(p, threshold, existing_ids, existing_names, existing_rules)
+        for p in patterns
+    )
 
     if promoted:
         rules_data["rules"] = existing_rules
-        try:
-            with RULES_PATH.open("w", encoding="utf-8") as fh:
-                yaml.dump(rules_data, fh, default_flow_style=False,
-                          allow_unicode=True, sort_keys=False)
-        except Exception as exc:
-            log.warning("security_knowledge: could not write promoted rules: %s", exc)
+        if not _save_promoted_rules(rules_data, data, patterns):
             return 0
-
-        data["patterns"] = patterns
-        _save_patterns_raw(data)
         log.info("security_knowledge: promoted %d pattern(s) to standing rules", promoted)
 
     return promoted

@@ -47,6 +47,118 @@ class VerificationAgent(BaseAgent):
         return await _verify_impl(parse_report, complexity, documentation_md, graph, session_parse_report)
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _port_in_location(ports: list[str], location: str) -> bool:
+    """Return True if any port's field name appears in location."""
+    return any(p.split(".")[-1] in location for p in ports)
+
+
+def _is_no_action_dead_logic(
+    f: VerificationFlag,
+    expr_input_ports: list[str],
+    rank_index_ports: list[str],
+) -> bool:
+    """
+    Return True if a DEAD_LOGIC flag should be suppressed because it refers
+    to a known no-action port (expression-input passthrough or RANKINDEX).
+    """
+    if f.flag_type != "DEAD_LOGIC":
+        return False
+    if _port_in_location(expr_input_ports, f.location):
+        return True
+    if _port_in_location(rank_index_ports, f.location):
+        return True
+    return False
+
+
+def _detect_claude_error(claude_flags: list[VerificationFlag]) -> bool:
+    """Return True if the Claude review call itself failed (not just found issues)."""
+    return (
+        len(claude_flags) == 1
+        and claude_flags[0].flag_type == "REVIEW_REQUIRED"
+        and "Claude quality check could not complete" in claude_flags[0].description
+    )
+
+
+def _build_check_detail(errored: bool, count: int, count_label: str) -> str | None:
+    """Build the detail string for a Claude accuracy check."""
+    if errored:
+        return "Claude quality check could not complete — re-run verification. See flags section for details."
+    if count:
+        return f"{count} {count_label} flag(s) raised — see FLAGS section."
+    return None
+
+
+def _build_accuracy_checks(
+    claude_flags: list[VerificationFlag],
+) -> list[CheckResult]:
+    """Build the two Claude graph-review accuracy checks."""
+    claude_errored   = _detect_claude_error(claude_flags)
+    high_risk_count  = sum(1 for f in claude_flags if f.flag_type in ("HIGH_RISK", "INCOMPLETE_LOGIC"))
+    env_value_count  = sum(1 for f in claude_flags if f.flag_type == "ENVIRONMENT_SPECIFIC_VALUE")
+
+    return [
+        CheckResult(
+            name="Claude graph review completed (high-risk pattern check)",
+            passed=not claude_errored,
+            detail=_build_check_detail(claude_errored, high_risk_count, "high-risk / incomplete-logic"),
+        ),
+        CheckResult(
+            name="Claude graph review completed (environment value check)",
+            passed=not claude_errored,
+            detail=_build_check_detail(claude_errored, env_value_count, "hardcoded environment value"),
+        ),
+    ]
+
+
+def _determine_overall_status(
+    conversion_blocked: bool,
+    total_failed: int,
+) -> tuple[str, str]:
+    """Return (overall_status, recommendation) based on blocking flags and failed checks."""
+    if conversion_blocked or total_failed > 0:
+        return (
+            "REQUIRES_REMEDIATION",
+            "REQUIRES REMEDIATION — resolve all blocking issues and failed checks before conversion",
+        )
+    return (
+        "APPROVED_FOR_CONVERSION",
+        "APPROVED FOR CONVERSION — all checks passed, proceed to Step 5 human review",
+    )
+
+
+def _first_mapping_name(parse_report: ParseReport) -> str:
+    """Return first mapping name from parse report, or 'unknown'."""
+    return parse_report.mapping_names[0] if parse_report.mapping_names else "unknown"
+
+
+def _filter_action_flags(
+    claude_flags: list[VerificationFlag],
+    expr_input_ports: list[str],
+    rank_index_ports: list[str],
+) -> list[VerificationFlag]:
+    """Return claude_flags excluding suppressed no-action DEAD_LOGIC flags."""
+    return [
+        f for f in claude_flags
+        if not _is_no_action_dead_logic(f, expr_input_ports, rank_index_ports)
+    ]
+
+
+def _count_checks(all_checks: list) -> tuple[int, int]:
+    """Return (total_passed, total_failed) for a list of CheckResult."""
+    passed = sum(1 for c in all_checks if c.passed)
+    failed = sum(1 for c in all_checks if not c.passed)
+    return passed, failed
+
+
+def _blocking_flags(flags: list[VerificationFlag]) -> list[VerificationFlag]:
+    """Return flags that block conversion."""
+    return [f for f in flags if f.blocking]
+
+
+# ── Core implementation ───────────────────────────────────────────────────────
+
 async def _verify_impl(
     parse_report: ParseReport,
     complexity: ComplexityReport,
@@ -56,14 +168,11 @@ async def _verify_impl(
 ) -> VerificationReport:
     """Run all verification checks and return a complete VerificationReport."""
 
-    mapping_name = parse_report.mapping_names[0] if parse_report.mapping_names else "unknown"
+    mapping_name = _first_mapping_name(parse_report)
 
-    # ─────────────────────────────────────────
-    # DETERMINISTIC CHECKS (pure Python)
-    # ─────────────────────────────────────────
     (
         completeness_checks,
-        _accuracy_placeholder,   # empty — filled below after Claude call
+        _accuracy_placeholder,
         self_checks,
         flags,
         expr_input_ports,
@@ -72,92 +181,23 @@ async def _verify_impl(
         parse_report, complexity, documentation_md, graph, session_parse_report
     )
 
-    # ─────────────────────────────────────────
-    # QUALITATIVE FLAGS — Claude (graph-based)
-    # Claude reviews the mapping graph directly for logic risks, hardcoded
-    # values, high-risk patterns, and ambiguous logic.  It no longer reads
-    # the documentation — that is human-facing and reviewed visually at Gate 1.
-    # ─────────────────────────────────────────
     claude_flags = await _run_claude_quality_checks(
         graph, mapping_name, expr_input_ports,
         rank_index_ports=rank_index_ports,
         tier=complexity.tier,
     )
 
-    # Post-filter: suppress DEAD_LOGIC flags Claude raised for known no-action ports.
-    #   1. Expression-input-only ports: INPUT/OUTPUT passthroughs that feed derivations
-    #      within the same transformation — they are not dead, the value IS consumed.
-    #   2. RANKINDEX ports on Rank transformations: the deduplication is intrinsic to
-    #      the Rank; RANKINDEX never needs a downstream connection.
-    def _is_no_action_flag(f: VerificationFlag) -> bool:
-        if f.flag_type != "DEAD_LOGIC":
-            return False
-        # Expr-input suppression: check if any expr_input port name appears in the location
-        if any(eip.split(".")[-1] in f.location for eip in expr_input_ports):
-            return True
-        # RANKINDEX suppression: check if any rank_index_port string appears in the location
-        if any(rip.split(".")[-1] in f.location for rip in rank_index_ports):
-            return True
-        return False
+    # Suppress DEAD_LOGIC flags for known no-action ports
+    flags.extend(_filter_action_flags(claude_flags, expr_input_ports, rank_index_ports))
 
-    flags.extend(f for f in claude_flags if not _is_no_action_flag(f))
+    accuracy_checks = _build_accuracy_checks(claude_flags)
 
-    # Build accuracy checks from Claude graph review.
-    # These checks reflect whether the qualitative review RAN successfully — not whether
-    # findings were clean.  The actual risk findings (HIGH_RISK, INCOMPLETE_LOGIC, etc.)
-    # are surfaced as FLAGS with severity, description, and recommendations.  Failing a
-    # check here solely because Claude found something would cause a misleading
-    # "REQUIRES REMEDIATION" status on a perfectly convertible mapping.
-    #
-    # A check FAILS only if the Claude review call itself could not complete (API error,
-    # timeout, etc.) — in which case the result is a single REVIEW_REQUIRED flag from the
-    # exception handler, and the reviewer should re-run.
-    accuracy_checks: list[CheckResult] = []
-    claude_errored = (
-        len(claude_flags) == 1
-        and claude_flags[0].flag_type == "REVIEW_REQUIRED"
-        and "Claude quality check could not complete" in claude_flags[0].description
-    )
-    high_risk_count = sum(1 for f in claude_flags if f.flag_type in ("HIGH_RISK", "INCOMPLETE_LOGIC"))
-    env_value_count = sum(1 for f in claude_flags if f.flag_type == "ENVIRONMENT_SPECIFIC_VALUE")
+    all_checks         = completeness_checks + accuracy_checks + self_checks
+    total_passed, total_failed = _count_checks(all_checks)
+    blocking_flags     = _blocking_flags(flags)
+    conversion_blocked = bool(blocking_flags)
 
-    accuracy_checks.append(CheckResult(
-        name="Claude graph review completed (high-risk pattern check)",
-        passed=not claude_errored,
-        detail=(
-            "Claude quality check could not complete — re-run verification. "
-            "See flags section for details."
-        ) if claude_errored else (
-            f"{high_risk_count} high-risk / incomplete-logic flag(s) raised — see FLAGS section."
-            if high_risk_count else None
-        )
-    ))
-    accuracy_checks.append(CheckResult(
-        name="Claude graph review completed (environment value check)",
-        passed=not claude_errored,
-        detail=(
-            "Claude quality check could not complete — re-run verification."
-        ) if claude_errored else (
-            f"{env_value_count} hardcoded environment value flag(s) raised — see FLAGS section."
-            if env_value_count else None
-        )
-    ))
-
-    # ─────────────────────────────────────────
-    # Build final report
-    # ─────────────────────────────────────────
-    all_checks = completeness_checks + accuracy_checks + self_checks
-    total_passed = sum(1 for c in all_checks if c.passed)
-    total_failed = sum(1 for c in all_checks if not c.passed)
-    blocking_flags = [f for f in flags if f.blocking]
-    conversion_blocked = len(blocking_flags) > 0
-
-    if conversion_blocked or total_failed > 0:
-        overall_status = "REQUIRES_REMEDIATION"
-        recommendation = "REQUIRES REMEDIATION — resolve all blocking issues and failed checks before conversion"
-    else:
-        overall_status = "APPROVED_FOR_CONVERSION"
-        recommendation = "APPROVED FOR CONVERSION — all checks passed, proceed to Step 5 human review"
+    overall_status, recommendation = _determine_overall_status(conversion_blocked, total_failed)
 
     return VerificationReport(
         mapping_name=mapping_name,

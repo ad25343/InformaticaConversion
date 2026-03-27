@@ -275,6 +275,178 @@ class SecurityAgent(BaseAgent):
         return await _scan_impl(conversion, mapping_name)
 
 
+# ── Scan sub-steps ──────────────────────────────────────────────────────────
+
+def _file_extension(filename: str) -> str:
+    """Return the lowercased extension including the dot, or empty string."""
+    return ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+
+
+def _run_bandit_scan(
+    files: dict[str, str],
+) -> tuple[list[SecurityFinding], bool, Optional[str]]:
+    """Scan Python files with bandit. Returns (findings, ran_bandit, bandit_error)."""
+    all_findings: list[SecurityFinding] = []
+    ran_bandit = False
+    bandit_error: Optional[str] = None
+
+    for filename, code in files.items():
+        if _file_extension(filename) not in _BANDIT_EXTENSIONS:
+            continue
+        result = scan_python_with_bandit(code, filename=filename)
+        ran_bandit = True
+        if result.get("error"):
+            bandit_error = result["error"]
+            log.warning("bandit error for %s: %s", filename, bandit_error)
+        for f in result.get("findings", []):
+            test_id = f.get("test_id", "")
+            all_findings.append(SecurityFinding(
+                source="bandit",
+                test_id=test_id,
+                test_name=f.get("test_name"),
+                severity=f.get("severity", "LOW"),
+                confidence=f.get("confidence", ""),
+                line=f.get("line"),
+                filename=filename,
+                text=f.get("text", ""),
+                code=f.get("code", ""),
+                remediation=_BANDIT_REMEDIATIONS.get(test_id, ""),
+            ))
+
+    return all_findings, ran_bandit, bandit_error
+
+
+_YAML_REMEDIATION = (
+    "Move this credential out of the YAML file. "
+    "Reference it via an environment variable (e.g. `password: {{ env_var('DB_PASSWORD') }}`), "
+    "a secrets manager (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault), "
+    "or a CI/CD secret (GitHub Actions secrets, Kubernetes Secrets). "
+    "Never commit credentials to version control."
+)
+
+
+def _run_yaml_scan(files: dict[str, str]) -> list[SecurityFinding]:
+    """Scan YAML files with regex secret detector."""
+    findings: list[SecurityFinding] = []
+    for filename, code in files.items():
+        if _file_extension(filename) not in _YAML_EXTENSIONS:
+            continue
+        for f in scan_yaml_for_secrets(code, filename=filename):
+            findings.append(SecurityFinding(
+                source="yaml_scan",
+                test_name="plaintext_secret_in_yaml",
+                severity=f.get("severity", "HIGH"),
+                filename=filename,
+                line=f.get("line"),
+                text=f.get("message", ""),
+                code=f.get("value_preview", ""),
+                remediation=_YAML_REMEDIATION,
+            ))
+    return findings
+
+
+def _skip_file(fname: str) -> bool:
+    """Return True if the file should be excluded from Claude's security review."""
+    return any(fname.lower().endswith(skip) for skip in _CLAUDE_SKIP_EXTENSIONS)
+
+
+def _files_for_claude_review(files: dict[str, str]) -> dict[str, str]:
+    """Return subset of files eligible for Claude security review."""
+    return {fname: code for fname, code in files.items() if not _skip_file(fname)}
+
+
+def _parse_claude_finding(f: dict) -> "SecurityFinding":
+    """Build a SecurityFinding from a single raw Claude finding dict."""
+    return SecurityFinding(
+        source="claude",
+        test_name=f.get("test_name"),
+        severity=f.get("severity", "LOW").upper(),
+        filename=f.get("filename"),
+        text=f.get("text", ""),
+        code=(f.get("code") or "")[:200],
+        line=f.get("line"),
+        remediation=f.get("remediation", ""),
+    )
+
+
+def _run_claude_scan(
+    files: dict[str, str],
+    stack: str,
+) -> tuple[list["SecurityFinding"], Optional[str], str]:
+    """
+    Call Claude for a security review of all (non-binary) files.
+    Returns (findings, claude_summary, claude_recommendation).
+    """
+    files_to_review = _files_for_claude_review(files)
+    if not files_to_review:
+        return [], None, "APPROVED"
+
+    files_section = _build_files_section(files_to_review)
+    prompt = _SECURITY_PROMPT.format(stack=stack, files_section=files_section)
+
+    try:
+        client = make_sync_client()
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            system=_SECURITY_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw    = response.content[0].text.strip()
+        parsed = _extract_json(raw)
+
+        findings = [_parse_claude_finding(f) for f in parsed.get("findings", [])]
+        log.info("security_agent: Claude found %d additional findings", len(findings))
+        return findings, parsed.get("summary"), parsed.get("recommendation", "APPROVED")
+
+    except Exception as exc:
+        log.warning("security_agent: Claude review error: %s", exc)
+        return [], f"Claude security review could not complete: {exc}", "APPROVED"
+
+
+def _determine_recommendation(
+    critical_count: int,
+    high_count: int,
+    medium_count: int,
+    claude_recommendation: str,
+) -> str:
+    """Derive the final recommendation from severity counts."""
+    if critical_count > 0 or high_count > 0:
+        return "REQUIRES_FIXES"
+    if medium_count > 0 or claude_recommendation == "REVIEW_RECOMMENDED":
+        return "REVIEW_RECOMMENDED"
+    return "APPROVED"
+
+
+def _stack_value(target_stack) -> str:
+    """Return string value of target_stack regardless of whether it's an enum or str."""
+    return target_stack.value if hasattr(target_stack, "value") else str(target_stack)
+
+
+def _count_severity(findings: list, sev: str) -> int:
+    """Return count of findings matching sev."""
+    return sum(1 for f in findings if f.severity == sev)
+
+
+def _count_by_severity(all_findings: list) -> tuple[int, int, int, int]:
+    """Return (critical, high, medium, low) finding counts."""
+    return (
+        _count_severity(all_findings, "CRITICAL"),
+        _count_severity(all_findings, "HIGH"),
+        _count_severity(all_findings, "MEDIUM"),
+        _count_severity(all_findings, "LOW"),
+    )
+
+
+def _log_findings(all_findings: list, name: str) -> None:
+    """Emit one structured log line per finding for grep/SIEM."""
+    for _f in all_findings:
+        log.info(
+            "SECURITY_FINDING mapping=%s file=%s severity=%s tool=%s test=%s line=%s — %s",
+            name, _f.filename, _f.severity, _f.tool, _f.test_id, _f.line, _f.text[:120],
+        )
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 
 async def _scan_impl(
@@ -294,136 +466,25 @@ async def _scan_impl(
     SecurityScanReport
     """
     name  = mapping_name or conversion.mapping_name
-    stack = conversion.target_stack.value if hasattr(conversion.target_stack, "value") \
-            else str(conversion.target_stack)
+    stack = _stack_value(conversion.target_stack)
 
-    all_findings: list[SecurityFinding] = []
-    skipped_files: list[str] = []
-    bandit_error: Optional[str] = None
-    ran_bandit = False
-
-    # ── 1. bandit scan (Python files only) ──────────────────────────────────
     log.info("security_agent: starting bandit scan for job mapping=%s", name)
 
-    for filename, code in conversion.files.items():
-        ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if ext not in _BANDIT_EXTENSIONS:
-            continue
+    bandit_findings, ran_bandit, bandit_error = _run_bandit_scan(conversion.files)
+    log.info("security_agent: bandit finished, %d findings so far", len(bandit_findings))
 
-        result = scan_python_with_bandit(code, filename=filename)
-        ran_bandit = True
+    yaml_findings   = _run_yaml_scan(conversion.files)
+    claude_findings, claude_summary, claude_recommendation = _run_claude_scan(conversion.files, stack)
 
-        if result.get("error"):
-            bandit_error = result["error"]
-            log.warning("bandit error for %s: %s", filename, bandit_error)
+    all_findings = bandit_findings + yaml_findings + claude_findings
 
-        for f in result.get("findings", []):
-            test_id = f.get("test_id", "")
-            all_findings.append(SecurityFinding(
-                source="bandit",
-                test_id=test_id,
-                test_name=f.get("test_name"),
-                severity=f.get("severity", "LOW"),
-                confidence=f.get("confidence", ""),
-                line=f.get("line"),
-                filename=filename,
-                text=f.get("text", ""),
-                code=f.get("code", ""),
-                remediation=_BANDIT_REMEDIATIONS.get(test_id, ""),
-            ))
+    critical_count, high_count, medium_count, low_count = _count_by_severity(all_findings)
 
-    log.info("security_agent: bandit finished, %d findings so far", len(all_findings))
+    recommendation = _determine_recommendation(
+        critical_count, high_count, medium_count, claude_recommendation
+    )
 
-    # ── 1b. YAML secrets scan (regex, fast, no subprocess) ──────────────────
-    for filename, code in conversion.files.items():
-        ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if ext not in _YAML_EXTENSIONS:
-            continue
-        yaml_findings = scan_yaml_for_secrets(code, filename=filename)
-        for f in yaml_findings:
-            all_findings.append(SecurityFinding(
-                source="yaml_scan",
-                test_name="plaintext_secret_in_yaml",
-                severity=f.get("severity", "HIGH"),
-                filename=filename,
-                line=f.get("line"),
-                text=f.get("message", ""),
-                code=f.get("value_preview", ""),
-                remediation=(
-                    "Move this credential out of the YAML file. "
-                    "Reference it via an environment variable (e.g. `password: {{ env_var('DB_PASSWORD') }}`), "
-                    "a secrets manager (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault), "
-                    "or a CI/CD secret (GitHub Actions secrets, Kubernetes Secrets). "
-                    "Never commit credentials to version control."
-                ),
-            ))
-
-    # ── 2. Claude security review (all files) ───────────────────────────────
-    files_to_review: dict[str, str] = {
-        fname: code
-        for fname, code in conversion.files.items()
-        if not any(fname.lower().endswith(skip) for skip in _CLAUDE_SKIP_EXTENSIONS)
-    }
-
-    claude_summary: Optional[str] = None
-    claude_recommendation = "APPROVED"
-
-    if files_to_review:
-        files_section = _build_files_section(files_to_review)
-        prompt = _SECURITY_PROMPT.format(stack=stack, files_section=files_section)
-
-        try:
-            client = make_sync_client()
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=2048,
-                system=_SECURITY_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text.strip()
-            parsed = _extract_json(raw)
-
-            for f in parsed.get("findings", []):
-                sev = f.get("severity", "LOW").upper()
-                all_findings.append(SecurityFinding(
-                    source="claude",
-                    test_name=f.get("test_name"),
-                    severity=sev,
-                    filename=f.get("filename"),
-                    text=f.get("text", ""),
-                    code=(f.get("code") or "")[:200],
-                    line=f.get("line"),
-                    remediation=f.get("remediation", ""),
-                ))
-
-            claude_summary = parsed.get("summary")
-            claude_recommendation = parsed.get("recommendation", "APPROVED")
-            log.info("security_agent: Claude found %d additional findings", len(parsed.get("findings", [])))
-
-        except Exception as exc:
-            claude_summary = f"Claude security review could not complete: {exc}"
-            log.warning("security_agent: Claude review error: %s", exc)
-
-    # ── 3. Aggregate severity counts ─────────────────────────────────────────
-    critical_count = sum(1 for f in all_findings if f.severity == "CRITICAL")
-    high_count     = sum(1 for f in all_findings if f.severity == "HIGH")
-    medium_count   = sum(1 for f in all_findings if f.severity == "MEDIUM")
-    low_count      = sum(1 for f in all_findings if f.severity == "LOW")
-
-    # ── 4. Final recommendation — most severe wins ────────────────────────────
-    if critical_count > 0 or high_count > 0:
-        recommendation = "REQUIRES_FIXES"
-    elif medium_count > 0 or claude_recommendation == "REVIEW_RECOMMENDED":
-        recommendation = "REVIEW_RECOMMENDED"
-    else:
-        recommendation = "APPROVED"
-
-    # ── Audit-grade logging: one structured line per finding for grep/SIEM ─────
-    for _f in all_findings:
-        log.info(
-            "SECURITY_FINDING mapping=%s file=%s severity=%s tool=%s test=%s line=%s — %s",
-            name, _f.filename, _f.severity, _f.tool, _f.test_id, _f.line, _f.text[:120],
-        )
+    _log_findings(all_findings, name)
     log.info(
         "SECURITY_DECISION mapping=%s recommendation=%s "
         "critical=%d high=%d medium=%d low=%d",
@@ -442,7 +503,7 @@ async def _scan_impl(
         low_count=low_count,
         recommendation=recommendation,
         claude_summary=claude_summary,
-        skipped_files=skipped_files,
+        skipped_files=[],
     )
 
 
@@ -496,32 +557,44 @@ async def scan_files(
     return report
 
 
-def _extract_json(text: str) -> dict:
-    """Extract the first JSON object from a Claude response."""
-    # Try direct parse first
+def _try_parse_json(text: str) -> dict | None:
+    """Attempt a direct JSON parse. Returns dict on success, None on failure."""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass
+        return None
 
-    # Find ```json ... ``` block
+
+def _try_extract_fenced_json(text: str) -> dict | None:
+    """Extract and parse JSON from a ```json ... ``` fence. Returns dict or None."""
     import re
     m = re.search(r"```(?:json)?\s*(\{[\s\S]+?\})\s*```", text)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
 
-    # Find first { ... } block
+
+def _try_extract_braced_json(text: str) -> dict | None:
+    """Extract and parse the first { ... } block in text. Returns dict or None."""
     start = text.find("{")
     end   = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start:end + 1])
-        except json.JSONDecodeError:
-            pass
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
 
+
+def _extract_json(text: str) -> dict:
+    """Extract the first JSON object from a Claude response."""
+    for parser in (_try_parse_json, _try_extract_fenced_json, _try_extract_braced_json):
+        result = parser(text)
+        if result is not None:
+            return result
     log.warning("security_agent: could not parse Claude JSON response")
     return {"findings": [], "summary": "Parse error", "recommendation": "REVIEW_RECOMMENDED"}
 

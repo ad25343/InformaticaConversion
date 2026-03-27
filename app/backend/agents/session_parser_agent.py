@@ -54,6 +54,121 @@ class SessionParserAgent(BaseAgent):
         return _parse_impl(mapping_xml, workflow_xml, parameter_file)
 
 
+def _make_uploaded_file(filename: str, file_type: FileType, now: str) -> UploadedFile:
+    return UploadedFile(filename=filename, file_type=file_type, detected_at=now)
+
+
+def _detect_workflow_type(workflow_xml: Optional[str], now: str) -> tuple[Optional[str], list[UploadedFile]]:
+    """Detect workflow file type and build its UploadedFile entry."""
+    if workflow_xml is None:
+        return None, []
+    wf_type = _detect_type(workflow_xml)
+    return wf_type, [_make_uploaded_file("workflow.xml", wf_type, now)]
+
+
+def _determine_parse_status(
+    cross_ref: CrossRefValidation,
+    workflow_xml: Optional[str],
+    session_config: Optional[SessionConfig],
+) -> str:
+    """Determine the parse_status string from cross-ref and session config results."""
+    if cross_ref.status == "INVALID":
+        return "FAILED"
+    if cross_ref.status == "WARNINGS":
+        return "PARTIAL"
+    if workflow_xml is None:
+        return "MAPPING_ONLY"
+    if session_config is None:
+        return "PARTIAL"
+    return "COMPLETE"
+
+
+def _wf_type_label(wf_type) -> str:
+    """Return a human-readable label for the workflow file type."""
+    if wf_type is None:
+        return "UNKNOWN"
+    return wf_type.value
+
+
+def _extract_session_or_notes(
+    workflow_xml: Optional[str],
+    wf_type,
+    param_lookup: dict[str, str],
+) -> tuple[Optional[SessionConfig], list[str], list[str]]:
+    """
+    Run session config extraction if conditions are met.
+    Returns (session_config, unresolved_variables, notes).
+    """
+    notes: list[str] = []
+    if workflow_xml and wf_type == FileType.WORKFLOW:
+        session_config, unresolved = _extract_session_config(workflow_xml, param_lookup)
+        if session_config is None:
+            notes.append("Workflow XML present but no SESSION task could be extracted.")
+        return session_config, unresolved, notes
+    if workflow_xml:
+        notes.append(
+            f"workflow.xml was detected as {_wf_type_label(wf_type)} "
+            "rather than WORKFLOW — session config skipped."
+        )
+    return None, [], notes
+
+
+def _resolve_params_and_session(
+    workflow_xml: Optional[str],
+    wf_type,
+    parameter_file: Optional[str],
+) -> tuple:
+    """
+    Parse parameters and extract session config.
+    Returns (raw_params, param_lookup, session_config, unresolved_variables, notes).
+    """
+    raw_params = _parse_parameter_file(parameter_file) if parameter_file else []
+    param_lookup: dict[str, str] = {p.name.upper(): p.value for p in raw_params}
+    session_config, unresolved_variables, notes = _extract_session_or_notes(
+        workflow_xml, wf_type, param_lookup
+    )
+    return raw_params, param_lookup, session_config, unresolved_variables, notes
+
+
+def _finalize_status_and_notes(
+    cross_ref: CrossRefValidation,
+    workflow_xml: Optional[str],
+    session_config: Optional[SessionConfig],
+    notes: list[str],
+) -> tuple[str, list[str]]:
+    """Append cross-ref failure note if needed and return (parse_status, notes)."""
+    if cross_ref.status == "INVALID":
+        notes.append("Cross-reference validation failed — see cross_ref.issues for details.")
+    return _determine_parse_status(cross_ref, workflow_xml, session_config), notes
+
+
+def _validate_mapping_type(
+    mapping_xml: Optional[str],
+    mapping_type: FileType,
+    uploaded_files: list[UploadedFile],
+    cross_ref: CrossRefValidation,
+) -> Optional[SessionParseReport]:
+    """
+    Return a FAILED SessionParseReport if the mapping XML is missing or wrong type,
+    or None if validation passes.
+    """
+    if mapping_xml is None or mapping_type == FileType.UNKNOWN:
+        return SessionParseReport(
+            uploaded_files=uploaded_files,
+            cross_ref=cross_ref,
+            parse_status="FAILED",
+            notes=["Mapping XML is missing or could not be identified."],
+        )
+    if mapping_type != FileType.MAPPING:
+        return SessionParseReport(
+            uploaded_files=uploaded_files,
+            cross_ref=cross_ref,
+            parse_status="FAILED",
+            notes=[f"Uploaded mapping file was detected as {mapping_type.value}, not MAPPING."],
+        )
+    return None
+
+
 def _parse_impl(
     mapping_xml:    Optional[str],
     workflow_xml:   Optional[str] = None,
@@ -74,90 +189,36 @@ def _parse_impl(
     SessionParseReport
     """
     now = datetime.now(timezone.utc).isoformat()
-    uploaded_files: list[UploadedFile] = []
-    notes: list[str] = []
 
     # ── 1. Detect file types ────────────────────────────────────────────────
     mapping_type = _detect_type(mapping_xml) if mapping_xml else FileType.UNKNOWN
-    uploaded_files.append(UploadedFile(
-        filename="mapping.xml",
-        file_type=mapping_type,
-        detected_at=now,
-    ))
+    wf_type, wf_files = _detect_workflow_type(workflow_xml, now)
 
-    if workflow_xml is not None:
-        wf_type = _detect_type(workflow_xml)
-        uploaded_files.append(UploadedFile(
-            filename="workflow.xml",
-            file_type=wf_type,
-            detected_at=now,
-        ))
-    else:
-        wf_type = None
-
+    uploaded_files: list[UploadedFile] = [
+        _make_uploaded_file("mapping.xml", mapping_type, now),
+        *wf_files,
+    ]
     if parameter_file is not None:
-        uploaded_files.append(UploadedFile(
-            filename="parameter_file.txt",
-            file_type=FileType.PARAMETER,
-            detected_at=now,
-        ))
+        uploaded_files.append(_make_uploaded_file("parameter_file.txt", FileType.PARAMETER, now))
 
     # ── 2. Cross-reference validation ───────────────────────────────────────
-    cross_ref = _cross_reference(
-        mapping_xml=mapping_xml,
-        workflow_xml=workflow_xml if wf_type == FileType.WORKFLOW else None,
-    )
+    wf_xml_for_xref = workflow_xml if wf_type == FileType.WORKFLOW else None
+    cross_ref = _cross_reference(mapping_xml=mapping_xml, workflow_xml=wf_xml_for_xref)
 
     # Stop early if mapping XML is completely missing / wrong type
-    if mapping_xml is None or mapping_type == FileType.UNKNOWN:
-        return SessionParseReport(
-            uploaded_files=uploaded_files,
-            cross_ref=cross_ref,
-            parse_status="FAILED",
-            notes=["Mapping XML is missing or could not be identified."],
-        )
+    early = _validate_mapping_type(mapping_xml, mapping_type, uploaded_files, cross_ref)
+    if early is not None:
+        return early
 
-    if mapping_type != FileType.MAPPING:
-        return SessionParseReport(
-            uploaded_files=uploaded_files,
-            cross_ref=cross_ref,
-            parse_status="FAILED",
-            notes=[f"Uploaded mapping file was detected as {mapping_type.value}, not MAPPING."],
-        )
-
-    # ── 3. Parameter file resolution ────────────────────────────────────────
-    raw_params = _parse_parameter_file(parameter_file) if parameter_file else []
-
-    # Build a lookup dict for variable substitution
-    param_lookup: dict[str, str] = {p.name.upper(): p.value for p in raw_params}
-
-    # ── 4. Session config extraction ────────────────────────────────────────
-    session_config: Optional[SessionConfig] = None
-    unresolved_variables: list[str] = []
-
-    if workflow_xml and wf_type == FileType.WORKFLOW:
-        session_config, unresolved = _extract_session_config(workflow_xml, param_lookup)
-        unresolved_variables = unresolved
-        if session_config is None:
-            notes.append("Workflow XML present but no SESSION task could be extracted.")
-    elif workflow_xml:
-        notes.append(
-            f"workflow.xml was detected as {wf_type.value if wf_type else 'UNKNOWN'} "
-            "rather than WORKFLOW — session config skipped."
-        )
+    # ── 3 & 4. Parameter resolution + session config extraction ─────────────
+    raw_params, param_lookup, session_config, unresolved_variables, notes = (
+        _resolve_params_and_session(workflow_xml, wf_type, parameter_file)
+    )
 
     # ── 5. Determine parse status ────────────────────────────────────────────
-    if cross_ref.status == "INVALID":
-        parse_status = "FAILED"
-        notes.append("Cross-reference validation failed — see cross_ref.issues for details.")
-    elif cross_ref.status == "WARNINGS":
-        parse_status = "PARTIAL"
-    elif workflow_xml and session_config is None:
-        parse_status = "PARTIAL"
-    elif workflow_xml is None:
-        parse_status = "MAPPING_ONLY"
-    else:
-        parse_status = "COMPLETE"
+    parse_status, notes = _finalize_status_and_notes(
+        cross_ref, workflow_xml, session_config, notes
+    )
 
     return SessionParseReport(
         uploaded_files=uploaded_files,
@@ -183,6 +244,49 @@ def parse(
 # File-type auto-detection
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_parameter_content(stripped: str) -> bool:
+    """Check if content looks like a parameter file.
+    Handles both flat ($$VAR=value) and XML (<PARAMFILE> / <PARAM NAME="$$...">).
+    """
+    if not stripped.startswith("<"):
+        return "$$" in stripped
+    # XML param file: must contain a <PARAM or <PARAMFILE element with $$ names
+    return "<PARAM" in stripped and "$$" in stripped
+
+
+def _try_parse_xml(stripped: str):
+    """Parse XML content; return root element or None on failure."""
+    try:
+        return safe_parse_xml(stripped)
+    except Exception:
+        return None
+
+
+def _classify_xml_root(root) -> FileType:
+    """Classify a parsed XML root as MAPPING, WORKFLOW, or UNKNOWN."""
+    ns = "http://powermart.informatica.com/DTD/PowerMart"
+    if root.find(f".//{{{ns}}}MAPPING") is not None or root.find(".//MAPPING") is not None:
+        return FileType.MAPPING
+    if _is_workflow_root(root, ns):
+        return FileType.WORKFLOW
+    return FileType.UNKNOWN
+
+
+def _is_workflow_root(root, ns: str) -> bool:
+    """Return True if the XML root contains a workflow with session tasks."""
+    has_wf = (
+        root.find(f".//{{{ns}}}WORKFLOW") is not None
+        or root.find(".//WORKFLOW") is not None
+    )
+    if not has_wf:
+        return False
+    return (
+        root.find(".//TASKINSTANCE[@TASKTYPE='Session']") is not None
+        or root.find(".//SESSION") is not None
+        or root.find(".//TASK[@TYPE='Session']") is not None
+    )
+
+
 def _detect_type(content: Optional[str]) -> FileType:
     """Infer whether content is a Mapping XML, Workflow XML, or Parameter file."""
     if not content:
@@ -190,34 +294,14 @@ def _detect_type(content: Optional[str]) -> FileType:
 
     stripped = content.strip()
 
-    # Parameter files: plain text, no XML declaration
-    if not stripped.startswith("<") and "$$" in stripped:
+    if _is_parameter_content(stripped):
         return FileType.PARAMETER
 
-    # Try to find the marker elements without full parsing (faster, tolerant)
-    try:
-        root = safe_parse_xml(stripped)
-    except Exception:
-        # Not valid XML — check for parameter file patterns
-        if re.search(r"\$\$\w+\s*=", stripped):
-            return FileType.PARAMETER
-        return FileType.UNKNOWN
+    root = _try_parse_xml(stripped)
+    if root is None:
+        return FileType.PARAMETER if re.search(r"\$\$\w+\s*=", stripped) else FileType.UNKNOWN
 
-    # Look for <MAPPING> element anywhere in tree
-    if root.find(".//{http://powermart.informatica.com/DTD/PowerMart}MAPPING") is not None \
-            or root.find(".//MAPPING") is not None:
-        return FileType.MAPPING
-
-    # Look for <WORKFLOW> element
-    if root.find(".//{http://powermart.informatica.com/DTD/PowerMart}WORKFLOW") is not None \
-            or root.find(".//WORKFLOW") is not None:
-        # Confirm it contains SESSION tasks (otherwise it might be a worklet)
-        if root.find(".//TASKINSTANCE[@TASKTYPE='Session']") is not None \
-                or root.find(".//SESSION") is not None \
-                or root.find(".//TASK[@TYPE='Session']") is not None:
-            return FileType.WORKFLOW
-
-    return FileType.UNKNOWN
+    return _classify_xml_root(root)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +320,67 @@ def _extract_mapping_name(mapping_xml: str) -> Optional[str]:
     return el.get("NAME") if el is not None else None
 
 
+def _find_session_element(root):
+    """Find SESSION or TASK[@TYPE='Session'] element in the XML tree."""
+    el = root.find(".//SESSION")
+    if el is None:
+        el = root.find(".//TASK[@TYPE='Session']")
+    return el
+
+
+_MAPPING_NAME_KEYS = frozenset(("mapping name", "mappingname"))
+
+
+def _attr_name_is_mapping(attr, name_key: str, value_key: str) -> Optional[str]:
+    """Return the attribute value if its name-key matches a mapping name key, else None."""
+    if (attr.get(name_key) or "").lower() in _MAPPING_NAME_KEYS:
+        return attr.get(value_key)
+    return None
+
+
+def _find_mapping_ref_from_sess_attrs(root) -> Optional[str]:
+    """Look in SESSTRANSFORMINSTATTR elements for the mapping name reference."""
+    for attr in root.iter("SESSTRANSFORMINSTATTR"):
+        val = _attr_name_is_mapping(attr, "ATTRIBUTENAME", "ATTRIBUTEVALUE")
+        if val:
+            return val
+    return None
+
+
+def _find_mapping_ref_from_config_attrs(root) -> Optional[str]:
+    """Look in ATTRIBUTE/CONFIG elements for the mapping name reference."""
+    for attr in root.iter("ATTRIBUTE"):
+        val = _attr_name_is_mapping(attr, "NAME", "VALUE")
+        if val is None:
+            val = _attr_name_is_mapping(attr, "NAME", "ATTRIBUTEVALUE")
+        if val:
+            return val
+    return None
+
+
+def _find_mapping_ref_from_instances(root) -> Optional[str]:
+    """Fall back to searching INSTANCE elements for a mapping reference."""
+    for inst in root.iter("INSTANCE"):
+        if inst.get("TYPE") == "Mapping":
+            return inst.get("REUSABLE_INSTANCE_NAME") or inst.get("NAME")
+        reusable = inst.get("REUSABLE_INSTANCE_NAME")
+        if reusable:
+            return reusable
+    return None
+
+
+def _find_mapping_ref_in_attrs(root, session_el) -> Optional[str]:
+    """Search session element attributes and child elements for the mapping reference."""
+    ref = session_el.get("MAPPINGNAME")
+    if ref:
+        return ref
+    return (
+        _find_mapping_ref_from_sess_attrs(root)
+        or _find_mapping_ref_from_config_attrs(root)
+        or _find_mapping_ref_from_instances(root)
+    )
+
+
 def _extract_session_mapping_ref(workflow_xml: str) -> tuple[Optional[str], Optional[str]]:
     """
     Pull (session_name, referenced_mapping_name) from the workflow XML.
@@ -251,43 +396,76 @@ def _extract_session_mapping_ref(workflow_xml: str) -> tuple[Optional[str], Opti
     except Exception:
         return None, None
 
-    session_name: Optional[str] = None
-    ref_mapping: Optional[str] = None
-
-    # Find the SESSION element
-    session_el = root.find(".//SESSION")
-    if session_el is None:
-        session_el = root.find(".//TASK[@TYPE='Session']")
+    session_el = _find_session_element(root)
     if session_el is None:
         return None, None
 
     session_name = session_el.get("NAME") or session_el.get("TASKNAME")
-
-    # Direct attribute on SESSION
-    ref_mapping = session_el.get("MAPPINGNAME")
-
-    if not ref_mapping:
-        # Look in SESSTRANSFORMINSTATTR / SESSIONEXTENSION
-        for attr in root.iter("SESSTRANSFORMINSTATTR"):
-            if (attr.get("ATTRIBUTENAME") or "").lower() in ("mapping name", "mappingname"):
-                ref_mapping = attr.get("ATTRIBUTEVALUE")
-                break
-
-    if not ref_mapping:
-        # Look in CONFIG / ATTRIBUTE elements
-        for attr in root.iter("ATTRIBUTE"):
-            if (attr.get("NAME") or "").lower() in ("mapping name", "mappingname"):
-                ref_mapping = attr.get("VALUE") or attr.get("ATTRIBUTEVALUE")
-                break
-
-    if not ref_mapping:
-        # Fallback: first INSTANCE that looks like a mapping instance
-        for inst in root.iter("INSTANCE"):
-            if inst.get("TYPE") == "Mapping" or inst.get("REUSABLE_INSTANCE_NAME"):
-                ref_mapping = inst.get("REUSABLE_INSTANCE_NAME") or inst.get("NAME")
-                break
-
+    ref_mapping = _find_mapping_ref_in_attrs(root, session_el)
     return session_name, ref_mapping
+
+
+def _issue_is_hard(issue: str) -> bool:
+    """Return True if an issue text represents a hard validation failure."""
+    low = issue.lower()
+    return "mismatch" in low or "could not" in low
+
+
+def _names_match(mapping_name: Optional[str], ref_mapping: Optional[str]) -> bool:
+    """Return True if both names are non-None and equal."""
+    return bool(mapping_name and ref_mapping and mapping_name == ref_mapping)
+
+
+def _both_names_present(mapping_name: Optional[str], ref_mapping: Optional[str]) -> bool:
+    """Return True if both mapping_name and ref_mapping are non-empty."""
+    return bool(mapping_name) and bool(ref_mapping)
+
+
+def _any_hard(issues: list[str]) -> bool:
+    """Return True if any issue in issues is considered a hard (blocking) issue."""
+    return any(_issue_is_hard(i) for i in issues)
+
+
+def _build_cross_ref_status(
+    issues: list[str],
+    mapping_name: Optional[str],
+    ref_mapping: Optional[str],
+) -> str:
+    """Determine the CrossRefValidation status string from issues list."""
+    if not issues:
+        return "VALID"
+    if _names_match(mapping_name, ref_mapping):
+        return "WARNINGS"
+    if _any_hard(issues) and _both_names_present(mapping_name, ref_mapping):
+        return "INVALID"
+    return "WARNINGS"
+
+
+def _names_mismatch(mapping_name: Optional[str], ref_mapping: Optional[str]) -> bool:
+    """Return True if both names are present but differ."""
+    return bool(mapping_name) and bool(ref_mapping) and mapping_name != ref_mapping
+
+
+def _collect_cross_ref_issues(
+    mapping_name: Optional[str],
+    session_name: Optional[str],
+    ref_mapping: Optional[str],
+) -> list[str]:
+    """Build the list of cross-reference validation issues."""
+    issues: list[str] = []
+    if not session_name:
+        issues.append("Could not find a SESSION task inside the Workflow XML.")
+    if not ref_mapping:
+        issues.append(
+            "Could not determine which mapping the Session references "
+            "(MAPPINGNAME attribute or SESSTRANSFORMINSTATTR not found)."
+        )
+    if _names_mismatch(mapping_name, ref_mapping):
+        issues.append(
+            f"Mapping name mismatch: Mapping XML contains '{mapping_name}' "
+            f"but Session references '{ref_mapping}'."
+        )
+    return issues
 
 
 def _cross_reference(
@@ -295,45 +473,18 @@ def _cross_reference(
     workflow_xml: Optional[str],
 ) -> CrossRefValidation:
     """Build the CrossRefValidation result."""
-    issues: list[str] = []
-
     mapping_name = _extract_mapping_name(mapping_xml) if mapping_xml else None
+
+    pre_issues: list[str] = []
     if not mapping_name:
-        issues.append("Could not extract MAPPING/@NAME from the Mapping XML.")
+        pre_issues.append("Could not extract MAPPING/@NAME from the Mapping XML.")
 
     if workflow_xml is None:
-        # No workflow — valid for mapping-only mode
-        return CrossRefValidation(
-            status="VALID",
-            mapping_name=mapping_name,
-        )
+        return CrossRefValidation(status="VALID", mapping_name=mapping_name)
 
     session_name, ref_mapping = _extract_session_mapping_ref(workflow_xml)
-
-    if not session_name:
-        issues.append("Could not find a SESSION task inside the Workflow XML.")
-
-    if not ref_mapping:
-        issues.append(
-            "Could not determine which mapping the Session references "
-            "(MAPPINGNAME attribute or SESSTRANSFORMINSTATTR not found)."
-        )
-
-    if mapping_name and ref_mapping and mapping_name != ref_mapping:
-        issues.append(
-            f"Mapping name mismatch: Mapping XML contains '{mapping_name}' "
-            f"but Session references '{ref_mapping}'."
-        )
-
-    if issues:
-        # Distinguish hard mismatches from soft warnings
-        is_hard = any("mismatch" in i.lower() or "could not" in i.lower() for i in issues)
-        status = "INVALID" if is_hard and mapping_name and ref_mapping else "WARNINGS"
-        # If we have both names and they match despite other issues → WARNINGS only
-        if mapping_name and ref_mapping and mapping_name == ref_mapping:
-            status = "WARNINGS"
-    else:
-        status = "VALID"
+    issues = pre_issues + _collect_cross_ref_issues(mapping_name, session_name, ref_mapping)
+    status = _build_cross_ref_status(issues, mapping_name, ref_mapping)
 
     return CrossRefValidation(
         status=status,
@@ -348,15 +499,73 @@ def _cross_reference(
 # Parameter file parsing
 # ─────────────────────────────────────────────────────────────────────────────
 
+_SCOPE_FROM_PARTS = {1: "GLOBAL", 2: "WORKFLOW"}
+
+
+def _scope_from_header(header: str) -> str:
+    """Determine parameter scope from a scope-header string."""
+    parts = header.split(".")
+    if len(parts) >= 3:
+        return "SESSION"
+    return _SCOPE_FROM_PARTS.get(len(parts), "GLOBAL")
+
+
+def _parse_parameter_line(line: str, current_scope: str) -> Optional[ParameterEntry]:
+    """Parse a single parameter assignment line; returns None if not an assignment."""
+    if "=" not in line:
+        return None
+    name, _, value = line.partition("=")
+    return ParameterEntry(name=name.strip(), value=value.strip(), scope=current_scope)
+
+
+def _is_scope_header(line: str) -> bool:
+    """Return True if line is a parameter-file scope header like [folder.workflow]."""
+    return line.startswith("[") and line.endswith("]")
+
+
+def _process_param_line(
+    line: str,
+    current_scope: str,
+    params: list[ParameterEntry],
+) -> str:
+    """
+    Process one non-empty, non-comment parameter file line.
+    Updates params in-place and returns the (possibly updated) current_scope.
+    """
+    if _is_scope_header(line):
+        return _scope_from_header(line[1:-1])
+    entry = _parse_parameter_line(line, current_scope)
+    if entry is not None:
+        params.append(entry)
+    return current_scope
+
+
+def _parse_parameter_file_xml(content: str) -> list[ParameterEntry]:
+    """Parse Informatica XML-format parameter file (<PARAM NAME="$$KEY" VALUE="val"/>)."""
+    import xml.etree.ElementTree as ET
+    params: list[ParameterEntry] = []
+    try:
+        root = ET.fromstring(content)
+        for elem in root.iter("PARAM"):
+            name  = elem.get("NAME", "").strip()
+            value = elem.get("VALUE", "").strip()
+            if name.startswith("$$"):
+                params.append(ParameterEntry(name=name, value=value, scope="GLOBAL"))
+    except ET.ParseError:
+        pass
+    return params
+
+
 def _parse_parameter_file(content: str) -> list[ParameterEntry]:
     """
-    Parse an Informatica parameter file.
-
-    Format:
-        [folder.workflow]        ← scope header (optional)
-        $$VARIABLE=value
-        # comment lines ignored
+    Parse an Informatica parameter file — handles both formats:
+      • XML:  <PARAM NAME="$$VAR" VALUE="val"/>  (Informatica repo export)
+      • Flat: [scope]\\n$$VARIABLE=value          (classic .txt param file)
     """
+    stripped = content.lstrip()
+    if stripped.startswith("<"):
+        return _parse_parameter_file_xml(content)
+
     params: list[ParameterEntry] = []
     current_scope = "GLOBAL"
 
@@ -364,25 +573,7 @@ def _parse_parameter_file(content: str) -> list[ParameterEntry]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-
-        # Scope header: [FolderName.WorkflowName] or [FolderName.WorkflowName.SessionName]
-        if line.startswith("[") and line.endswith("]"):
-            header = line[1:-1]
-            parts = header.split(".")
-            if len(parts) >= 3:
-                current_scope = "SESSION"
-            elif len(parts) == 2:
-                current_scope = "WORKFLOW"
-            else:
-                current_scope = "GLOBAL"
-            continue
-
-        # Variable assignment
-        if "=" in line:
-            name, _, value = line.partition("=")
-            name = name.strip()
-            value = value.strip()
-            params.append(ParameterEntry(name=name, value=value, scope=current_scope))
+        current_scope = _process_param_line(line, current_scope, params)
 
     return params
 
@@ -412,6 +603,224 @@ def _resolve(value: str, lookup: dict[str, str]) -> tuple[str, list[str]]:
     return resolved, unresolved
 
 
+def _get_attr_name(attr) -> str:
+    """Get the name of an XML attribute element."""
+    return attr.get("ATTRIBUTENAME") or attr.get("NAME") or ""
+
+
+def _get_attr_value(attr) -> str:
+    """Get the value of an XML attribute element."""
+    return attr.get("ATTRIBUTEVALUE") or attr.get("VALUE") or ""
+
+
+def _collect_child_attrs(
+    session_el,
+    param_lookup: dict[str, str],
+    raw_attributes: dict[str, str],
+    all_unresolved: list[str],
+) -> None:
+    """Collect SESSTRANSFORMINSTATTR/SESSIONEXTENSION/ATTRIBUTE child rows into raw_attributes."""
+    for attr in session_el.iter("SESSTRANSFORMINSTATTR", "SESSIONEXTENSION", "ATTRIBUTE"):
+        attr_name  = _get_attr_name(attr)
+        attr_value = _get_attr_value(attr)
+        if attr_name:
+            resolved, unresolved = _resolve(attr_value, param_lookup)
+            raw_attributes[attr_name] = resolved
+            all_unresolved.extend(unresolved)
+
+
+def _collect_direct_attrs(
+    session_el,
+    param_lookup: dict[str, str],
+    raw_attributes: dict[str, str],
+    all_unresolved: list[str],
+) -> None:
+    """Collect direct attributes on the SESSION element into raw_attributes."""
+    for k, v in session_el.attrib.items():
+        if k not in raw_attributes:
+            resolved, unresolved = _resolve(v, param_lookup)
+            raw_attributes[k] = resolved
+            all_unresolved.extend(unresolved)
+
+
+def _collect_raw_attributes(
+    session_el,
+    param_lookup: dict[str, str],
+) -> tuple[dict[str, str], list[str]]:
+    """
+    Collect all session attribute rows, resolving $$VARIABLES.
+    Returns (raw_attributes dict, list of unresolved variable names).
+    """
+    raw_attributes: dict[str, str] = {}
+    all_unresolved: list[str] = []
+    _collect_child_attrs(session_el, param_lookup, raw_attributes, all_unresolved)
+    _collect_direct_attrs(session_el, param_lookup, raw_attributes, all_unresolved)
+    return raw_attributes, all_unresolved
+
+
+def _lookup_attr(raw_attributes: dict[str, str], *keys: str) -> Optional[str]:
+    """Return the first non-empty value found in raw_attributes for any of the given keys."""
+    for k in keys:
+        v = raw_attributes.get(k)
+        if v:
+            return v
+    return None
+
+
+def _safe_int(raw: Optional[str]) -> Optional[int]:
+    """Convert a raw string to int, or return None on failure."""
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _get_well_known_attrs(raw_attributes: dict[str, str]):
+    """Extract well-known session attributes from the raw attribute dict."""
+    pre_sql      = _lookup_attr(raw_attributes, "Pre SQL", "Pre-session SQL", "PRE_SQL", "PreSQL")
+    post_sql     = _lookup_attr(raw_attributes, "Post SQL", "Post-session SQL", "POST_SQL", "PostSQL")
+    reject_fname = _lookup_attr(raw_attributes, "Reject Filename", "RejectFilename", "REJECTFILE")
+    reject_fdir  = _lookup_attr(raw_attributes, "Reject File Directory", "RejectFiledir", "REJECTFILEDIR")
+    commit_raw   = _lookup_attr(raw_attributes, "Commit Interval", "CommitInterval", "COMMIT_INTERVAL")
+    error_raw    = _lookup_attr(raw_attributes, "Stop On Errors", "ErrorThreshold", "STOPONERRORS")
+    return pre_sql, post_sql, reject_fname, reject_fdir, _safe_int(commit_raw), _safe_int(error_raw)
+
+
+_SOURCE_PREFIXES = ("SQ_", "SRC", "SOURCE")
+
+
+def _infer_role(trans_name: str) -> str:
+    """Infer SOURCE or TARGET role from transformation name heuristic."""
+    upper = trans_name.upper()
+    for prefix in _SOURCE_PREFIXES:
+        if prefix in upper:
+            return "SOURCE"
+    return "TARGET"
+
+
+def _get_conn_trans_name(conn_el) -> str:
+    """Extract the transformation instance name from a CONNECTIONREFERENCE element."""
+    return (
+        conn_el.get("TRANSFORMATIONINSTANCENAME")
+        or conn_el.get("TRANSFORMATIONNAME")
+        or conn_el.get("INSTANCENAME")
+        or "UNKNOWN"
+    )
+
+
+def _get_conn_role(conn_el) -> str:
+    """Extract and normalize the role from a CONNECTIONREFERENCE element."""
+    raw_role = (conn_el.get("ROLE") or "").upper()
+    return "SOURCE" if raw_role == "SOURCE" else "TARGET"
+
+
+def _collect_connections_from_refs(root) -> list[SessionConnection]:
+    """Build SessionConnection list from CONNECTIONREFERENCE elements."""
+    connections: list[SessionConnection] = []
+    for conn_el in root.iter("CONNECTIONREFERENCE"):
+        connections.append(SessionConnection(
+            transformation_name=_get_conn_trans_name(conn_el),
+            role=_get_conn_role(conn_el),
+            connection_name=conn_el.get("CONNECTIONNAME") or conn_el.get("DBDNAME"),
+            connection_type=conn_el.get("CONNECTIONSUBTYPE") or conn_el.get("CONNECTIONTYPE"),
+        ))
+    return connections
+
+
+def _is_connection_attr(attr_name: str) -> bool:
+    return "connection" in attr_name
+
+
+def _get_sess_attr_parts(attr) -> tuple[str, str, str]:
+    """Extract (attr_name_lower, trans_name, attr_value) from SESSTRANSFORMINSTATTR."""
+    attr_name  = (attr.get("ATTRIBUTENAME") or "").lower()
+    trans_name = attr.get("TRANSFORMATIONINSTANCENAME") or attr.get("INSTANCENAME") or ""
+    attr_value = attr.get("ATTRIBUTEVALUE") or ""
+    return attr_name, trans_name, attr_value
+
+
+def _collect_connections_from_sess_attrs(session_el) -> list[SessionConnection]:
+    """Fallback: extract connections from SESSTRANSFORMINSTATTR elements."""
+    connections: list[SessionConnection] = []
+    for attr in session_el.iter("SESSTRANSFORMINSTATTR"):
+        attr_name, trans_name, attr_value = _get_sess_attr_parts(attr)
+        if _is_connection_attr(attr_name) and attr_value and trans_name:
+            connections.append(SessionConnection(
+                transformation_name=trans_name,
+                role=_infer_role(trans_name),
+                connection_name=attr_value,
+            ))
+    return connections
+
+
+def _is_file_name_attr(attr_name: str) -> bool:
+    return "file name" in attr_name or "filename" in attr_name
+
+
+def _is_file_dir_attr(attr_name: str) -> bool:
+    return "file dir" in attr_name or "filedir" in attr_name
+
+
+def _find_connection_by_trans(connections: list[SessionConnection], trans_name: str):
+    """Return the first connection matching trans_name, or None."""
+    return next((c for c in connections if c.transformation_name == trans_name), None)
+
+
+def _apply_file_name_attr(
+    trans_name: str,
+    attr_value: str,
+    connections: list[SessionConnection],
+) -> None:
+    """Set file_name on existing connection or add a new FILE connection."""
+    existing = _find_connection_by_trans(connections, trans_name)
+    if existing:
+        existing.file_name = attr_value
+    else:
+        connections.append(SessionConnection(
+            transformation_name=trans_name,
+            role=_infer_role(trans_name),
+            file_name=attr_value,
+            connection_type="FILE",
+        ))
+
+
+def _apply_file_attrs_to_connections(
+    session_el,
+    connections: list[SessionConnection],
+) -> None:
+    """Mutate connections list to add file_name / file_dir from session attributes."""
+    for attr in session_el.iter("SESSTRANSFORMINSTATTR"):
+        attr_name, trans_name, attr_value = _get_sess_attr_parts(attr)
+        if _is_file_name_attr(attr_name):
+            _apply_file_name_attr(trans_name, attr_value, connections)
+        elif _is_file_dir_attr(attr_name):
+            existing = _find_connection_by_trans(connections, trans_name)
+            if existing:
+                existing.file_dir = attr_value
+
+
+def _build_connections(root, session_el) -> list[SessionConnection]:
+    """Build the full connection list using CONNECTIONREFERENCE first, then fallback."""
+    connections = _collect_connections_from_refs(root)
+    if not connections:
+        connections = _collect_connections_from_sess_attrs(session_el)
+    _apply_file_attrs_to_connections(session_el, connections)
+    return connections
+
+
+def _find_workflow_name(root) -> str:
+    """Extract workflow name from the XML root."""
+    workflow_el = root.find(".//WORKFLOW") or root.find(".//WORKFLOW[@NAME]")
+    return (workflow_el.get("NAME") if workflow_el is not None else None) or "UNKNOWN_WORKFLOW"
+
+
+def _get_session_name(session_el) -> str:
+    """Extract session name from element, defaulting to UNKNOWN_SESSION."""
+    return session_el.get("NAME") or session_el.get("TASKNAME") or "UNKNOWN_SESSION"
+
+
 def _extract_session_config(
     workflow_xml: str,
     param_lookup: dict[str, str],
@@ -426,137 +835,20 @@ def _extract_session_config(
     except Exception:
         return None, []
 
-    # Locate the SESSION element
-    session_el = root.find(".//SESSION")
-    if session_el is None:
-        session_el = root.find(".//TASK[@TYPE='Session']")
+    session_el = _find_session_element(root)
     if session_el is None:
         return None, []
 
-    session_name = session_el.get("NAME") or session_el.get("TASKNAME") or "UNKNOWN_SESSION"
-    mapping_name = session_el.get("MAPPINGNAME") or "UNKNOWN_MAPPING"
+    session_name  = _get_session_name(session_el)
+    mapping_name  = session_el.get("MAPPINGNAME") or "UNKNOWN_MAPPING"
+    workflow_name = _find_workflow_name(root)
 
-    # Workflow name
-    workflow_el = root.find(".//WORKFLOW")
-    if workflow_el is None:
-        workflow_el = root.find(".//WORKFLOW[@NAME]")
-    workflow_name = (workflow_el.get("NAME") if workflow_el is not None else None) or "UNKNOWN_WORKFLOW"
+    raw_attributes, all_unresolved = _collect_raw_attributes(session_el, param_lookup)
 
-    all_unresolved: list[str] = []
-    raw_attributes: dict[str, str] = {}
+    (pre_sql, post_sql, reject_fname, reject_fdir,
+     commit_interval, error_threshold) = _get_well_known_attrs(raw_attributes)
 
-    # ── Collect all session attribute rows ──────────────────────────────────
-    for attr in session_el.iter("SESSTRANSFORMINSTATTR", "SESSIONEXTENSION", "ATTRIBUTE"):
-        attr_name  = attr.get("ATTRIBUTENAME") or attr.get("NAME") or ""
-        attr_value = attr.get("ATTRIBUTEVALUE") or attr.get("VALUE") or ""
-        if attr_name:
-            resolved, unresolved = _resolve(attr_value, param_lookup)
-            raw_attributes[attr_name] = resolved
-            all_unresolved.extend(unresolved)
-
-    # Also pick up direct attributes on the SESSION element itself
-    for k, v in session_el.attrib.items():
-        if k not in raw_attributes:
-            resolved, unresolved = _resolve(v, param_lookup)
-            raw_attributes[k] = resolved
-            all_unresolved.extend(unresolved)
-
-    # ── Well-known attributes ────────────────────────────────────────────────
-    def _get(*keys: str) -> Optional[str]:
-        for k in keys:
-            v = raw_attributes.get(k)
-            if v:
-                return v
-        return None
-
-    pre_sql      = _get("Pre SQL",  "Pre-session SQL", "PRE_SQL",  "PreSQL")
-    post_sql     = _get("Post SQL", "Post-session SQL", "POST_SQL", "PostSQL")
-    reject_fname = _get("Reject Filename", "RejectFilename", "REJECTFILE")
-    reject_fdir  = _get("Reject File Directory", "RejectFiledir", "REJECTFILEDIR")
-
-    commit_raw   = _get("Commit Interval", "CommitInterval", "COMMIT_INTERVAL")
-    error_raw    = _get("Stop On Errors",  "ErrorThreshold", "STOPONERRORS")
-
-    commit_interval: Optional[int] = None
-    error_threshold: Optional[int] = None
-    try:
-        commit_interval = int(commit_raw) if commit_raw else None
-    except ValueError:
-        pass
-    try:
-        error_threshold = int(error_raw) if error_raw else None
-    except ValueError:
-        pass
-
-    # ── Connections ──────────────────────────────────────────────────────────
-    connections: list[SessionConnection] = []
-    for inst in root.iter("SESSIONINSTCONFIG", "SESSTRANSFORMINSTATTR"):
-        pass  # handled below
-
-    for conn_el in root.iter("CONNECTIONREFERENCE"):
-        conn_name  = conn_el.get("CONNECTIONNAME") or conn_el.get("DBDNAME")
-        conn_type  = conn_el.get("CONNECTIONSUBTYPE") or conn_el.get("CONNECTIONTYPE")
-        trans_name = conn_el.get("TRANSFORMATIONINSTANCENAME") or conn_el.get("TRANSFORMATIONNAME")
-        role       = "SOURCE" if (conn_el.get("ROLE") or "").upper() == "SOURCE" else "TARGET"
-
-        if not trans_name:
-            trans_name = conn_el.get("INSTANCENAME") or "UNKNOWN"
-
-        connections.append(SessionConnection(
-            transformation_name=trans_name,
-            role=role,
-            connection_name=conn_name,
-            connection_type=conn_type,
-        ))
-
-    # Fallback: scan SESSTRANSFORMINSTATTR for connection info
-    if not connections:
-        for attr in session_el.iter("SESSTRANSFORMINSTATTR"):
-            attr_name  = (attr.get("ATTRIBUTENAME") or "").lower()
-            trans_name = attr.get("TRANSFORMATIONINSTANCENAME") or attr.get("INSTANCENAME") or ""
-            attr_value = attr.get("ATTRIBUTEVALUE") or ""
-
-            if "connection" in attr_name and attr_value and trans_name:
-                # Infer role from transformation name heuristic
-                role = "SOURCE" if any(
-                    k in trans_name.upper() for k in ("SQ_", "SRC", "SOURCE")
-                ) else "TARGET"
-                connections.append(SessionConnection(
-                    transformation_name=trans_name,
-                    role=role,
-                    connection_name=attr_value,
-                ))
-
-    # ── File-based connections ───────────────────────────────────────────────
-    for attr in session_el.iter("SESSTRANSFORMINSTATTR"):
-        attr_name  = (attr.get("ATTRIBUTENAME") or "").lower()
-        trans_name = attr.get("TRANSFORMATIONINSTANCENAME") or attr.get("INSTANCENAME") or ""
-        attr_value = attr.get("ATTRIBUTEVALUE") or ""
-
-        if "file name" in attr_name or "filename" in attr_name:
-            # Check if we already have an entry for this transformation
-            existing = next(
-                (c for c in connections if c.transformation_name == trans_name), None
-            )
-            if existing:
-                existing.file_name = attr_value
-            else:
-                role = "SOURCE" if any(
-                    k in trans_name.upper() for k in ("SQ_", "SRC", "SOURCE")
-                ) else "TARGET"
-                connections.append(SessionConnection(
-                    transformation_name=trans_name,
-                    role=role,
-                    file_name=attr_value,
-                    connection_type="FILE",
-                ))
-
-        elif "file dir" in attr_name or "filedir" in attr_name:
-            existing = next(
-                (c for c in connections if c.transformation_name == trans_name), None
-            )
-            if existing:
-                existing.file_dir = attr_value
+    connections = _build_connections(root, session_el)
 
     return SessionConfig(
         session_name=session_name,

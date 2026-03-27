@@ -137,6 +137,72 @@ class ZipExtractionError(ValueError):
     """Raised when a ZIP archive fails safety checks."""
 
 
+def _is_zip_symlink(entry: zipfile.ZipInfo) -> bool:
+    """Return True if the ZIP entry is a symbolic link."""
+    return (entry.external_attr >> 28) == 0xA
+
+
+def _resolve_zip_entry_path(entry: zipfile.ZipInfo, virtual_root: str) -> str:
+    """
+    Return the normalised path of *entry* inside *virtual_root*.
+
+    Raises ZipExtractionError on malformed paths or Zip Slip attempts.
+    """
+    try:
+        clean      = entry.filename.replace("\\", "/").lstrip("/")
+        normalised = posixpath.normpath(posixpath.join(virtual_root, clean))
+    except Exception:
+        raise ZipExtractionError(f"Malformed path in ZIP entry: {entry.filename!r}")
+
+    if not (normalised == virtual_root or normalised.startswith(virtual_root + "/")):
+        raise ZipExtractionError(
+            f"Zip Slip detected: entry '{entry.filename}' would escape the "
+            "extraction directory. Archive rejected."
+        )
+    return normalised
+
+
+def _check_zip_bomb(total_bytes: int, new_size: int) -> None:
+    """Raise ZipExtractionError if adding *new_size* would breach the extraction limit."""
+    if total_bytes + new_size > MAX_ZIP_EXTRACTED_BYTES:
+        mb = MAX_ZIP_EXTRACTED_BYTES // 1024 // 1024
+        raise ZipExtractionError(
+            f"ZIP extraction stopped: total expanded size exceeds {mb} MB limit "
+            "(possible zip bomb)."
+        )
+
+
+def _open_zip(zip_bytes: bytes) -> zipfile.ZipFile:
+    """Open a ZipFile from bytes; raise ZipExtractionError on invalid ZIP."""
+    try:
+        return zipfile.ZipFile(BytesIO(zip_bytes))
+    except zipfile.BadZipFile as exc:
+        raise ZipExtractionError(f"Not a valid ZIP file: {exc}") from exc
+
+
+def _process_zip_entries(
+    zf: zipfile.ZipFile, entries: list[zipfile.ZipInfo],
+) -> dict[str, bytes]:
+    """Iterate ZIP entries with Zip Slip + Zip Bomb checks; return safe name→bytes dict."""
+    extracted: dict[str, bytes] = {}
+    total_bytes  = 0
+    virtual_root = "/safe_root"
+
+    for entry in entries:
+        if entry.filename.endswith("/"):
+            continue
+        if _is_zip_symlink(entry):
+            log.warning("Skipping symlink entry in ZIP: %s", entry.filename)
+            continue
+        _resolve_zip_entry_path(entry, virtual_root)  # raises on Zip Slip
+        _check_zip_bomb(total_bytes, entry.file_size)
+        total_bytes += entry.file_size
+        safe_name = entry.filename.replace("\\", "/").lstrip("/")
+        extracted[safe_name] = zf.read(entry.filename)
+
+    return extracted
+
+
 def safe_zip_extract(zip_bytes: bytes) -> dict[str, bytes]:
     """
     Safely extract a ZIP archive into an in-memory dict.
@@ -165,70 +231,119 @@ def safe_zip_extract(zip_bytes: bytes) -> dict[str, bytes]:
     ZipExtractionError  on any safety violation.
     zipfile.BadZipFile  if the bytes are not a valid ZIP.
     """
-    try:
-        zf = zipfile.ZipFile(BytesIO(zip_bytes))
-    except zipfile.BadZipFile as exc:
-        raise ZipExtractionError(f"Not a valid ZIP file: {exc}") from exc
-
+    zf = _open_zip(zip_bytes)
     entries = zf.infolist()
-
     if len(entries) > MAX_ZIP_FILE_COUNT:
         raise ZipExtractionError(
             f"ZIP contains {len(entries)} entries — maximum is {MAX_ZIP_FILE_COUNT}."
         )
-
-    extracted: dict[str, bytes] = {}
-    total_bytes = 0
-    virtual_root = "/safe_root"
-
-    for entry in entries:
-        # Skip directories and symlinks
-        if entry.filename.endswith("/"):
-            continue
-        if entry.external_attr >> 28 == 0xA:  # symlink flag
-            log.warning("Skipping symlink entry in ZIP: %s", entry.filename)
-            continue
-
-        # ── Zip Slip check ────────────────────────────────────────────────
-        # Normalise the entry path (strip leading slash, convert backslash)
-        # then resolve it relative to our virtual root using posixpath.normpath
-        # which handles ".." components without requiring OS filesystem access.
-        # If the normalised path escapes the virtual root the archive is rejected.
-        try:
-            clean = entry.filename.replace("\\", "/").lstrip("/")
-            normalised = posixpath.normpath(posixpath.join(virtual_root, clean))
-        except Exception:
-            raise ZipExtractionError(
-                f"Malformed path in ZIP entry: {entry.filename!r}"
-            )
-
-        if not (normalised == virtual_root or
-                normalised.startswith(virtual_root + "/")):
-            raise ZipExtractionError(
-                f"Zip Slip detected: entry '{entry.filename}' would escape the "
-                "extraction directory. Archive rejected."
-            )
-
-        # ── Zip Bomb check ────────────────────────────────────────────────
-        total_bytes += entry.file_size
-        if total_bytes > MAX_ZIP_EXTRACTED_BYTES:
-            mb = MAX_ZIP_EXTRACTED_BYTES // 1024 // 1024
-            raise ZipExtractionError(
-                f"ZIP extraction stopped: total expanded size exceeds {mb} MB limit "
-                "(possible zip bomb)."
-            )
-
-        content = zf.read(entry.filename)
-        # Normalise path separator and strip leading slashes
-        safe_name = entry.filename.replace("\\", "/").lstrip("/")
-        extracted[safe_name] = content
-
-    return extracted
+    return _process_zip_entries(zf, entries)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Generated-code security scanner (bandit)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _write_code_to_tempfile(code: str) -> str:
+    """
+    Write *code* to a secure temporary .py file (0o600 permissions).
+
+    Returns the file path.  Caller is responsible for unlinking.
+    mkstemp() + immediate chmod(0o600) ensures the file is owner-read/write only
+    before any content is written — NamedTemporaryFile defaults to 0o644 (world-readable).
+    """
+    fd, tmp_path = tempfile.mkstemp(suffix=".py")
+    try:
+        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(code)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    return tmp_path
+
+
+def _parse_bandit_issue(issue: dict) -> dict:
+    """Convert one bandit result dict to the internal finding format."""
+    return {
+        "test_id":    issue.get("test_id"),
+        "test_name":  issue.get("test_name"),
+        "severity":   issue.get("issue_severity", "LOW").upper(),
+        "confidence": issue.get("issue_confidence", ""),
+        "line":       issue.get("line_number"),
+        "text":       issue.get("issue_text", ""),
+        "code":       issue.get("code", "").strip()[:200],
+    }
+
+
+def _tally_severity(result: dict, sev: str) -> None:
+    """Increment the appropriate severity counter in *result*."""
+    if sev == "HIGH":
+        result["high_count"] += 1
+    elif sev == "MEDIUM":
+        result["medium_count"] += 1
+    else:
+        result["low_count"] += 1
+
+
+def _populate_bandit_results(result: dict, proc_stdout: str, proc_stderr: str) -> bool:
+    """
+    Parse bandit JSON output and populate *result* in place.
+
+    Returns True on success, False if the output could not be parsed.
+    """
+    import json as _json
+    try:
+        bandit_out = _json.loads(proc_stdout)
+    except Exception:
+        result["error"] = f"bandit output parse failed: {proc_stderr[:200]}"
+        return False
+
+    result["ran"] = True
+    for issue in bandit_out.get("results", []):
+        finding = _parse_bandit_issue(issue)
+        result["findings"].append(finding)
+        _tally_severity(result, finding["severity"])
+    return True
+
+
+def _run_bandit_subprocess(tmp_path: str) -> subprocess.CompletedProcess:
+    """Run bandit on *tmp_path* and return the completed process."""
+    return subprocess.run(
+        [sys.executable, "-m", "bandit", "-f", "json", "-q", tmp_path],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def _bandit_error_result(base: dict, error_msg: str) -> dict:
+    """Return *base* with error field set to *error_msg*."""
+    base["error"] = error_msg
+    return base
+
+
+def _run_bandit_scan(code: str, result: dict) -> None:
+    """Write code to a temp file, run bandit, and populate result in-place."""
+    tmp_path: str = ""
+    try:
+        tmp_path = _write_code_to_tempfile(code)
+        proc = _run_bandit_subprocess(tmp_path)
+        Path(tmp_path).unlink(missing_ok=True)
+        _populate_bandit_results(result, proc.stdout, proc.stderr)
+    except FileNotFoundError:
+        result["error"] = "bandit is not installed — pip install bandit to enable scanning."
+    except subprocess.TimeoutExpired:
+        result["error"] = "bandit scan timed out after 30 seconds."
+    except Exception as exc:
+        result["error"] = f"bandit scan error: {exc}"
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
 
 def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
     """
@@ -263,73 +378,15 @@ def scan_python_with_bandit(code: str, filename: str = "converted.py") -> dict:
         "error": None,
     }
 
-    if len(code.splitlines()) > MAX_BANDIT_LINES:
+    line_count = len(code.splitlines())
+    if line_count > MAX_BANDIT_LINES:
         result["error"] = (
-            f"File too large for bandit scan ({len(code.splitlines())} lines > "
+            f"File too large for bandit scan ({line_count} lines > "
             f"{MAX_BANDIT_LINES} limit) — manual review recommended."
         )
         return result
 
-    # Write to a temp file so bandit can process it.
-    # mkstemp() + immediate chmod(0o600) ensures the file is owner-read/write only
-    # before any content is written — NamedTemporaryFile defaults to 0o644 (world-readable).
-    tmp_path: str = ""
-    try:
-        fd, tmp_path = tempfile.mkstemp(suffix=".py")
-        try:
-            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(code)
-            fd = -1  # ownership transferred to fdopen
-        except Exception:
-            if fd >= 0:
-                os.close(fd)
-            raise
-
-        proc = subprocess.run(
-            [sys.executable, "-m", "bandit", "-f", "json", "-q", tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        Path(tmp_path).unlink(missing_ok=True)
-
-        import json as _json
-        try:
-            bandit_out = _json.loads(proc.stdout)
-        except Exception:
-            result["error"] = f"bandit output parse failed: {proc.stderr[:200]}"
-            return result
-
-        result["ran"] = True
-        for issue in bandit_out.get("results", []):
-            sev = issue.get("issue_severity", "LOW").upper()
-            result["findings"].append({
-                "test_id":    issue.get("test_id"),
-                "test_name":  issue.get("test_name"),
-                "severity":   sev,
-                "confidence": issue.get("issue_confidence", ""),
-                "line":       issue.get("line_number"),
-                "text":       issue.get("issue_text", ""),
-                "code":       issue.get("code", "").strip()[:200],
-            })
-            if sev == "HIGH":
-                result["high_count"] += 1
-            elif sev == "MEDIUM":
-                result["medium_count"] += 1
-            else:
-                result["low_count"] += 1
-
-    except FileNotFoundError:
-        result["error"] = "bandit is not installed — pip install bandit to enable scanning."
-    except subprocess.TimeoutExpired:
-        result["error"] = "bandit scan timed out after 30 seconds."
-    except Exception as exc:
-        result["error"] = f"bandit scan error: {exc}"
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
-
+    _run_bandit_scan(code, result)
     return result
 
 
@@ -354,6 +411,53 @@ _PLACEHOLDER_RE = re.compile(
 )
 
 
+def _xml_tag_name(element: etree._Element) -> str:
+    """Return the local tag name (without namespace prefix) for *element*."""
+    tag = element.tag
+    return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _is_credential_attr(attr_name: str, attr_value: str) -> bool:
+    """Return True if *attr_name* looks like a credential key with a non-placeholder value."""
+    if not _CRED_ATTR_NAMES.search(attr_name):
+        return False
+    return bool(attr_value) and not _PLACEHOLDER_RE.match(attr_value.strip())
+
+
+def _build_xml_secret_finding(tag: str, attr_name: str, attr_value: str) -> dict:
+    """Build a finding dict for one XML attribute that appears to hold a credential."""
+    preview = attr_value[:6] + "…" if len(attr_value) > 6 else attr_value
+    return {
+        "severity":      "HIGH",
+        "attribute":     attr_name,
+        "element":       tag,
+        "value_preview": preview,
+        "message": (
+            f"Element <{tag}> has attribute '{attr_name}' with a non-placeholder "
+            f"value ('{preview}'). This may be a hardcoded credential embedded in "
+            "the Informatica export — review before committing or sharing."
+        ),
+    }
+
+
+def _scan_element_for_secrets(element: etree._Element) -> list[dict]:
+    """Scan one XML element's attributes for credential leaks; return list of findings."""
+    if not isinstance(element.tag, str):
+        return []
+    tag = _xml_tag_name(element)
+    findings = []
+    for attr_name, attr_value in element.attrib.items():
+        if not _is_credential_attr(attr_name, attr_value):
+            continue
+        finding = _build_xml_secret_finding(tag, attr_name, attr_value)
+        findings.append(finding)
+        log.warning(
+            "Possible hardcoded credential in uploaded XML: element=%s attr=%s",
+            tag, attr_name,
+        )
+    return findings
+
+
 def scan_xml_for_secrets(xml_text: str) -> list[dict]:
     """
     Scan uploaded Informatica XML for hardcoded credentials in attribute values.
@@ -365,44 +469,14 @@ def scan_xml_for_secrets(xml_text: str) -> list[dict]:
     Returns a list of finding dicts:
         {severity, attribute, element, value_preview, message}
     """
-    findings: list[dict] = []
-
     try:
         root = safe_parse_xml(xml_text)
     except Exception:
-        return findings  # if it won't parse, XXE check already handled it
+        return []  # if it won't parse, XXE check already handled it
 
+    findings: list[dict] = []
     for element in root.iter():
-        # lxml Comment and ProcessingInstruction nodes have a callable .tag
-        # (e.g. lxml.etree.Comment), not a string.  Their .attrib is also
-        # non-standard — iterating it causes the Cython "not iterable" error.
-        # Skip all non-Element nodes before touching .tag or .attrib.
-        if not isinstance(element.tag, str):
-            continue
-        tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
-        for attr_name, attr_value in element.attrib.items():
-            if not _CRED_ATTR_NAMES.search(attr_name):
-                continue
-            if not attr_value or _PLACEHOLDER_RE.match(attr_value.strip()):
-                continue
-            # Flag it — show only first 6 chars of the value
-            preview = attr_value[:6] + "…" if len(attr_value) > 6 else attr_value
-            findings.append({
-                "severity":      "HIGH",
-                "attribute":     attr_name,
-                "element":       tag,
-                "value_preview": preview,
-                "message": (
-                    f"Element <{tag}> has attribute '{attr_name}' with a non-placeholder "
-                    f"value ('{preview}'). This may be a hardcoded credential embedded in "
-                    "the Informatica export — review before committing or sharing."
-                ),
-            })
-            log.warning(
-                "Possible hardcoded credential in uploaded XML: element=%s attr=%s",
-                tag, attr_name,
-            )
-
+        findings.extend(_scan_element_for_secrets(element))
     return findings
 
 
@@ -424,6 +498,40 @@ _YAML_PLACEHOLDER_RE = re.compile(
 )
 
 
+def _extract_yaml_line_value(line: str) -> str:
+    """Return the stripped value portion of a YAML key: value line."""
+    _, _, value_part = line.partition(":")
+    return value_part.strip().strip("\"'")
+
+
+def _build_yaml_secret_finding(lineno: int, line: str, filename: str) -> dict:
+    """Build a finding dict for one YAML line that contains a plaintext secret."""
+    key_match = _YAML_SECRET_KEY_RE.match(line)
+    key_name  = key_match.group(1) if key_match else "unknown"
+    value     = _extract_yaml_line_value(line)
+    preview   = value[:8] + "…" if len(value) > 8 else value
+    return {
+        "severity":      "HIGH",
+        "line":          lineno,
+        "key":           key_name,
+        "value_preview": preview,
+        "filename":      filename,
+        "message": (
+            f"Line {lineno} of '{filename}': key '{key_name}' appears to contain "
+            f"a plaintext secret ('{preview}'). Use environment variables or a "
+            "secrets manager instead."
+        ),
+    }
+
+
+def _yaml_line_has_secret(line: str) -> bool:
+    """Return True if *line* matches a secret key pattern and carries a non-placeholder value."""
+    if not _YAML_SECRET_KEY_RE.match(line):
+        return False
+    value = _extract_yaml_line_value(line)
+    return bool(value) and not _YAML_PLACEHOLDER_RE.match(value)
+
+
 def scan_yaml_for_secrets(yaml_text: str, filename: str = "config.yaml") -> list[dict]:
     """
     Scan a YAML config file line-by-line for plaintext secrets.
@@ -435,37 +543,13 @@ def scan_yaml_for_secrets(yaml_text: str, filename: str = "config.yaml") -> list
         {severity, line, key, value_preview, filename, message}
     """
     findings: list[dict] = []
-
     for lineno, line in enumerate(yaml_text.splitlines(), start=1):
-        if not _YAML_SECRET_KEY_RE.match(line):
+        if not _yaml_line_has_secret(line):
             continue
-
-        # Extract the value part after the colon
-        _, _, value_part = line.partition(":")
-        value = value_part.strip().strip("\"'")
-
-        if not value or _YAML_PLACEHOLDER_RE.match(value):
-            continue
-
-        preview = value[:8] + "…" if len(value) > 8 else value
-        key_match = _YAML_SECRET_KEY_RE.match(line)
-        key_name = key_match.group(1) if key_match else "unknown"
-
-        findings.append({
-            "severity":      "HIGH",
-            "line":          lineno,
-            "key":           key_name,
-            "value_preview": preview,
-            "filename":      filename,
-            "message": (
-                f"Line {lineno} of '{filename}': key '{key_name}' appears to contain "
-                f"a plaintext secret ('{preview}'). Use environment variables or a "
-                "secrets manager instead."
-            ),
-        })
+        finding = _build_yaml_secret_finding(lineno, line, filename)
+        findings.append(finding)
         log.warning(
             "Possible plaintext secret in YAML: file=%s line=%d key=%s",
-            filename, lineno, key_name,
+            filename, lineno, finding["key"],
         )
-
     return findings

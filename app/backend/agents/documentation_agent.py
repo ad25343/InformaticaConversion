@@ -165,6 +165,87 @@ def _count_transformations(graph: dict) -> int:
     )
 
 
+def _build_cross_ref_lines(cr) -> list[str]:
+    """Build session context lines for the cross-reference block."""
+    lines = [f"Cross-reference validation: {cr.status}"]
+    if cr.mapping_name:
+        lines.append(f"  Mapping name: {cr.mapping_name}")
+    if cr.session_name:
+        lines.append(f"  Session name: {cr.session_name}")
+    if getattr(cr, "workflow_name", None):
+        lines.append(f"  Workflow name: {cr.workflow_name}")
+    if cr.issues:
+        lines.append("  Issues: " + "; ".join(cr.issues))
+    return lines
+
+
+def _build_connection_line(conn) -> str:
+    """Build a single connection description line."""
+    parts = [f"  {conn.role}: {conn.transformation_name}"]
+    if conn.connection_name:
+        parts.append(f"connection={conn.connection_name}")
+    if conn.connection_type:
+        parts.append(f"type={conn.connection_type}")
+    if conn.file_name:
+        parts.append(f"file={conn.file_name}")
+    if conn.file_dir:
+        parts.append(f"dir={conn.file_dir}")
+    return "  " + "  ".join(parts)
+
+
+def _append_session_connections(lines: list[str], sc) -> None:
+    """Append connection lines to lines if session has connections (mutates in place)."""
+    if not sc.connections:
+        return
+    lines.append("Connections:")
+    lines.extend(_build_connection_line(conn) for conn in sc.connections)
+
+
+def _truncate_or_none(val: str | None) -> str | None:
+    """Return first 500 chars of val, or None if val is empty/None."""
+    return (val or "")[:500] or None
+
+
+def _session_scalar_entries(sc) -> list[str]:
+    """Return label:value strings for non-None/non-empty session scalar fields."""
+    reject_dir = getattr(sc, "reject_filedir", "") or ""
+    candidates = [
+        ("Pre-session SQL", _truncate_or_none(sc.pre_session_sql)),
+        ("Post-session SQL", _truncate_or_none(sc.post_session_sql)),
+        ("Commit interval", sc.commit_interval),
+        ("Error threshold", sc.error_threshold),
+        ("Reject file", f"{reject_dir}/{sc.reject_filename}" if sc.reject_filename else None),
+    ]
+    return [f"{label}: {value}" for label, value in candidates if value is not None]
+
+
+def _append_session_scalars(lines: list[str], sc) -> None:
+    """Append scalar optional fields from session config (mutates in place)."""
+    lines.extend(_session_scalar_entries(sc))
+
+
+def _build_session_config_lines(sc) -> list[str]:
+    """Build session context lines for the session config block."""
+    lines = [f"\nSession: {sc.session_name}  (Workflow: {sc.workflow_name})"]
+    _append_session_connections(lines, sc)
+    _append_session_scalars(lines, sc)
+    return lines
+
+
+def _append_parameters_block(lines: list[str], spr) -> None:
+    """Append resolved-parameters block to lines if present (mutates in place)."""
+    if spr.parameters:
+        lines.append("\nResolved parameters ($$VARIABLES):")
+        lines.extend(f"  {p.name} = {p.value}  [{p.scope}]" for p in spr.parameters)
+
+
+def _append_unresolved_block(lines: list[str], spr) -> None:
+    """Append unresolved-variables block to lines if present (mutates in place)."""
+    if spr.unresolved_variables:
+        lines.append("\nUnresolved variables (no value in parameter file):")
+        lines.extend(f"  {v}" for v in spr.unresolved_variables)
+
+
 def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
     """
     Build a plain-text block describing the session config and resolved parameters
@@ -175,57 +256,13 @@ def _build_session_context_block(spr: Optional[SessionParseReport]) -> str:
         return ""
 
     lines: list[str] = ["## Session & Runtime Context (Step 0 data)"]
+    lines.extend(_build_cross_ref_lines(spr.cross_ref))
 
-    # Cross-reference status
-    cr = spr.cross_ref
-    lines.append(f"Cross-reference validation: {cr.status}")
-    if cr.mapping_name:
-        lines.append(f"  Mapping name: {cr.mapping_name}")
-    if cr.session_name:
-        lines.append(f"  Session name: {cr.session_name}")
-    if cr.workflow_name if hasattr(cr, 'workflow_name') else False:
-        lines.append(f"  Workflow name: {cr.workflow_name}")  # type: ignore
-    if cr.issues:
-        lines.append("  Issues: " + "; ".join(cr.issues))
+    if spr.session_config:
+        lines.extend(_build_session_config_lines(spr.session_config))
 
-    # Session config
-    sc = spr.session_config
-    if sc:
-        lines.append(f"\nSession: {sc.session_name}  (Workflow: {sc.workflow_name})")
-        if sc.connections:
-            lines.append("Connections:")
-            for conn in sc.connections:
-                parts = [f"  {conn.role}: {conn.transformation_name}"]
-                if conn.connection_name:
-                    parts.append(f"connection={conn.connection_name}")
-                if conn.connection_type:
-                    parts.append(f"type={conn.connection_type}")
-                if conn.file_name:
-                    parts.append(f"file={conn.file_name}")
-                if conn.file_dir:
-                    parts.append(f"dir={conn.file_dir}")
-                lines.append("  " + "  ".join(parts))
-        if sc.pre_session_sql:
-            lines.append(f"Pre-session SQL: {sc.pre_session_sql[:500]}")
-        if sc.post_session_sql:
-            lines.append(f"Post-session SQL: {sc.post_session_sql[:500]}")
-        if sc.commit_interval is not None:
-            lines.append(f"Commit interval: {sc.commit_interval}")
-        if sc.error_threshold is not None:
-            lines.append(f"Error threshold: {sc.error_threshold}")
-        if sc.reject_filename:
-            lines.append(f"Reject file: {sc.reject_filedir or ''}/{sc.reject_filename}")
-
-    # Resolved parameters
-    if spr.parameters:
-        lines.append("\nResolved parameters ($$VARIABLES):")
-        for p in spr.parameters:
-            lines.append(f"  {p.name} = {p.value}  [{p.scope}]")
-
-    if spr.unresolved_variables:
-        lines.append("\nUnresolved variables (no value in parameter file):")
-        for v in spr.unresolved_variables:
-            lines.append(f"  {v}")
+    _append_parameters_block(lines, spr)
+    _append_unresolved_block(lines, spr)
 
     return "\n".join(lines)
 
@@ -267,6 +304,61 @@ async def _claude_call(prompt: str, pass_label: str) -> tuple[str, bool]:
     return text, truncated
 
 
+def _truncate_graph_json(graph: dict) -> str:
+    """Return compact graph JSON, truncated at 80 000 chars if necessary."""
+    graph_json = json.dumps(graph, indent=2)
+    if len(graph_json) > 80_000:
+        return graph_json[:80_000] + "\n... [truncated for length]"
+    return graph_json
+
+
+async def _run_pass1(
+    parse_summary: str,
+    complexity_summary: str,
+    graph: dict,
+) -> tuple[str, bool]:
+    """Run Pass 1 (overview + transformations + parameters)."""
+    graph_json = _truncate_graph_json(graph)
+    prompt = PASS_1_PROMPT.format(
+        parse_summary=parse_summary,
+        complexity_summary=complexity_summary,
+        graph_json=graph_json,
+    )
+    return await _claude_call(prompt, "Pass 1 (transformations)")
+
+
+async def _run_pass2(pass1_doc: str, session_section: str) -> tuple[str, bool]:
+    """Run Pass 2 (lineage + session context + ambiguities)."""
+    prompt = PASS_2_PROMPT.format(
+        pass1_doc=pass1_doc,
+        session_context_block=session_section,
+    )
+    return await _claude_call(prompt, "Pass 2 (lineage)")
+
+
+def _combine_passes(pass1_doc: str, pass2_doc: str, pass2_truncated: bool) -> str:
+    """Combine Pass 1 and Pass 2 output and append the appropriate sentinel."""
+    combined = pass1_doc.rstrip() + "\n\n" + pass2_doc.lstrip()
+    if pass2_truncated:
+        combined += DOC_TRUNCATION_SENTINEL
+        log.warning(
+            "documentation_agent: two-pass complete but TRUNCATED — total %d chars",
+            len(combined),
+        )
+    else:
+        combined += DOC_COMPLETE_SENTINEL
+        log.info(
+            "documentation_agent: two-pass complete — total %d chars",
+            len(combined),
+        )
+    return combined
+
+
+def _pass_label(use_two_pass: bool) -> str:
+    """Return 'two-pass' or 'single-pass' for log messages."""
+    return "two-pass" if use_two_pass else "single-pass"
+
+
 # ── Agent class ───────────────────────────────────────────────────────────────
 
 class DocumentationAgent(BaseAgent):
@@ -306,70 +398,33 @@ class DocumentationAgent(BaseAgent):
             f"Special Flags: {complexity.special_flags}"
         )
 
-        # Graph JSON is only sent to Pass 1 — compact but complete
-        graph_json = json.dumps(graph, indent=2)
-        if len(graph_json) > 80_000:
-            graph_json = graph_json[:80_000] + "\n... [truncated for length]"
-
         session_context_block = _build_session_context_block(session_parse_report)
         session_section = f"\n{session_context_block}\n" if session_context_block else ""
 
-        num_trans = _count_transformations(graph)
         use_two_pass = complexity.tier.value in ("MEDIUM", "HIGH", "VERY_HIGH")
+        num_trans    = _count_transformations(graph)
 
         log.info(
             "documentation_agent: starting %s doc generation — tier=%s transformations=%d",
-            "two-pass" if use_two_pass else "single-pass",
+            _pass_label(use_two_pass),
             complexity.tier.value, num_trans,
         )
 
-        # ── Pass 1: Overview + Transformations + Parameters ───────────────────────
-        pass1_prompt = PASS_1_PROMPT.format(
-            parse_summary=parse_summary,
-            complexity_summary=complexity_summary,
-            graph_json=graph_json,
-        )
-
-        pass1_doc, pass1_truncated = await _claude_call(pass1_prompt, "Pass 1 (transformations)")
+        pass1_doc, pass1_truncated = await _run_pass1(parse_summary, complexity_summary, graph)
         log.info("documentation_agent: Pass 1 complete — %d chars", len(pass1_doc))
 
         if pass1_truncated:
             log.error("documentation_agent: Pass 1 truncated — returning early")
             return pass1_doc + DOC_TRUNCATION_SENTINEL
 
-        # ── LOW tier: single pass is sufficient — no lineage section needed ────────
         if not use_two_pass:
             log.info("documentation_agent: LOW tier — single pass complete, skipping Pass 2")
             return pass1_doc + DOC_COMPLETE_SENTINEL
 
-        # ── Pass 2: Lineage (non-trivial fields) + Session Context + Ambiguities ───
-        # NOTE: graph_json is intentionally NOT sent here — Pass 1's output already
-        # contains all transformation detail that Pass 2 needs for lineage tracing.
-        pass2_prompt = PASS_2_PROMPT.format(
-            pass1_doc=pass1_doc,
-            session_context_block=session_section,
-        )
-
-        pass2_doc, pass2_truncated = await _claude_call(pass2_prompt, "Pass 2 (lineage)")
+        pass2_doc, pass2_truncated = await _run_pass2(pass1_doc, session_section)
         log.info("documentation_agent: Pass 2 complete — %d chars", len(pass2_doc))
 
-        # Combine — Pass 1 ends at Parameters, Pass 2 starts at Field-Level Lineage
-        combined = pass1_doc.rstrip() + "\n\n" + pass2_doc.lstrip()
-
-        if pass2_truncated:
-            combined += DOC_TRUNCATION_SENTINEL
-            log.warning(
-                "documentation_agent: two-pass complete but TRUNCATED — total %d chars",
-                len(combined),
-            )
-        else:
-            combined += DOC_COMPLETE_SENTINEL
-            log.info(
-                "documentation_agent: two-pass complete — total %d chars",
-                len(combined),
-            )
-
-        return combined
+        return _combine_passes(pass1_doc, pass2_doc, pass2_truncated)
 
 
 # Backward-compat shim — keeps orchestrator.py call sites unchanged

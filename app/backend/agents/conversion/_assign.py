@@ -13,6 +13,27 @@ from ...models.schemas import (
 )
 
 
+def _select_stack(tier: ComplexityTier, all_trans_types: list[str]) -> TargetStack:
+    """Pick target stack from complexity tier and transformation types."""
+    if tier in (ComplexityTier.HIGH, ComplexityTier.VERY_HIGH):
+        return TargetStack.PYSPARK
+    if _is_sql_friendly(all_trans_types):
+        return TargetStack.DBT
+    if tier == ComplexityTier.LOW:
+        return TargetStack.PYTHON
+    return TargetStack.PYSPARK
+
+
+def _collect_special_concerns(all_trans_types: list[str]) -> list[str]:
+    """Return a list of special concern strings for the given transformation types."""
+    concerns: list[str] = []
+    if "HTTP Transformation" in all_trans_types:
+        concerns.append("HTTP Transformation — API integration required in converted code")
+    if any("Stored Procedure" in t for t in all_trans_types):
+        concerns.append("Stored procedure references — will require manual resolution")
+    return concerns
+
+
 async def assign_stack(
     complexity: ComplexityReport,
     graph: dict,
@@ -21,29 +42,13 @@ async def assign_stack(
     mapping_name = parse_report.mapping_names[0] if parse_report.mapping_names else "unknown"
     tier = complexity.tier
 
-    all_trans_types = []
+    all_trans_types: list[str] = []
     for m in graph.get("mappings", []):
         all_trans_types.extend(t["type"] for t in m.get("transformations", []))
 
-    # Determine stack by rules
-    special_concerns: list[str] = []
-
-    if tier in (ComplexityTier.HIGH, ComplexityTier.VERY_HIGH):
-        stack = TargetStack.PYSPARK
-    elif _is_sql_friendly(all_trans_types):
-        stack = TargetStack.DBT
-    elif tier == ComplexityTier.LOW:
-        stack = TargetStack.PYTHON
-    else:
-        stack = TargetStack.PYSPARK  # Medium default to PySpark for safety
-
-    if "HTTP Transformation" in all_trans_types:
-        special_concerns.append("HTTP Transformation — API integration required in converted code")
-    if any("Stored Procedure" in t for t in all_trans_types):
-        special_concerns.append("Stored procedure references — will require manual resolution")
-
-    # Ask Claude for written rationale
-    rationale = await _get_stack_rationale(stack, complexity, all_trans_types)
+    stack           = _select_stack(tier, all_trans_types)
+    special_concerns = _collect_special_concerns(all_trans_types)
+    rationale       = await _get_stack_rationale(stack, complexity, all_trans_types)
 
     return StackAssignment(
         mapping_name=mapping_name,

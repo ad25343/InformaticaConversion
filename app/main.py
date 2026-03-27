@@ -47,28 +47,22 @@ TEMPLATES = Path(__file__).parent / "frontend" / "templates"
 _APP_START_TIME = time.monotonic()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    log_level = _cfg.log_level
-    configure_app_logging(log_level)
-    await init_db()
+# ── Lifespan helper functions ──────────────────────────────────────────────
 
-    # ── Security startup guards ────────────────────────────────────────────
+def _check_secret_key() -> None:
+    """Raise or warn if SECRET_KEY or APP_PASSWORD are misconfigured."""
     if SECRET_KEY == "change-me-in-production-please":
         if _cfg.app_password:
-            # APP_PASSWORD is set → this is a real deployment. Hard-fail so the
-            # operator cannot accidentally ship with a token-forgeable secret key.
             raise RuntimeError(
                 "FATAL: SECRET_KEY is the default insecure placeholder while "
                 "APP_PASSWORD is set (production mode). Generate a strong key with:\n"
                 "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
                 "and set SECRET_KEY in your .env file. Refusing to start."
             )
-        else:
-            _startup_log.warning(
-                "SECURITY WARNING: SECRET_KEY is the default insecure value. "
-                "Set a strong random SECRET_KEY in your .env before any non-local deployment."
-            )
+        _startup_log.warning(
+            "SECURITY WARNING: SECRET_KEY is the default insecure value. "
+            "Set a strong random SECRET_KEY in your .env before any non-local deployment."
+        )
     if not _cfg.app_password:
         _startup_log.warning(
             "SECURITY WARNING: APP_PASSWORD is not set. "
@@ -76,11 +70,9 @@ async def lifespan(app: FastAPI):
             "Set APP_PASSWORD in your .env for any non-local deployment."
         )
 
-    # ── Stuck-job recovery ─────────────────────────────────────────────────
-    # Jobs left in mid-pipeline states (parsing, classifying, documenting,
-    # verifying, converting) across a server restart can never complete —
-    # their asyncio tasks are gone.  Mark them FAILED so the UI shows them
-    # as actionable (delete + re-upload) rather than spinning forever.
+
+async def _recover_and_log_stuck_jobs() -> None:
+    """Mark mid-pipeline jobs FAILED after a restart and log the result."""
     from backend.db.database import recover_stuck_jobs
     recovered = await recover_stuck_jobs()
     if recovered:
@@ -91,25 +83,25 @@ async def lifespan(app: FastAPI):
             len(recovered),
         )
 
-    # ── Batch job recovery ─────────────────────────────────────────────────
-    # Batch jobs that were still 'pending' (never got an asyncio task, e.g.
-    # queued behind the semaphore) are re-queued so they continue processing.
-    # Gate-waiting batch job IDs are restored to _batch_job_ids so that human
-    # approvals after the restart still reacquire the concurrency semaphore.
+
+async def _recover_and_log_batch_jobs() -> None:
+    """Re-queue pending batch jobs and restore gate-waiting semaphore tracking."""
     from backend.routes import recover_batch_jobs as _recover_batch_jobs
-    _batch_recovery = await _recover_batch_jobs()
-    if _batch_recovery["requeued"]:
+    batch_recovery = await _recover_batch_jobs()
+    if batch_recovery["requeued"]:
         _startup_log.info(
             "Startup recovery: re-queued %d pending batch job(s).",
-            _batch_recovery["requeued"],
+            batch_recovery["requeued"],
         )
-    if _batch_recovery["gate_restored"]:
+    if batch_recovery["gate_restored"]:
         _startup_log.info(
             "Startup recovery: restored semaphore tracking for %d gate-waiting batch job(s).",
-            _batch_recovery["gate_restored"],
+            batch_recovery["gate_restored"],
         )
 
-    # ── GAP #13 — Model deprecation + API key check ───────────────────────
+
+async def _probe_anthropic_api() -> None:
+    """Check the configured model and API key are valid; log any issues."""
     try:
         import anthropic as _anthropic
         _probe = _anthropic.AsyncAnthropic(api_key=_cfg.anthropic_api_key)
@@ -134,104 +126,125 @@ async def lifespan(app: FastAPI):
             "All jobs will fail until key permissions are corrected."
         )
     except Exception as _probe_exc:
-        # Genuine network/rate-limit/timeout — non-fatal; will surface on first job
         _startup_log.warning(
             "Startup API probe inconclusive (%s: %s) — will retry on first job.",
             type(_probe_exc).__name__, str(_probe_exc)[:120],
         )
 
-    # ── Start background job cleanup loop ─────────────────────────────────
-    _bg_cleanup = asyncio.create_task(run_cleanup_loop())
-    _bg_cleanup.set_name("cleanup_loop")
 
-    # ── GAP #16 — Start stuck-job timeout watchdog ────────────────────────
-    _bg_watchdog = asyncio.create_task(run_watchdog_loop())
-    _bg_watchdog.set_name("watchdog_loop")
-
-    _bg_tasks = [_bg_cleanup, _bg_watchdog]
-
-    # ── v2.14.0 — Manifest file watcher ───────────────────────────────────
+def _maybe_start_watcher(bg_tasks: list) -> None:
+    """Start the manifest file-watcher background task if configured."""
     if _cfg.watcher_enabled:
         if not _cfg.watcher_dir:
             _startup_log.error(
                 "Watcher: WATCHER_ENABLED=true but WATCHER_DIR is not set — "
                 "file watcher will NOT start.  Set WATCHER_DIR in .env."
             )
-        else:
-            from backend.watcher import run_watcher_loop
-            _bg_watcher = asyncio.create_task(
-                run_watcher_loop(
-                    watch_dir=_cfg.watcher_dir,
-                    poll_interval=_cfg.watcher_poll_interval_secs,
-                    incomplete_ttl=_cfg.watcher_incomplete_ttl_secs,
-                )
+            return
+        from backend.watcher import run_watcher_loop
+        _bg_watcher = asyncio.create_task(
+            run_watcher_loop(
+                watch_dir=_cfg.watcher_dir,
+                poll_interval=_cfg.watcher_poll_interval_secs,
+                incomplete_ttl=_cfg.watcher_incomplete_ttl_secs,
             )
-            _bg_watcher.set_name("manifest_watcher")
-            _bg_tasks.append(_bg_watcher)
-            _startup_log.info(
-                "Watcher: monitoring %s every %ds for manifest files.",
-                _cfg.watcher_dir,
-                _cfg.watcher_poll_interval_secs,
-            )
+        )
+        _bg_watcher.set_name("manifest_watcher")
+        bg_tasks.append(_bg_watcher)
+        _startup_log.info(
+            "Watcher: monitoring %s every %ds for manifest files.",
+            _cfg.watcher_dir,
+            _cfg.watcher_poll_interval_secs,
+        )
     else:
         _startup_log.info(
             "Watcher: disabled (set WATCHER_ENABLED=true and WATCHER_DIR "
             "in .env to enable scheduled ingestion)."
         )
 
-    # ── v2.15.0 — Time-based manifest scheduler ────────────────────────────
-    if _cfg.scheduler_enabled:
-        if not _cfg.scheduler_dir:
-            _startup_log.error(
-                "Scheduler: SCHEDULER_ENABLED=true but SCHEDULER_DIR is not set — "
-                "scheduler will NOT start.  Set SCHEDULER_DIR in .env."
-            )
-        elif not _cfg.watcher_enabled or not _cfg.watcher_dir:
-            _startup_log.error(
-                "Scheduler: SCHEDULER_ENABLED=true but WATCHER_ENABLED is false or "
-                "WATCHER_DIR is not set.  The scheduler materialises manifests into "
-                "WATCHER_DIR, which must also be configured.  Scheduler will NOT start."
-            )
-        else:
-            from backend.scheduler import run_scheduler_loop
-            _bg_scheduler = asyncio.create_task(
-                run_scheduler_loop(
-                    schedule_dir=_cfg.scheduler_dir,
-                    watcher_dir=_cfg.watcher_dir,
-                    poll_interval=_cfg.scheduler_poll_interval_secs,
-                )
-            )
-            _bg_scheduler.set_name("manifest_scheduler")
-            _bg_tasks.append(_bg_scheduler)
-            _startup_log.info(
-                "Scheduler: monitoring %s every %ds for schedule files.",
-                _cfg.scheduler_dir,
-                _cfg.scheduler_poll_interval_secs,
-            )
-    else:
+
+def _maybe_start_scheduler(bg_tasks: list) -> None:
+    """Start the time-based manifest scheduler background task if configured."""
+    if not _cfg.scheduler_enabled:
         _startup_log.info(
             "Scheduler: disabled (set SCHEDULER_ENABLED=true, SCHEDULER_DIR, "
             "WATCHER_ENABLED=true, and WATCHER_DIR in .env to enable "
             "time-based scheduled ingestion)."
         )
+        return
+    if not _cfg.scheduler_dir:
+        _startup_log.error(
+            "Scheduler: SCHEDULER_ENABLED=true but SCHEDULER_DIR is not set — "
+            "scheduler will NOT start.  Set SCHEDULER_DIR in .env."
+        )
+        return
+    if not _cfg.watcher_enabled or not _cfg.watcher_dir:
+        _startup_log.error(
+            "Scheduler: SCHEDULER_ENABLED=true but WATCHER_ENABLED is false or "
+            "WATCHER_DIR is not set.  The scheduler materialises manifests into "
+            "WATCHER_DIR, which must also be configured.  Scheduler will NOT start."
+        )
+        return
+    from backend.scheduler import run_scheduler_loop
+    _bg_scheduler = asyncio.create_task(
+        run_scheduler_loop(
+            schedule_dir=_cfg.scheduler_dir,
+            watcher_dir=_cfg.watcher_dir,
+            poll_interval=_cfg.scheduler_poll_interval_secs,
+        )
+    )
+    _bg_scheduler.set_name("manifest_scheduler")
+    bg_tasks.append(_bg_scheduler)
+    _startup_log.info(
+        "Scheduler: monitoring %s every %ds for schedule files.",
+        _cfg.scheduler_dir,
+        _cfg.scheduler_poll_interval_secs,
+    )
 
-    # ── GAP #15 — Graceful shutdown ───────────────────────────────────────
-    yield
 
-    # Cancel background loops
-    for _bg in _bg_tasks:
+async def _shutdown_bg_tasks(bg_tasks: list) -> None:
+    """Cancel and await all background loop tasks."""
+    for _bg in bg_tasks:
         _bg.cancel()
-    await asyncio.gather(*_bg_tasks, return_exceptions=True)
+    await asyncio.gather(*bg_tasks, return_exceptions=True)
     _startup_log.info("Shutdown: background loops cancelled.")
 
-    # Cancel any in-flight pipeline tasks so they don't outlive the process
+
+async def _shutdown_pipeline_tasks() -> None:
+    """Cancel any in-flight pipeline tasks so they don't outlive the process."""
     from backend.routes import _active_tasks
-    if _active_tasks:
-        _startup_log.info("Shutdown: cancelling %d active pipeline task(s)…", len(_active_tasks))
-        for _task in list(_active_tasks.values()):
-            _task.cancel()
-        await asyncio.gather(*_active_tasks.values(), return_exceptions=True)
-        _startup_log.info("Shutdown: all pipeline tasks cancelled.")
+    if not _active_tasks:
+        return
+    _startup_log.info("Shutdown: cancelling %d active pipeline task(s)…", len(_active_tasks))
+    for _task in list(_active_tasks.values()):
+        _task.cancel()
+    await asyncio.gather(*_active_tasks.values(), return_exceptions=True)
+    _startup_log.info("Shutdown: all pipeline tasks cancelled.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_app_logging(_cfg.log_level)
+    await init_db()
+
+    _check_secret_key()
+    await _recover_and_log_stuck_jobs()
+    await _recover_and_log_batch_jobs()
+    await _probe_anthropic_api()
+
+    _bg_cleanup = asyncio.create_task(run_cleanup_loop())
+    _bg_cleanup.set_name("cleanup_loop")
+    _bg_watchdog = asyncio.create_task(run_watchdog_loop())
+    _bg_watchdog.set_name("watchdog_loop")
+    _bg_tasks = [_bg_cleanup, _bg_watchdog]
+
+    _maybe_start_watcher(_bg_tasks)
+    _maybe_start_scheduler(_bg_tasks)
+
+    yield
+
+    await _shutdown_bg_tasks(_bg_tasks)
+    await _shutdown_pipeline_tasks()
 
 
 app = FastAPI(
@@ -388,26 +401,30 @@ async def security_headers_middleware(request: Request, call_next):
 
 
 # ── Protected API routes ──────────────────────────────────
+
+_PUBLIC_EXACT  = frozenset({"/health", "/api/health", "/favicon.ico"})
+_PUBLIC_PREFIX = ("/login", "/static")
+
+
+def _is_public_path(path: str) -> bool:
+    """Return True for paths that bypass authentication."""
+    return path in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIX)
+
+
+def _unauthenticated_response(path: str):
+    """Return the appropriate response for an unauthenticated request."""
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    return RedirectResponse("/login", status_code=302)
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-
-    # Always allow: health check, login page, static assets, favicon
-    if (path == "/health" or
-        path.startswith("/login") or
-        path.startswith("/static") or
-        path == "/favicon.ico"):
+    if _is_public_path(path):
         return await call_next(request)
-
-    # Check authentication for everything else
     if not is_authenticated(request):
-        # API calls → 401 JSON
-        if path.startswith("/api/"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-        # UI/browser requests → redirect to login
-        return RedirectResponse(f"/login", status_code=302)
-
+        return _unauthenticated_response(path)
     return await call_next(request)
 
 

@@ -40,6 +40,22 @@ RATE_LIMIT_JOBS        = _cfg.rate_limit_jobs
 RATE_LIMIT_LOGIN       = _cfg.rate_limit_login
 _TRUSTED_PROXY_COUNT   = _cfg.trusted_proxy_count
 
+def _extract_forwarded_ip(forwarded_for: str) -> str:
+    """
+    Extract the leftmost untrusted IP from an X-Forwarded-For header value.
+
+    The trusted proxies append from the right; we skip the last
+    _TRUSTED_PROXY_COUNT entries and return the one before them.
+    Returns an empty string when the header value is empty or the
+    candidate entry is empty.
+    """
+    if not forwarded_for:
+        return ""
+    ips = [ip.strip() for ip in forwarded_for.split(",")]
+    idx = max(0, len(ips) - _TRUSTED_PROXY_COUNT)
+    return ips[idx]
+
+
 def _real_client_ip(request: Request) -> str:
     """
     Return the real client IP, accounting for trusted reverse proxies.
@@ -55,15 +71,11 @@ def _real_client_ip(request: Request) -> str:
     because an attacker could spoof that header.
     """
     if _TRUSTED_PROXY_COUNT > 0:
-        forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
-        if forwarded_for:
-            ips = [ip.strip() for ip in forwarded_for.split(",")]
-            # The trusted proxies append from the right; pick the entry
-            # immediately before the trusted chain.
-            idx = max(0, len(ips) - _TRUSTED_PROXY_COUNT)
-            candidate = ips[idx]
-            if candidate:
-                return candidate
+        candidate = _extract_forwarded_ip(
+            request.headers.get("X-Forwarded-For", "").strip()
+        )
+        if candidate:
+            return candidate
     return request.client.host if request.client else "unknown"
 
 

@@ -16,6 +16,32 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 
+def _extract_target_fields(s2t_records: list) -> list[str]:
+    """Return sorted unique target field names from s2t_records."""
+    return sorted({
+        r["target_field"]
+        for r in s2t_records
+        if isinstance(r, dict) and r.get("target_field")
+    })
+
+
+def _build_field_comment_block(s2t_records: list | None) -> str:
+    """Build the target-field comment block for the comparison script header."""
+    if not s2t_records:
+        return "\n".join([
+            "# Expected target fields: (s2t_records not provided — "
+            "check the S2T workbook for the full field list)",
+            "#",
+        ])
+    target_fields = _extract_target_fields(s2t_records)
+    lines = [
+        "# Expected target fields (from S2T mapping):",
+        *[f"#   {f}" for f in target_fields],
+        "#",
+    ]
+    return "\n".join(lines)
+
+
 def generate_comparison_script(
     mapping_name: str,
     s2t_records: list | None = None,
@@ -42,25 +68,7 @@ def generate_comparison_script(
     ts        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     safe_name = mapping_name.replace('"', '\\"')
 
-    # Build the target-field comment block from s2t_records
-    if s2t_records:
-        target_fields = sorted({
-            r["target_field"]
-            for r in s2t_records
-            if isinstance(r, dict) and r.get("target_field")
-        })
-        field_comment_lines = [
-            "# Expected target fields (from S2T mapping):",
-            *[f"#   {f}" for f in target_fields],
-            "#",
-        ]
-    else:
-        field_comment_lines = [
-            "# Expected target fields: (s2t_records not provided — "
-            "check the S2T workbook for the full field list)",
-            "#",
-        ]
-    field_comment_block = "\n".join(field_comment_lines)
+    field_comment_block = _build_field_comment_block(s2t_records)
 
     return f'''#!/usr/bin/env python3
 # Mapping : {safe_name}

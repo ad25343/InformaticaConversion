@@ -121,20 +121,6 @@ Two optional YAML files allow you to tailor the pipeline to your organisation wi
 
 ---
 
-## Documentation
-
-| Doc | Audience | Purpose |
-|---|---|---|
-| [`docs/USER_GUIDE.md`](../docs/USER_GUIDE.md) | End users | Upload, pipeline steps, gates, sign-off, report types, Conversion Readiness scoring |
-| [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) | Engineers | Living technical design — pipeline, API surface, data model, security |
-| [`docs/DESIGN_PATTERN_LIBRARY.md`](../docs/DESIGN_PATTERN_LIBRARY.md) | Engineers | All 10 ETL patterns — inputs, outputs, generated code shape |
-| [`docs/MAPPING_WF_PARAM_GUIDE.md`](../docs/MAPPING_WF_PARAM_GUIDE.md) | Migration leads | Conversion planning — Mapping XML, Workflow XML, Parameter Files, batch strategy, best practices |
-| [`docs/TESTING_GUIDE.md`](../docs/TESTING_GUIDE.md) | Engineers | Test layers, golden comparison, boundary tests |
-| [`docs/PRD.md`](../docs/PRD.md) | Product / leadership | Requirements, personas, version scope, success metrics |
-| [`CHANGELOG.md`](../CHANGELOG.md) | All | Full version history |
-
----
-
 ## Architecture
 
 ```
@@ -350,13 +336,9 @@ python3 test_pipeline.py --step0-only # Step 0 only (no Claude API calls)
 | **v2.16.0** | Shipped | Config-driven pattern library — 10 ETL patterns (pass_through → scd2); pip-installable `etl_patterns` package; 199 tests; classifier decision tree + conversion agent integration |
 | **v2.17.0** | Shipped | Generic component architecture — org_config.yaml + warehouse_registry.yaml + Jinja2 prompt overrides; all hardcoded org signals externalised; backwards-compatible |
 | **v2.17.1** | Shipped | Batch gate review queue (`GET /api/gates/pending`, `POST /api/gates/batch-signoff`); migration progress endpoint + CSV export; Review Queue UI tab |
-| **v2.17.4** | Shipped | UI overhaul — Submit panel intelligence (live job insights, recent submissions, mode tips); live sidebar feed (running jobs + gate queue); global search ⌘K; short tracking IDs; clickable Review Queue with direct sign-off navigation; gate banners; `GET /api/jobs/stats`; landing page stats fix; "Health Check" tab rename |
-| **v2.18–v2.19** | Shipped | Batch gate review + bulk sign-off; flat-folder batch mode; batch startup recovery; batch delete; pipeline mode selector; in-browser User Guide |
-| **v2.20–v2.22** | Shipped | Checkpoint-based resume at gate rejection; data-level equivalence testing (golden CSV comparison + expression boundary tests); bidirectional migration / greenfield authoring |
-| **v2.23–v2.24** | Shipped | Agent file refactor (3 large agents → focused modules); frontend + verification agent split; Conversion Readiness two-score system (Pattern Confidence × 0.40 + Source Completeness × 0.60); Gate 1 soft-block at score < 65 |
-| **v2.25.0** | Current | SSE sign-off form re-render fix; Step 12 crash guard (COMPLETE always written); Audit report 500 fix (`_decode_state`); PDF report file-inventory-only; "Complete Report ▾" dropdown; S2T Manifest + Summary button rename; `ARCHITECTURE.md` + `MAPPING_WF_PARAM_GUIDE.md` added |
-| **v2.26** | Planned | Estate analyser integration (bulk XML → pattern/complexity/cost report); migration wave planner |
-| **v2.27** | Planned | Multi-user access control (ADMIN/REVIEWER/ENGINEER/READ_ONLY roles, job ownership, audit trail) + SSO/OIDC |
+| **v2.17.4** | Current | UI overhaul — Submit panel intelligence (live job insights, recent submissions, mode tips); live sidebar feed (running jobs + gate queue); global search ⌘K; short tracking IDs; clickable Review Queue with direct sign-off navigation; gate banners; `GET /api/jobs/stats`; landing page stats fix; "Health Check" tab rename |
+| **v2.18** | Planned | Estate analyser (bulk XML → pattern/complexity/cost report) + migration wave planner (dependency DAG, topological wave sequencing, quick-win identification) |
+| **v2.19** | Planned | Multi-user access control (ADMIN/REVIEWER/ENGINEER/READ_ONLY roles, job ownership, audit trail) + SSO/OIDC + SAML 2.0 + JIT provisioning |
 | **v3.0** | Vision | Continuous migration mode; migration velocity dashboard; re-export delta handling; self-hosted model support; repository-level object handling |
 
 ---

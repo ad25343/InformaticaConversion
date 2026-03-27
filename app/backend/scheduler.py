@@ -101,6 +101,37 @@ log = logging.getLogger("conversion.scheduler")
 
 # ── Cron evaluation ──────────────────────────────────────────────────────────
 
+def _expand_step_range(
+    range_part: str, step_str: str, part: str, min_val: int, max_val: int
+) -> range:
+    """Parse 'range/step' into a range object. Raises ValueError on bad input."""
+    try:
+        step = int(step_str)
+    except ValueError:
+        raise ValueError(f"Invalid step value in cron field: {part!r}")
+    if step < 1:
+        raise ValueError(f"Cron step must be >= 1: {part!r}")
+    if range_part == "*":
+        return range(min_val, max_val + 1, step)
+    if "-" in range_part:
+        a, b = range_part.split("-", 1)
+        return range(int(a), int(b) + 1, step)
+    return range(int(range_part), max_val + 1, step)
+
+
+def _expand_part(part: str, min_val: int, max_val: int) -> set[int]:
+    """Expand one comma-free cron sub-field token to a set of ints."""
+    if part == "*":
+        return set(range(min_val, max_val + 1))
+    if "/" in part:
+        range_part, step_str = part.split("/", 1)
+        return set(_expand_step_range(range_part, step_str, part, min_val, max_val))
+    if "-" in part:
+        a, b = part.split("-", 1)
+        return set(range(int(a), int(b) + 1))
+    return {int(part)}
+
+
 def _expand_field(field: str, min_val: int, max_val: int) -> set[int]:
     """
     Expand a single cron field to a set of matching integer values.
@@ -109,31 +140,42 @@ def _expand_field(field: str, min_val: int, max_val: int) -> set[int]:
     """
     result: set[int] = set()
     for part in field.split(","):
-        part = part.strip()
-        if part == "*":
-            result.update(range(min_val, max_val + 1))
-        elif "/" in part:
-            range_part, step_str = part.split("/", 1)
-            try:
-                step = int(step_str)
-            except ValueError:
-                raise ValueError(f"Invalid step value in cron field: {part!r}")
-            if step < 1:
-                raise ValueError(f"Cron step must be >= 1: {part!r}")
-            if range_part == "*":
-                start, end = min_val, max_val
-            elif "-" in range_part:
-                a, b = range_part.split("-", 1)
-                start, end = int(a), int(b)
-            else:
-                start, end = int(range_part), max_val
-            result.update(range(start, end + 1, step))
-        elif "-" in part:
-            a, b = part.split("-", 1)
-            result.update(range(int(a), int(b) + 1))
-        else:
-            result.add(int(part))
+        result.update(_expand_part(part.strip(), min_val, max_val))
     return result
+
+
+def _expand_all_fields(
+    minute_f: str, hour_f: str, dom_f: str, month_f: str, dow_f: str,
+    cron_expr: str,
+) -> tuple[set[int], set[int], set[int], set[int], set[int]]:
+    """Expand all 5 cron fields; re-raise ValueError with context on bad input."""
+    try:
+        return (
+            _expand_field(minute_f,  0, 59),
+            _expand_field(hour_f,    0, 23),
+            _expand_field(dom_f,      1, 31),
+            _expand_field(month_f,    1, 12),
+            _expand_field(dow_f,      0,  6),
+        )
+    except ValueError as exc:
+        raise ValueError(f"Invalid cron expression {cron_expr!r}: {exc}") from exc
+
+
+def _dt_matches_sets(
+    dt: datetime,
+    valid_minutes: set, valid_hours: set, valid_doms: set,
+    valid_months: set, valid_dows: set,
+) -> bool:
+    """Return True if *dt* falls within all five cron field sets."""
+    python_dow = dt.isoweekday() % 7   # 1=Mon…6=Sat, 7→0=Sun
+    checks = (
+        (dt.minute,  valid_minutes),
+        (dt.hour,    valid_hours),
+        (dt.day,     valid_doms),
+        (dt.month,   valid_months),
+        (python_dow, valid_dows),
+    )
+    return all(v in s for v, s in checks)
 
 
 def _cron_matches(cron_expr: str, dt: datetime) -> bool:
@@ -158,25 +200,10 @@ def _cron_matches(cron_expr: str, dt: datetime) -> bool:
     # Use word-boundary replacement to avoid mangling values like 17 or 70.
     dow_f = re.sub(r"\b7\b", "0", dow_f)
 
-    try:
-        valid_minutes = _expand_field(minute_f,  0, 59)
-        valid_hours   = _expand_field(hour_f,    0, 23)
-        valid_doms    = _expand_field(dom_f,      1, 31)
-        valid_months  = _expand_field(month_f,    1, 12)
-        valid_dows    = _expand_field(dow_f,      0,  6)
-    except ValueError as exc:
-        raise ValueError(f"Invalid cron expression {cron_expr!r}: {exc}") from exc
-
-    # Python isoweekday(): 1=Mon … 6=Sat, 7=Sun → cron: 0=Sun, 1=Mon … 6=Sat
-    python_dow = dt.isoweekday() % 7
-
-    return (
-        dt.minute in valid_minutes
-        and dt.hour   in valid_hours
-        and dt.day    in valid_doms
-        and dt.month  in valid_months
-        and python_dow in valid_dows
+    valid_minutes, valid_hours, valid_doms, valid_months, valid_dows = (
+        _expand_all_fields(minute_f, hour_f, dom_f, month_f, dow_f, cron_expr)
     )
+    return _dt_matches_sets(dt, valid_minutes, valid_hours, valid_doms, valid_months, valid_dows)
 
 
 # ── Timezone helpers ─────────────────────────────────────────────────────────
@@ -197,60 +224,71 @@ def _now_in_tz(tz_name: Optional[str]) -> datetime:
 
 # ── Schedule file reader ─────────────────────────────────────────────────────
 
+def _parse_schedule_json(path: Path) -> Optional[dict]:
+    """Read and JSON-parse a schedule file; return None on I/O or parse error."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.error("Scheduler: could not read %s — %s", path.name, exc)
+        return None
+
+
+def _validate_schedule_required(raw: dict, path: Path) -> Optional[str]:
+    """
+    Validate required fields of the schedule dict.
+    Returns the cron string on success, None on validation failure.
+    """
+    if not raw.get("enabled", True):
+        log.debug("Scheduler: %s is disabled (enabled=false) — skipping", path.name)
+        return None
+    cron_expr = raw.get("cron")
+    if not isinstance(cron_expr, str) or not cron_expr.strip():
+        log.error("Scheduler: %s missing required 'cron' string field", path.name)
+        return None
+    if not isinstance(raw.get("manifest"), dict):
+        log.error("Scheduler: %s missing required 'manifest' object", path.name)
+        return None
+    return cron_expr
+
+
+def _check_optional_str_field(raw: dict, field: str, path: Path) -> bool:
+    """Return False (and log) if field is present but not a string."""
+    val = raw.get(field)
+    if val is not None and not isinstance(val, str):
+        log.error("Scheduler: %s %r must be a string", path.name, field)
+        return False
+    return True
+
+
+def _validate_schedule_optional(raw: dict, path: Path, cron_expr: str) -> bool:
+    """Validate optional string fields and cron syntax. Returns False on error."""
+    try:
+        _cron_matches(cron_expr, datetime.now())
+    except ValueError as exc:
+        log.error("Scheduler: %s has invalid cron expression — %s", path.name, exc)
+        return False
+    return (
+        _check_optional_str_field(raw, "timezone", path)
+        and _check_optional_str_field(raw, "label", path)
+    )
+
+
 def _read_schedule(path: Path) -> Optional[dict]:
     """
     Parse and validate a *.schedule.json file.
     Returns the validated dict on success, None on any error (errors logged).
     """
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        log.error("Scheduler: could not read %s — %s", path.name, exc)
+    raw = _parse_schedule_json(path)
+    if raw is None:
         return None
-
     if not isinstance(raw, dict):
         log.error("Scheduler: %s top-level value is not a JSON object", path.name)
         return None
-
-    # enabled field (defaults to true — missing = enabled)
-    if not raw.get("enabled", True):
-        log.debug("Scheduler: %s is disabled (enabled=false) — skipping", path.name)
+    cron_expr = _validate_schedule_required(raw, path)
+    if cron_expr is None:
         return None
-
-    # cron is required
-    cron_expr = raw.get("cron")
-    if not isinstance(cron_expr, str) or not cron_expr.strip():
-        log.error("Scheduler: %s missing required 'cron' string field", path.name)
+    if not _validate_schedule_optional(raw, path, cron_expr):
         return None
-
-    # manifest is required
-    manifest = raw.get("manifest")
-    if not isinstance(manifest, dict):
-        log.error(
-            "Scheduler: %s missing required 'manifest' object", path.name
-        )
-        return None
-
-    # Validate cron expression syntax at read time to surface errors early
-    try:
-        _cron_matches(cron_expr, datetime.now())
-    except ValueError as exc:
-        log.error(
-            "Scheduler: %s has invalid cron expression — %s", path.name, exc
-        )
-        return None
-
-    # Optional fields — type-check but do not require
-    tz = raw.get("timezone")
-    if tz is not None and not isinstance(tz, str):
-        log.error("Scheduler: %s 'timezone' must be a string", path.name)
-        return None
-
-    label = raw.get("label")
-    if label is not None and not isinstance(label, str):
-        log.error("Scheduler: %s 'label' must be a string", path.name)
-        return None
-
     return raw
 
 
@@ -358,6 +396,59 @@ async def run_scheduler_loop(
             return
 
 
+def _stem_from_path(path: Path) -> str:
+    """Derive the schedule stem by stripping '.schedule.json' suffix."""
+    name = path.name
+    if name.endswith(".schedule.json"):
+        return name[: -len(".schedule.json")]
+    return path.stem
+
+
+def _should_fire(
+    stem: str, schedule: dict, last_fired: dict[str, tuple[int, int]]
+) -> tuple[bool, object, tuple[int, int]]:
+    """
+    Determine whether this schedule should fire now.
+    Returns (fire, now_datetime, hm_tuple).
+    """
+    tz_name = schedule.get("timezone")
+    now     = _now_in_tz(tz_name)
+    hm      = (now.hour, now.minute)
+    if last_fired.get(stem) == hm:
+        log.debug("Scheduler: %s already fired at %02d:%02d — skipping",
+                  stem, now.hour, now.minute)
+        return False, now, hm
+    cron_expr = schedule["cron"]
+    try:
+        matches = _cron_matches(cron_expr, now)
+    except ValueError as exc:
+        log.error("Scheduler: %s cron error — %s", stem, exc)
+        return False, now, hm
+    if not matches:
+        log.debug("Scheduler: %s — cron %r does not match %02d:%02d",
+                  stem, cron_expr, now.hour, now.minute)
+        return False, now, hm
+    log.info("Scheduler: %s — cron %r fired at %s (tz=%s)",
+             stem, cron_expr, now.strftime("%Y-%m-%d %H:%M"),
+             schedule.get("timezone") or "UTC")
+    return True, now, hm
+
+
+def _process_schedule_file(
+    path: Path,
+    watcher_path: Path,
+    last_fired: dict[str, tuple[int, int]],
+) -> None:
+    """Process one schedule file — fire if cron matches and not already fired."""
+    stem     = _stem_from_path(path)
+    schedule = _read_schedule(path)
+    if schedule is None:
+        return
+    fire, _now, hm = _should_fire(stem, schedule, last_fired)
+    if fire and _materialise(stem, schedule, watcher_path):
+        last_fired[stem] = hm
+
+
 async def _tick(
     sched_path: Path,
     watcher_path: Path,
@@ -371,63 +462,13 @@ async def _tick(
     this minute.
     """
     if not sched_path.exists():
-        log.debug(
-            "Scheduler: schedule_dir %s does not exist yet — waiting",
-            sched_path,
-        )
+        log.debug("Scheduler: schedule_dir %s does not exist yet — waiting", sched_path)
         return
 
     schedule_files = sorted(sched_path.glob("*.schedule.json"))
     if not schedule_files:
-        log.debug(
-            "Scheduler: no *.schedule.json files found in %s", sched_path
-        )
+        log.debug("Scheduler: no *.schedule.json files found in %s", sched_path)
         return
 
     for path in schedule_files:
-        # Derive stem by stripping the full ".schedule.json" suffix
-        name = path.name
-        if name.endswith(".schedule.json"):
-            stem = name[: -len(".schedule.json")]
-        else:
-            stem = path.stem
-
-        schedule = _read_schedule(path)
-        if schedule is None:
-            continue   # error already logged
-
-        tz_name = schedule.get("timezone")
-        now     = _now_in_tz(tz_name)
-
-        # Duplicate-fire guard: if we already fired this schedule this exact
-        # minute, skip — prevents double-materialisation when poll_interval
-        # is shorter than a minute or the server is catching up after a pause.
-        hm = (now.hour, now.minute)
-        if last_fired.get(stem) == hm:
-            log.debug(
-                "Scheduler: %s already fired at %02d:%02d — skipping",
-                stem, now.hour, now.minute,
-            )
-            continue
-
-        cron_expr = schedule["cron"]
-        try:
-            matches = _cron_matches(cron_expr, now)
-        except ValueError as exc:
-            log.error("Scheduler: %s cron error — %s", stem, exc)
-            continue
-
-        if not matches:
-            log.debug(
-                "Scheduler: %s — cron %r does not match %02d:%02d",
-                stem, cron_expr, now.hour, now.minute,
-            )
-            continue
-
-        log.info(
-            "Scheduler: %s — cron %r fired at %s (tz=%s)",
-            stem, cron_expr, now.strftime("%Y-%m-%d %H:%M"), tz_name or "UTC",
-        )
-
-        if _materialise(stem, schedule, watcher_path):
-            last_fired[stem] = hm
+        _process_schedule_file(path, watcher_path, last_fired)

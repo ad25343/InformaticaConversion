@@ -29,24 +29,30 @@ _yaml_cache: dict[Path, tuple[float, float, dict]] = {}
 # _yaml_cache[path] = (last_mtime, last_check_monotonic, data_dict)
 
 
-def _load_yaml(path: Path) -> dict:
-    """Load a YAML file with a TTL-based mtime cache. Thread-safe for asyncio."""
-    now = time.monotonic()
-    if path in _yaml_cache:
-        last_mtime, last_check, data = _yaml_cache[path]
-        if now - last_check < _TTL_SECS:
-            return data          # within TTL window — return cached
-        try:
-            current_mtime = os.path.getmtime(path)
-        except OSError:
-            _yaml_cache[path] = (last_mtime, now, data)   # file gone — extend TTL
-            return data
-        if current_mtime == last_mtime:
-            _yaml_cache[path] = (last_mtime, now, data)   # unchanged — extend TTL
-            return data
-        # mtime changed — fall through to reload
+def _get_mtime(path: Path) -> float:
+    """Return os.path.getmtime or 0.0 on error."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
 
-    # Fresh load (first call or file changed)
+
+def _cache_hit(path: Path, now: float) -> tuple[bool, dict]:
+    """Return (hit, data) from cache if still valid; (False, {}) if stale or absent."""
+    if path not in _yaml_cache:
+        return False, {}
+    last_mtime, last_check, data = _yaml_cache[path]
+    if now - last_check < _TTL_SECS:
+        return True, data
+    current_mtime = _get_mtime(path)
+    if current_mtime == 0.0 or current_mtime == last_mtime:
+        _yaml_cache[path] = (last_mtime, now, data)
+        return True, data
+    return False, {}
+
+
+def _fresh_load(path: Path, now: float) -> dict:
+    """Load YAML from disk (or return {} if absent/unreadable), update cache."""
     if not path.exists():
         _yaml_cache[path] = (0.0, now, {})
         return {}
@@ -55,12 +61,18 @@ def _load_yaml(path: Path) -> dict:
             data = yaml.safe_load(f) or {}
     except Exception:
         data = {}
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = 0.0
+    mtime = _get_mtime(path)
     _yaml_cache[path] = (mtime, now, data)
     return data
+
+
+def _load_yaml(path: Path) -> dict:
+    """Load a YAML file with a TTL-based mtime cache. Thread-safe for asyncio."""
+    now = time.monotonic()
+    hit, data = _cache_hit(path, now)
+    if hit:
+        return data
+    return _fresh_load(path, now)
 
 
 def get_org_config() -> dict:
@@ -182,24 +194,39 @@ def should_auto_approve_gate(gate_num: int, pattern: str | None = None,
     return False
 
 
-def _eval_condition(cond: str, pattern: str | None,
-                    tier: str | None, confidence: str | None) -> bool:
+def _cond_is_always_or_never(cond: str) -> bool | None:
+    """Return True/False for 'always'/'never', None for other conditions."""
     if cond == "always":
         return True
     if cond == "never":
         return False
+    return None
+
+
+def _pattern_matches(cond_l: str, pattern: str | None) -> bool:
+    """Return True if cond_l contains an exact pattern== match."""
+    return bool(pattern and f"pattern=={pattern.lower()}" in cond_l.replace(" ", ""))
+
+
+def _tier_matches(cond_l: str, tier: str | None) -> bool:
+    """Return True if tier is listed inside a 'tier in [...]' clause in cond_l."""
+    if not tier:
+        return False
+    import re
+    m = re.search(r"tier in \[([^\]]+)\]", cond_l)
+    if not m:
+        return False
+    allowed = {t.strip().upper() for t in m.group(1).split(",")}
+    return tier.upper() in allowed
+
+
+def _eval_condition(cond: str, pattern: str | None,
+                    tier: str | None, confidence: str | None) -> bool:
+    result = _cond_is_always_or_never(cond)
+    if result is not None:
+        return result
     cond_l = cond.lower()
-    if pattern and f"pattern=={pattern.lower()}" in cond_l.replace(" ", ""):
-        return True
-    if tier and f"tier in" in cond_l:
-        # e.g. "tier in [LOW,MEDIUM]"
-        import re
-        m = re.search(r"tier in \[([^\]]+)\]", cond_l)
-        if m:
-            allowed = [t.strip() for t in m.group(1).split(",")]
-            if tier.upper() in [a.upper() for a in allowed]:
-                return True
-    return False
+    return _pattern_matches(cond_l, pattern) or _tier_matches(cond_l, tier)
 
 
 # ── G7: parser unsupported types ─────────────────────────────────────────────

@@ -38,8 +38,21 @@ REGISTRY_PATH = LOGS_DIR / "registry.json"
 # Log formatters
 # ─────────────────────────────────────────────────────────────────────────────
 
+_RECORD_ATTR_MAP = {"job_id": "job_id", "step": "step", "extra_data": "data"}
+
+
 class JsonFormatter(logging.Formatter):
     """One JSON object per line for app.log — grep / log-shipper friendly."""
+
+    def _extra_attrs(self, record: logging.LogRecord) -> dict:
+        """Extract optional per-record attributes into a payload sub-dict."""
+        result = {}
+        for attr, key in _RECORD_ATTR_MAP.items():
+            val = getattr(record, attr, None)
+            if val is not None:
+                result[key] = val
+        return result
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
             "ts":      datetime.now(timezone.utc).isoformat(),
@@ -49,10 +62,7 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
-        for attr in ("job_id", "step", "extra_data"):
-            val = getattr(record, attr, None)
-            if val is not None:
-                payload[attr if attr != "extra_data" else "data"] = val
+        payload.update(self._extra_attrs(record))
         return json.dumps(payload)
 
 
@@ -99,6 +109,13 @@ def configure_app_logging(level: str = "INFO") -> None:
 
     for name in ("uvicorn", "uvicorn.access"):
         logging.getLogger(name).propagate = True
+
+    class _HealthFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            return "/health" not in msg and "/static/" not in msg
+
+    logging.getLogger("uvicorn.access").addFilter(_HealthFilter())
 
     logging.info("Logging initialised — app log: %s", APP_LOG)
 
@@ -381,12 +398,12 @@ class JobLogger:
         self._error_count += 1
         self._write("ERROR", message, step, data, exc_info=exc_info)
 
-    def _write(self, level: str, message: str, step, data,
-               exc_info: bool = False) -> None:
-        ts = datetime.now(timezone.utc).isoformat()
+    def _build_entry(self, level: str, message: str, step, data,
+                     exc_info: bool) -> dict:
+        """Build the structured log entry dict."""
         entry: dict = {
             "type":    "LOG",
-            "ts":      ts,
+            "ts":      datetime.now(timezone.utc).isoformat(),
             "level":   level,
             "step":    step,
             "message": message,
@@ -395,17 +412,22 @@ class JobLogger:
             entry["data"] = data
         if exc_info:
             entry["exc"] = _tb.format_exc()
+        return entry
 
-        # Write to per-job file
+    def _write_to_file(self, entry: dict, level: str) -> None:
+        """Persist entry to the per-job log file."""
         try:
             self._fh.write(json.dumps(entry) + "\n")
         except Exception as exc:  # pragma: no cover
             sys.stderr.write(f"[logger] _write failed ({level}): {exc}\n")
 
-        # Route through root logger (console + app.log)
+    def _route_to_app_logger(self, level: str, message: str, step, data) -> None:
+        """Forward entry to the root logger (console + app.log)."""
         extra: dict = {"job_id": self.job_id}
-        if step   is not None: extra["step"]       = step
-        if data   is not None: extra["extra_data"] = data
+        if step is not None:
+            extra["step"] = step
+        if data is not None:
+            extra["extra_data"] = data
         log_level = getattr(logging, level, logging.INFO)
         record = self._app_logger.makeRecord(
             self._app_logger.name, log_level,
@@ -413,11 +435,19 @@ class JobLogger:
         )
         self._app_logger.handle(record)
 
-        # Buffer for UI (strips "type" field — UI doesn't need it)
+    def _append_to_buffer(self, entry: dict) -> None:
+        """Add entry to UI buffer, trimming to MAX_BUFFER."""
         buf_entry = {k: v for k, v in entry.items() if k != "type"}
         self._buffer.append(buf_entry)
         if len(self._buffer) > self.MAX_BUFFER:
             self._buffer = self._buffer[-self.MAX_BUFFER:]
+
+    def _write(self, level: str, message: str, step, data,
+               exc_info: bool = False) -> None:
+        entry = self._build_entry(level, message, step, data, exc_info)
+        self._write_to_file(entry, level)
+        self._route_to_app_logger(level, message, step, data)
+        self._append_to_buffer(entry)
 
     def get_buffer(self) -> list[dict]:
         return list(self._buffer)
@@ -440,6 +470,22 @@ def job_log_path(job_id: str) -> Optional[Path]:
     return None
 
 
+_INCLUDED_LOG_TYPES = frozenset({"LOG", "STATE_CHANGE", None})
+
+
+def _parse_log_line(line: str) -> Optional[dict]:
+    """Parse a single log line; return a dict to include or None to skip."""
+    try:
+        obj = json.loads(line)
+        if obj.get("type") not in _INCLUDED_LOG_TYPES:
+            return None
+        if "level" not in obj:
+            obj["level"] = "INFO"
+        return obj
+    except Exception:
+        return {"ts": "", "level": "RAW", "message": line}
+
+
 def read_job_log(job_id: str) -> list[dict]:
     """Read all LOG/STATE_CHANGE entries for a job. Skips HEADER/FOOTER."""
     path = job_log_path(job_id)
@@ -451,16 +497,9 @@ def read_job_log(job_id: str) -> list[dict]:
             line = line.strip()
             if not line:
                 continue
-            try:
-                obj = json.loads(line)
-                # Include LOG and STATE_CHANGE; skip HEADER/FOOTER in UI buffer
-                if obj.get("type") in ("LOG", "STATE_CHANGE", None):
-                    # Normalise: ensure 'level' present
-                    if "level" not in obj:
-                        obj["level"] = "INFO"
-                    entries.append(obj)
-            except Exception:
-                entries.append({"ts": "", "level": "RAW", "message": line})
+            parsed = _parse_log_line(line)
+            if parsed is not None:
+                entries.append(parsed)
     return entries
 
 

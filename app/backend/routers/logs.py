@@ -22,6 +22,21 @@ router = APIRouter(prefix="")
 # Job Logs
 # ─────────────────────────────────────────────
 
+def _format_log_entry(e: dict) -> str:
+    """Format a single log entry dict as a human-readable text line."""
+    ts   = e.get("ts", "")[:19].replace("T", " ")
+    lvl  = e.get("level", "INFO").ljust(8)
+    step = f"[step {e['step']}]" if e.get("step") is not None else "         "
+    msg  = e.get("message", "")
+    line = f"{ts} {lvl} {step} {msg}"
+    data = e.get("data")
+    if data:
+        line += f"  |  {json.dumps(data)}"
+    if e.get("exc"):
+        line += f"\n{e['exc']}"
+    return line
+
+
 @router.get("/jobs/{job_id}/logs")
 async def get_job_logs(job_id: str, format: str = "json"):
     """
@@ -37,20 +52,7 @@ async def get_job_logs(job_id: str, format: str = "json"):
     entries = read_job_log(job_id)
 
     if format == "text":
-        lines = []
-        for e in entries:
-            ts   = e.get("ts", "")[:19].replace("T", " ")
-            lvl  = e.get("level", "INFO").ljust(8)
-            step = f"[step {e['step']}]" if e.get("step") is not None else "         "
-            msg  = e.get("message", "")
-            data = e.get("data")
-            line = f"{ts} {lvl} {step} {msg}"
-            if data:
-                line += f"  |  {json.dumps(data)}"
-            if e.get("exc"):
-                line += f"\n{e['exc']}"
-            lines.append(line)
-        return PlainTextResponse("\n".join(lines))
+        return PlainTextResponse("\n".join(_format_log_entry(e) for e in entries))
 
     return JSONResponse({"job_id": job_id, "entries": entries, "count": len(entries)})
 
@@ -78,6 +80,22 @@ async def download_job_log(job_id: str):
 # Log Registry
 # ─────────────────────────────────────────────
 
+def _build_deleted_entry(j: dict) -> dict:
+    """Normalise a soft-deleted DB row to the standard history entry shape."""
+    mn = j.get("mapping_name")
+    if isinstance(mn, dict):
+        mn = None
+    return {
+        "job_id":       j["job_id"],
+        "xml_filename": j["filename"],
+        "mapping_name": mn or j["filename"],
+        "status":       j["status"],
+        "started_at":   j["created_at"],
+        "deleted_at":   j.get("deleted_at"),
+        "log_readable": True,
+    }
+
+
 @router.get("/logs/registry")
 async def get_log_registry():
     """Return the log registry — all jobs with their log filenames and final status."""
@@ -95,20 +113,7 @@ async def get_log_history():
     deleted_jobs = await db.list_deleted_jobs()
     deleted_ids  = {j["job_id"] for j in deleted_jobs}
     # Normalise deleted DB rows to the same shape as registry entries
-    deleted_entries = []
-    for j in deleted_jobs:
-        mn = j.get("mapping_name")
-        if isinstance(mn, dict):
-            mn = None
-        deleted_entries.append({
-            "job_id":       j["job_id"],
-            "xml_filename": j["filename"],
-            "mapping_name": mn or j["filename"],
-            "status":       j["status"],
-            "started_at":   j["created_at"],
-            "deleted_at":   j.get("deleted_at"),
-            "log_readable": True,
-        })
+    deleted_entries = [_build_deleted_entry(j) for j in deleted_jobs]
     # Orphaned registry entries (not in DB at all)
     all_known_ids = live_ids | deleted_ids
     orphans = list_orphaned_registry_entries(all_known_ids)
