@@ -20,9 +20,39 @@
     <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
     <ATTRIBUTE NAME="Commit Type" VALUE="Source"/>
     <ATTRIBUTE NAME="Rollback Incomplete Target Rows" VALUE="YES"/>
+      <ATTRIBUTE NAME="$Source connection value" VALUE="MERIDIAN_DWH_SRC"/>
+    <ATTRIBUTE NAME="$Target connection value" VALUE="MERIDIAN_DWH_TGT"/>
+    <ATTRIBUTE NAME="DTM buffer size" VALUE="Auto"/>
+    <ATTRIBUTE NAME="Collect performance data" VALUE="YES"/>
+    <ATTRIBUTE NAME="Parameter Filename" VALUE="$$PMSourceFileDir/param_meridian_am.prm"/>
+    <ATTRIBUTE NAME="Target load type" VALUE="Normal"/>
+    <ATTRIBUTE NAME="Number of Partitions" VALUE="1"/>
+    <ATTRIBUTE NAME="Recovery Strategy" VALUE="Resume from the last checkpoint"/>
+  </TASK>
+    <TASK DESCRIPTION="Pre-session staging cleanup" ISREUSABLE="NO" NAME="CMD_PRE_SESSION" REUSABLE="NO" TYPE="Command" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="command" VALUE="sqlplus $$DB_USER/$$DB_PASS@MERIDIAN_DWH @$$SQL_DIR/truncate_staging.sql"/>
+  </TASK>
+  <TASK DESCRIPTION="Failure notification" ISREUSABLE="NO" NAME="EMAIL_ON_FAILURE" REUSABLE="NO" TYPE="Email" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="email_address" VALUE="$$DL_ETL_SUPPORT"/>
+    <ATTRIBUTE NAME="email_subject" VALUE="ETL FAILURE: wf_m_fct_top_holdings_rank"/>
+    <ATTRIBUTE NAME="email_text" VALUE="Workflow wf_m_fct_top_holdings_rank failed. Check session log."/>
+  </TASK>
+  <TASK DESCRIPTION="Success notification" ISREUSABLE="NO" NAME="EMAIL_ON_SUCCESS" REUSABLE="NO" TYPE="Email" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="email_address" VALUE="$$DL_ETL_OPS"/>
+    <ATTRIBUTE NAME="email_subject" VALUE="ETL SUCCESS: wf_m_fct_top_holdings_rank"/>
+    <ATTRIBUTE NAME="email_text" VALUE="Workflow wf_m_fct_top_holdings_rank completed successfully."/>
   </TASK>
   <WORKFLOW DESCRIPTION="Workflow for m_fct_top_holdings_rank" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_top_holdings_rank" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
     <TASKINSTANCE DESCRIPTION="" ISOVERRIDABLE="NO" NAME="s_m_fct_top_holdings_rank" TASKTYPENAME="Session" TASKNAME="s_m_fct_top_holdings_rank"/>
+  
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="CMD_PRE_SESSION" REUSABLE="NO" TASKNAME="CMD_PRE_SESSION" TASKTYPE="Command"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="EMAIL_ON_FAILURE" REUSABLE="NO" TASKNAME="EMAIL_ON_FAILURE" TASKTYPE="Email"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="EMAIL_ON_SUCCESS" REUSABLE="NO" TASKNAME="EMAIL_ON_SUCCESS" TASKTYPE="Email"/>
+    <LINK CONDITION="" FROMTASK="Start" TOTASK="CMD_PRE_SESSION"/>
+    <LINK CONDITION="$CMD_PRE_SESSION.PrevTaskStatus = SUCCEEDED" FROMTASK="CMD_PRE_SESSION" TOTASK="s_m_fct_top_holdings_rank"/>
+    <LINK CONDITION="$CMD_PRE_SESSION.PrevTaskStatus = FAILED" FROMTASK="CMD_PRE_SESSION" TOTASK="EMAIL_ON_FAILURE"/>
+    <LINK CONDITION="$s_m_fct_top_holdings_rank.PrevTaskStatus = SUCCEEDED" FROMTASK="s_m_fct_top_holdings_rank" TOTASK="EMAIL_ON_SUCCESS"/>
+    <LINK CONDITION="$s_m_fct_top_holdings_rank.PrevTaskStatus = FAILED" FROMTASK="s_m_fct_top_holdings_rank" TOTASK="EMAIL_ON_FAILURE"/>
   </WORKFLOW>
 </FOLDER>
 </REPOSITORY>

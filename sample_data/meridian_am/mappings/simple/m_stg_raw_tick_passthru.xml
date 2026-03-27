@@ -33,6 +33,13 @@
     <TABLEATTRIBUTE NAME="Sql Query" VALUE=""/>
     <TABLEATTRIBUTE NAME="Source Table Name" VALUE="RAW_TICK"/>
     <TABLEATTRIBUTE NAME="Number of Sorted Ports" VALUE="0"/>
+    <TABLEATTRIBUTE NAME="Source filetype" VALUE="Delimited"/>
+    <TABLEATTRIBUTE NAME="Source filename" VALUE="$$SRC_FILE_DIR/TICK_DATA_FEED.csv"/>
+    <TABLEATTRIBUTE NAME="Flat File Delimiter" VALUE="|"/>
+    <TABLEATTRIBUTE NAME="Row Delimiter" VALUE="
+"/>
+    <TABLEATTRIBUTE NAME="Header Row" VALUE="1"/>
+    <TABLEATTRIBUTE NAME="Strip Quotes" VALUE="YES"/>
   </TRANSFORMATION>
   <MAPPING DESCRIPTION="Raw tick data staging passthrough — no transform" ISVALID="YES" NAME="m_stg_raw_tick_passthru" OBJECTVERSION="1" VERSIONNUMBER="1">
   <CONNECTOR FROMFIELD="RAW_ID" FROMINSTANCE="RAW_TICK" FROMINSTANCETYPE="Source Definition" TOFIELD="RAW_ID" TOINSTANCE="SQ_RAW_TICK" TOINSTANCETYPE="Source Qualifier"/>
