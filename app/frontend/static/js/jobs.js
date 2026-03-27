@@ -534,7 +534,7 @@ function renderJobPanel(job) {
   if (state.parse_report) {
     const pr = state.parse_report;
     html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🔍</span> Step 1 — Parse Report<span class="card-chevron">▼</span></div>
+      <div class="card-title"><span class="icon">🔍</span> Step 1 — Parse Report</div>
       <div class="card-body">
       <div class="stats">
         <div class="stat"><div class="stat-val">${Object.values(pr.objects_found||{}).reduce((a,b)=>a+b,0)}</div><div class="stat-label">Objects Found</div></div>
@@ -555,7 +555,7 @@ function renderJobPanel(job) {
     const c = state.complexity;
     const tierClass = { 'Low':'tier-low','Medium':'tier-medium','High':'tier-high','Very High':'tier-veryhigh' }[c.tier] || '';
     html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📊</span> Step 2 — Complexity Classification<span class="card-chevron">▼</span></div>
+      <div class="card-title"><span class="icon">📊</span> Step 2 — Complexity Classification</div>
       <div class="card-body">
       <div style="font-size:28px;font-weight:800;margin-bottom:12px" class="${tierClass}">${c.tier}</div>
       <div style="font-size:13px;color:var(--muted);margin-bottom:10px">Criteria matched:</div>
@@ -1352,7 +1352,7 @@ function renderJobPanel(job) {
 
   const _jdc = document.getElementById('jobDetailContainer');
   const _sfc = document.getElementById('submitFormContainer');
-  if (_jdc) { _jdc.innerHTML = html; _jdc.style.display = 'flex'; }
+  if (_jdc) { _jdc.innerHTML = html; _jdc.style.display = 'flex'; _jdc.scrollTop = 0; }
   if (_sfc) _sfc.style.display = 'none';
   setMainView('dashboard');
 
