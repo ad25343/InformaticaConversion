@@ -187,6 +187,23 @@ CREATE TABLE IF NOT EXISTS pattern_generation_log (
 """
 
 
+async def _run_migrations(db, migration_list: list[str]) -> None:
+    """Run each SQL statement idempotently; swallow duplicate-column errors."""
+    for sql in migration_list:
+        try:
+            await db.execute(sql)
+        except Exception:
+            pass  # column/table already present
+
+
+async def _run_index_sql_block(db, idx_sql_block: str) -> None:
+    """Execute each non-empty statement in a semicolon-separated SQL index block."""
+    for _idx_sql in idx_sql_block.strip().split(";"):
+        _idx_sql = _idx_sql.strip()
+        if _idx_sql:
+            await db.execute(_idx_sql)
+
+
 async def init_db():
     async with _connect() as db:
         # ── v2.6.0: WAL mode — persistent on the file, set once here ─────
@@ -207,62 +224,26 @@ async def init_db():
 
         await db.execute(CREATE_TABLE)
         await db.execute(CREATE_BATCH_TABLE)
-        # Create indices (idempotent — IF NOT EXISTS)
-        for _idx_sql in CREATE_INDICES.strip().split(";"):
-            _idx_sql = _idx_sql.strip()
-            if _idx_sql:
-                await db.execute(_idx_sql)
-        # Apply v1.1 migrations idempotently — SQLite raises OperationalError
-        # "duplicate column name" if column already exists; we swallow that.
-        for sql in _V1_1_MIGRATIONS:
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass  # column already present
-        # Apply v2.0 migrations idempotently
-        for sql in _V2_0_MIGRATIONS:
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass  # column/table already present
-        # Apply v2.1 migrations idempotently
-        for sql in _V2_1_MIGRATIONS:
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass  # column already present
-        # v2.4.6 — audit trail table (CREATE IF NOT EXISTS, fully idempotent)
-        await db.execute(CREATE_AUDIT_TABLE)
-        for _idx_sql in CREATE_AUDIT_INDICES.strip().split(";"):
-            _idx_sql = _idx_sql.strip()
-            if _idx_sql:
-                await db.execute(_idx_sql)
-        # v2.6.0 — complexity_tier column + index
-        for sql in _V2_6_MIGRATIONS:
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass  # column already present
+        await _run_index_sql_block(db, CREATE_INDICES)           # idempotent — IF NOT EXISTS
+        await _run_migrations(db, _V1_1_MIGRATIONS)              # v1.1 — duplicate column safe
+        await _run_migrations(db, _V2_0_MIGRATIONS)              # v2.0
+        await _run_migrations(db, _V2_1_MIGRATIONS)              # v2.1
+        await db.execute(CREATE_AUDIT_TABLE)                     # v2.4.6
+        await _run_index_sql_block(db, CREATE_AUDIT_INDICES)
+        await _run_migrations(db, _V2_6_MIGRATIONS)              # v2.6.0
         await db.execute(CREATE_COMPLEXITY_INDEX)
-        # v2.18.0 — submitter fields
-        for sql in [
+        await _run_migrations(db, [                              # v2.18.0 — submitter fields
             "ALTER TABLE jobs ADD COLUMN submitter_name  TEXT",
             "ALTER TABLE jobs ADD COLUMN submitter_team  TEXT",
             "ALTER TABLE jobs ADD COLUMN submitter_notes TEXT",
-        ]:
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass  # column already present
-        # v2.19.0 — state_corrupted flag (detectable data loss sentinel)
-        try:
-            await db.execute(
-                "ALTER TABLE jobs ADD COLUMN state_corrupted INTEGER NOT NULL DEFAULT 0"
-            )
-        except Exception:
-            pass  # column already present
-        # Phase 3 — pattern_generation_log (greenfield authoring audit log)
-        await db.execute(CREATE_PATTERN_GENERATION_LOG)
+        ])
+        await _run_migrations(db, [                              # v2.19.0 — state_corrupted
+            "ALTER TABLE jobs ADD COLUMN state_corrupted INTEGER NOT NULL DEFAULT 0",
+        ])
+        await _run_migrations(db, [                              # v2.25.0 — rename status typo
+            "UPDATE jobs SET status='awaiting_security_review' WHERE status='awaiting_sec_review'",
+        ])
+        await db.execute(CREATE_PATTERN_GENERATION_LOG)          # Phase 3
         await db.commit()
 
 
@@ -347,6 +328,33 @@ async def get_session_files(job_id: str) -> Optional[dict]:
             }
 
 
+def _extract_complexity_tier(state_patch: dict) -> Optional[str]:
+    """Return complexity_tier from the patch, or None if not present."""
+    complexity = state_patch.get("complexity")
+    if isinstance(complexity, dict):
+        return complexity.get("tier")
+    return None
+
+
+async def _sql_update_job(db, job_id: str, status: str, step: int,
+                          encoded_state: str, now: str,
+                          tier: Optional[str], corrupted: bool) -> None:
+    """Execute the appropriate UPDATE statement based on whether tier is set."""
+    corrupted_flag = 1 if corrupted else 0
+    if tier:
+        await db.execute(
+            "UPDATE jobs SET status=?, current_step=?, state_json=?, "
+            "updated_at=?, complexity_tier=?, state_corrupted=? WHERE job_id=?",
+            (status, step, encoded_state, now, tier, corrupted_flag, job_id),
+        )
+    else:
+        await db.execute(
+            "UPDATE jobs SET status=?, current_step=?, state_json=?, "
+            "updated_at=?, state_corrupted=? WHERE job_id=?",
+            (status, step, encoded_state, now, corrupted_flag, job_id),
+        )
+
+
 async def update_job(job_id: str, status: str, step: int, state_patch: dict):
     """GAP #1 — Uses BEGIN IMMEDIATE to prevent concurrent write races.
 
@@ -359,10 +367,7 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
     contains a complexity dict, so listing jobs never needs to decompress state.
     """
     now = datetime.utcnow().isoformat()
-    # Extract complexity_tier if the patch carries it
-    _tier: Optional[str] = None
-    if "complexity" in state_patch and isinstance(state_patch["complexity"], dict):
-        _tier = state_patch["complexity"].get("tier")
+    _tier = _extract_complexity_tier(state_patch)
 
     async with _connect() as db:
         try:
@@ -381,20 +386,8 @@ async def update_job(job_id: str, status: str, step: int, state_patch: dict):
                 )
             current = dict(raw)   # plain dict; _CorruptedState is an empty dict subclass
             current.update(state_patch)
-            if _tier:
-                await db.execute(
-                    "UPDATE jobs SET status=?, current_step=?, state_json=?, "
-                    "updated_at=?, complexity_tier=?, state_corrupted=? WHERE job_id=?",
-                    (status, step, _encode_state(current), now, _tier,
-                     1 if _corrupted else 0, job_id),
-                )
-            else:
-                await db.execute(
-                    "UPDATE jobs SET status=?, current_step=?, state_json=?, "
-                    "updated_at=?, state_corrupted=? WHERE job_id=?",
-                    (status, step, _encode_state(current), now,
-                     1 if _corrupted else 0, job_id),
-                )
+            await _sql_update_job(db, job_id, status, step,
+                                  _encode_state(current), now, _tier, _corrupted)
             await db.execute("COMMIT")
         except Exception:
             try:
