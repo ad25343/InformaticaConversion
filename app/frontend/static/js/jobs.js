@@ -635,7 +635,18 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 3 — DOCUMENTATION ────────────────
+  // ── STEP 3a — ANALYST VIEW ────────────────
+  if (state.analyst_view_md) {
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3a — Analyst View
+        <span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div class="doc-content">${markdownToHtml(state.analyst_view_md)}</div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 3b — TECHNICAL DOCUMENTATION ────────────────
   if (state.documentation_md) {
     const truncBanner = state.doc_truncated
       ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,146,60,.12);border:1px solid var(--sev-high);border-radius:8px;font-size:12px;color:#fb923c">
@@ -645,7 +656,7 @@ function renderJobPanel(job) {
          </div>`
       : '';
     html += `<div class="card" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3 — Documentation
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3b — Technical Documentation
         ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
@@ -791,7 +802,7 @@ function renderJobPanel(job) {
             <option value="">— block job (no restart) —</option>
             <option value="1">Step 1 — Re-parse XML &amp; re-run all</option>
             <option value="2">Step 2 — Re-classify &amp; re-document</option>
-            <option value="3">Step 3 — Re-generate documentation only</option>
+            <option value="3">Step 3 — Re-generate analyst view &amp; documentation</option>
           </select>
           <button class="btn btn-danger" style="width:100%" onclick="submitSignoff('${job.job_id}', 'REJECTED', [])">Confirm Reject</button>
         </div>
