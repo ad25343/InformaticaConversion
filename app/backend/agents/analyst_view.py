@@ -1,20 +1,21 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-Analyst View Generator — PRD / Systems Requirements style document.
+Analyst View Generator — produces TWO outputs from a single Claude call:
 
-Uses a lightweight Claude call to produce an analyst-readable requirements
-document from the Pass 1 documentation output.  The goal is a document that
-analysts, testers, and developers can read without needing to parse raw
-transformation details.
+  1. Systems Requirements Document (Step 3a) — clean PRD-style description of
+     what the mapping does.  No ambiguity flags, no gap callouts.  Written for
+     analysts, testers, and developers who need to understand the mapping.
 
-Graph field names (from parser_agent.py):
-  source/target: "name", "db_type", "owner", "fields"
-  transformation: "name", "type", "ports", "expressions", "table_attribs"
+  2. Gaps & Review Findings (Step 3b) — documentation gaps, ambiguities,
+     missing metadata, and recommendations.  Separated so reviewers can assess
+     completeness independently.
+
+Both are separated by a delimiter in a single Claude response and split by
+the caller.  This keeps cost to one lightweight call (~10k tokens max).
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
@@ -25,24 +26,29 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.analyst_view")
 
 MODEL = _cfg.claude_model
-_ANALYST_MAX_TOKENS = 8_000  # keep it tight — this is a summary, not full docs
+_ANALYST_MAX_TOKENS = 10_000
+
+# Delimiter used to split the two sections in Claude's response
+SECTION_DELIMITER = "\n---SECTION_BREAK---\n"
 
 
-# ── Prompt ───────────────────────────────────────────────────────────────────
+# ── Prompts ──────────────────────────────────────────────────────────────────
 
-_ANALYST_SYSTEM = """You are a senior data analyst writing a Systems Requirements Document
-for an Informatica PowerCenter mapping that will be converted to modern code.
+_ANALYST_SYSTEM = """You are a senior data analyst writing documentation for an
+Informatica PowerCenter mapping that will be converted to modern code.
 
-Your audience: analysts, testers, QA leads, and developers who need to understand
-WHAT this mapping does — not HOW Informatica implements it.
+Your audience: analysts, testers, QA leads, and developers.
 
-Write in clear English prose with structured sections. Use tables only where they
-add clarity (e.g., field-level rules). Do NOT reproduce raw expressions verbatim —
-translate them into plain English business rules.
+Rules:
+- Write in clear English prose. Use tables only where they add clarity.
+- Translate raw expressions into plain English business rules.
+- Do NOT reproduce raw Informatica expressions verbatim.
+- Output ONLY the Markdown document — no preamble, no commentary outside the doc."""
 
-Output ONLY the Markdown document — no preamble, no commentary outside the doc."""
+_ANALYST_PROMPT = """Produce TWO documents for this Informatica mapping, separated by
+exactly this line on its own:
 
-_ANALYST_PROMPT = """Produce a Systems Requirements Document for this Informatica mapping.
+---SECTION_BREAK---
 
 ## Mapping Name
 {mapping_name}
@@ -53,47 +59,78 @@ _ANALYST_PROMPT = """Produce a Systems Requirements Document for this Informatic
 ## Full Technical Documentation (reference only — do NOT copy)
 {documentation_md}
 
-## Instructions
+─────────────────────────────────────────────────
 
-Write a PRD-style requirements document with these sections:
+## DOCUMENT 1: Systems Requirements (BEFORE the ---SECTION_BREAK--- line)
+
+Write a clean, confident description of what this mapping does.  NO ambiguity
+flags, NO ⚠️ warnings, NO gap callouts.  Where metadata is missing, describe
+the most likely intended behavior based on the mapping structure and naming
+conventions — state it as fact, not speculation.
+
+Sections:
 
 # {mapping_name} — Systems Requirements
 
 ## 1. Purpose & Business Context
-2-3 sentences: what does this mapping do in business terms? What data does it
-produce and why?
+2-3 sentences: what does this mapping do in business terms?
 
 ## 2. Source Systems
-For each source table: name, owner/schema, what data it provides, how many fields.
-If there is a Source Qualifier filter or custom SQL, explain in plain English what
-rows are selected and why.
+For each source table: name, owner/schema, what data it provides, field count.
+If there is a Source Qualifier filter or custom SQL, explain what rows are selected.
 
 ## 3. Target Systems
-For each target table: name, owner/schema, what data it receives, load strategy
-(insert/update/upsert/delete).
+For each target table: name, owner/schema, what data it receives, load strategy.
 
 ## 4. Data Flow & Transformation Rules
 Walk through the mapping logic in business terms:
-- How are sources joined? (join type and business meaning of the condition)
-- What lookups are performed and why? (reference table, what's being enriched)
-- What filters are applied and why? (business rule behind the filter)
-- What calculations / derivations are performed? (in plain English)
+- How are sources joined? (join type and business meaning)
+- What lookups are performed and why?
+- What filters are applied and why?
+- What calculations / derivations are performed?
 - What aggregations if any?
+- How is output routed to targets?
 
 ## 5. Key Business Rules
-Numbered list of the critical business rules this mapping enforces.
-Each rule: one plain English sentence.
+Numbered list of critical business rules.  One plain English sentence each.
 
 ## 6. Parameters & Runtime Dependencies
-What parameters affect behavior? What connections/credentials are needed?
-Any environment-specific values?
+What parameters affect behavior?  What connections are needed?
 
 ## 7. Testing Considerations
-What should a tester validate? Edge cases, boundary conditions, null handling,
-expected row counts, reconciliation points.
+What should a tester validate?  Key reconciliation points, edge cases.
 
-Keep the document concise — aim for 1-3 pages, not 10. Prioritize clarity over
-completeness. If something is ambiguous in the source data, say so explicitly.
+Keep it concise — 1-2 pages.
+
+─────────────────────────────────────────────────
+
+## DOCUMENT 2: Gaps & Review Findings (AFTER the ---SECTION_BREAK--- line)
+
+Now list everything that is ambiguous, missing, or needs review.  This is the
+critical feedback section for the review team.
+
+Sections:
+
+# {mapping_name} — Gaps & Review Findings
+
+## Documentation Gaps
+What metadata is missing from the source XML?  (e.g., no join conditions,
+no filter expressions, no target load type, empty expression fields)
+
+## Ambiguities
+Where is the intended behavior unclear even with the available metadata?
+What assumptions were made in the Systems Requirements above?
+
+## Data Quality Concerns
+Any fields with no upstream connectors?  Missing lookups?  Hardcoded values
+that should be parameterized?
+
+## Recommendations
+What should the analyst or developer confirm before conversion proceeds?
+Numbered action items.
+
+Keep this section factual and actionable — no filler.  If there are no gaps
+in a category, skip that category entirely.
 """
 
 
@@ -186,6 +223,36 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
                 if uj:
                     lines.append(f"- Join: {uj}")
 
+        elif "router" in ttype:
+            group_conds = []
+            for k, v in sorted(attribs.items()):
+                if "group filter condition" in k.lower() and v.strip():
+                    group_conds.append(f"  - {k}: {v.strip()}")
+            if group_conds:
+                lines.append(f"### Router: {tname}")
+                lines.extend(group_conds)
+
+    # Connectors summary — flag unmapped targets
+    connectors = []
+    for mapping in graph.get("mappings", []):
+        connectors.extend(mapping.get("connectors", []))
+    if targets and connectors:
+        target_names = {t.get("name", "").lower() for t in targets}
+        connected_targets: dict[str, set[str]] = {n: set() for n in target_names}
+        for c in connectors:
+            to_inst = c.get("to_instance", "").lower()
+            if to_inst in connected_targets:
+                connected_targets[to_inst].add(c.get("to_field", ""))
+        for tgt in targets:
+            tname = tgt.get("name", "").lower()
+            tgt_fields = {f.get("name", "") for f in tgt.get("fields", [])}
+            mapped = connected_targets.get(tname, set())
+            unmapped = tgt_fields - mapped
+            if unmapped:
+                lines.append(f"### Unmapped Target Fields: {tgt.get('name', '?')}")
+                for f in sorted(unmapped):
+                    lines.append(f"- {f} — no upstream connector")
+
     # Parameters
     unresolved = list(parse_report.unresolved_parameters)
     resolved = []
@@ -210,12 +277,13 @@ async def generate_analyst_view(
     parse_report: ParseReport,
     documentation_md: str,
     session_parse_report: Optional[SessionParseReport] = None,
-) -> str:
+) -> tuple[str, str]:
     """
-    Produce a PRD / Systems Requirements Document from the parsed graph
-    and the Pass 1 documentation.
+    Produce the Analyst View (Systems Requirements + Gaps) from the graph
+    and the technical documentation.
 
-    Uses a lightweight Claude call (max 8k tokens).
+    Returns (analyst_view_md, analyst_gaps_md) — two separate markdown docs.
+    Uses a single Claude call with a delimiter to split the output.
     """
     mapping_names = parse_report.mapping_names or ["(unknown)"]
     mapping_name = ", ".join(mapping_names)
@@ -236,7 +304,8 @@ async def generate_analyst_view(
     from .retry import claude_with_retry
 
     client = make_client()
-    log.info("analyst_view: generating PRD for %s — max_tokens=%d", mapping_name, _ANALYST_MAX_TOKENS)
+    log.info("analyst_view: generating PRD + gaps for %s — max_tokens=%d",
+             mapping_name, _ANALYST_MAX_TOKENS)
 
     message = await claude_with_retry(
         lambda: client.messages.create(
@@ -250,4 +319,24 @@ async def generate_analyst_view(
 
     text = message.content[0].text
     log.info("analyst_view: generated — %d chars", len(text))
-    return text
+
+    # Split on the delimiter
+    if SECTION_DELIMITER.strip() in text:
+        parts = text.split(SECTION_DELIMITER.strip(), 1)
+        analyst_md = parts[0].strip()
+        gaps_md = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        # Fallback: try common variations
+        for delimiter in ["---SECTION_BREAK---", "--- SECTION_BREAK ---", "—SECTION_BREAK—"]:
+            if delimiter in text:
+                parts = text.split(delimiter, 1)
+                analyst_md = parts[0].strip()
+                gaps_md = parts[1].strip() if len(parts) > 1 else ""
+                break
+        else:
+            # No delimiter found — put everything in 3a, leave 3b empty
+            log.warning("analyst_view: delimiter not found — all content goes to 3a")
+            analyst_md = text.strip()
+            gaps_md = ""
+
+    return analyst_md, gaps_md

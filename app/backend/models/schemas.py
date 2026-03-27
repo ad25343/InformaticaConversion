@@ -445,6 +445,7 @@ class ConversionJob(BaseModel):
     complexity:           Optional[ComplexityReport]    = None
     documentation_md:     Optional[str]                 = None
     analyst_view_md:      Optional[str]                 = None
+    analyst_gaps_md:      Optional[str]                 = None
     verification:         Optional[VerificationReport]  = None
     sign_off:             Optional[SignOffRecord]        = None
     stack_assignment:     Optional[StackAssignment]     = None

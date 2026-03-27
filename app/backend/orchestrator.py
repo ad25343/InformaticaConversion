@@ -100,6 +100,7 @@ class _PipelineCtx:
     graph: dict = field(default_factory=dict)
     documentation_md: str = ""
     analyst_view_md: str = ""
+    analyst_gaps_md: str = ""
     verification: Any = None
     manifest_report: Any = None
     manifest_xlsx_bytes: Optional[bytes] = None
@@ -682,16 +683,17 @@ async def _step_3_run_doc_agent(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]
     ctx._doc_truncated = doc_truncated
     ctx._doc_missing_sentinel = doc_missing_sentinel
 
-    # Generate analyst view (lightweight Claude call — PRD-style requirements doc)
+    # Generate analyst view + gaps (single Claude call, split by delimiter)
     try:
         from .agents.analyst_view import generate_analyst_view
-        ctx.analyst_view_md = await generate_analyst_view(
+        ctx.analyst_view_md, ctx.analyst_gaps_md = await generate_analyst_view(
             ctx.graph, ctx.parse_report, ctx.documentation_md,
             session_parse_report=ctx.session_parse_report,
         )
     except Exception as e:
         ctx.log.warning(f"Analyst view generation failed (non-blocking): {e}", step=3)
         ctx.analyst_view_md = ""
+        ctx.analyst_gaps_md = ""
 
 
 async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
@@ -708,7 +710,7 @@ async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
         ctx._doc_truncated = False
         ctx._doc_missing_sentinel = False
         yield await ctx.emit(3, JobStatus.DOCUMENTING, "Documentation skipped per org config",
-                             {"documentation_md": ctx.documentation_md, "analyst_view_md": "", "doc_truncated": False})
+                             {"documentation_md": ctx.documentation_md, "analyst_view_md": "", "analyst_gaps_md": "", "doc_truncated": False})
         return
 
     yield await ctx.emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
@@ -725,7 +727,7 @@ async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
 
     doc_truncated = getattr(ctx, "_doc_truncated", False)
     yield await ctx.emit(3, JobStatus.DOCUMENTING, _doc_complete_msg(doc_truncated),
-                         {"documentation_md": ctx.documentation_md, "analyst_view_md": ctx.analyst_view_md, "doc_truncated": doc_truncated})
+                         {"documentation_md": ctx.documentation_md, "analyst_view_md": ctx.analyst_view_md, "analyst_gaps_md": ctx.analyst_gaps_md, "doc_truncated": doc_truncated})
 
 
 def _inject_doc_truncation_flag(ctx: _PipelineCtx, doc_truncated: bool, doc_missing_sentinel: bool) -> None:
@@ -1484,6 +1486,7 @@ def _reconstruct_signoff_state(state: dict) -> dict:
         "complexity":          complexity,
         "documentation_md":    state.get("documentation_md", ""),
         "analyst_view_md":     state.get("analyst_view_md", ""),
+        "analyst_gaps_md":     state.get("analyst_gaps_md", ""),
         "graph":               state["graph"],
         "verification":        verification,
         "s2t_state":           state.get("s2t", {}),
@@ -1536,6 +1539,7 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         complexity=s["complexity"],
         documentation_md=s["documentation_md"],
         analyst_view_md=s.get("analyst_view_md", ""),
+        analyst_gaps_md=s.get("analyst_gaps_md", ""),
         graph=s["graph"],
         verification=s["verification"],
         s2t_state=s["s2t_state"],
@@ -1759,6 +1763,7 @@ def _reconstruct_security_review_state(state: dict) -> dict:
         "complexity":          ComplexityReport(**state["complexity"]),
         "documentation_md":    state.get("documentation_md", ""),
         "analyst_view_md":     state.get("analyst_view_md", ""),
+        "analyst_gaps_md":     state.get("analyst_gaps_md", ""),
         "graph":               state["graph"],
         "verification":        VerificationReport(**_v) if _v else None,
         "s2t_state":           state.get("s2t", {}),
@@ -1822,6 +1827,7 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         complexity=s["complexity"],
         documentation_md=s["documentation_md"],
         analyst_view_md=s.get("analyst_view_md", ""),
+        analyst_gaps_md=s.get("analyst_gaps_md", ""),
         graph=s["graph"],
         verification=s["verification"],
         s2t_state=s["s2t_state"],
@@ -1864,6 +1870,7 @@ def _reconstruct_checkpoint_state(state: dict) -> dict:
         **schemas,
         "documentation_md": s.get("documentation_md", ""),
         "analyst_view_md":  s.get("analyst_view_md", ""),
+        "analyst_gaps_md":  s.get("analyst_gaps_md", ""),
         "graph":            s.get("graph", {}),
         "s2t_state":        s.get("s2t", {}),
         "pipeline_mode":    s.get("pipeline_mode", "full"),
