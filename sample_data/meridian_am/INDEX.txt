@@ -16,39 +16,30 @@ SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
     Business: Portfolio master dimension load
  2.  m_dim_security_load
     Source: SECURITY_MASTER → Target: DIM_SECURITY
-    Pattern: SQ → EXP → Target
     Business: Security reference dimension
  3.  m_dim_account_load
     Source: CLIENT_ACCOUNT → Target: DIM_ACCOUNT
-    Pattern: SQ → EXP → Target
     Business: Client account dimension
  4.  m_dim_fund_load
     Source: FUND_MASTER → Target: DIM_FUND
-    Pattern: SQ → EXP → Target
     Business: Fund master dimension
  5.  m_dim_currency_load
     Source: CURRENCY_REF → Target: DIM_CURRENCY
-    Pattern: SQ → EXP → Target
     Business: Currency reference dimension
  6.  m_dim_date_load
     Source: DATE_DIM_STAGING → Target: DIM_DATE
-    Pattern: SQ → EXP → Target
     Business: Date dimension with fiscal calendar
  7.  m_dim_benchmark_load
     Source: BENCHMARK_REF → Target: DIM_BENCHMARK
-    Pattern: SQ → EXP → Target
     Business: Benchmark index dimension
  8.  m_dim_asset_class_load
     Source: ASSET_CLASS_REF → Target: DIM_ASSET_CLASS
-    Pattern: SQ → EXP → Target
     Business: Asset class reference
  9.  m_dim_exchange_load
     Source: EXCHANGE_REF → Target: DIM_EXCHANGE
-    Pattern: SQ → EXP → Target
     Business: Exchange/venue reference
 10.  m_dim_manager_load
     Source: PORTFOLIO_MANAGER → Target: DIM_MANAGER
-    Pattern: SQ → EXP → Target
     Business: Portfolio manager dimension
 11.  m_stg_trade_extract
     Source: OMS_TRADES → Target: STG_TRADE
@@ -56,19 +47,15 @@ SIMPLE MAPPINGS (15) — Single Source, Minimal Transformations
     Business: Trade staging extraction from OMS
 12.  m_stg_position_extract
     Source: CUSTODY_POSITIONS → Target: STG_POSITION
-    Pattern: SQ → FIL → EXP → Target
     Business: Position staging from custody system
 13.  m_ref_exchange_rates
     Source: FX_RATE_FEED → Target: REF_EXCHANGE_RATES
-    Pattern: SQ → EXP → Target
     Business: Daily FX rate reference load
 14.  m_ref_benchmark_returns
     Source: BENCHMARK_RETURN_FEED → Target: REF_BENCHMARK_RETURNS
-    Pattern: SQ → EXP → Target
     Business: Benchmark daily return reference
 15.  m_fct_cash_movements
     Source: CASH_LEDGER → Target: FCT_CASH_MOVEMENTS
-    Pattern: SQ → EXP → Target
     Business: Cash movement fact table load
 
 ================================================================================
@@ -225,21 +212,8 @@ GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
 
 
 ================================================================================
-GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
 ================================================================================
 
-  m_fct_position_incremental
-    Pattern: incremental_append  |  Tier: medium
-    Purpose: Incremental position feed — watermark on TRADE_DATE
 
-  m_fct_order_union_load
-    Pattern: union_consolidate  |  Tier: medium
-    Purpose: Union of equity + fixed-income + derivative orders
 
-  m_stg_raw_tick_passthru
-    Pattern: pass_through  |  Tier: simple
-    Purpose: Raw tick data staging passthrough — no transform
 
-  m_fct_portfolio_risk_route3
-    Pattern: filter_and_route  |  Tier: medium
-    Purpose: 3-way portfolio risk routing: LOW/WATCH/HIGH/BREACH

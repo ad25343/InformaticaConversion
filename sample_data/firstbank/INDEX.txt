@@ -19,32 +19,26 @@ SIMPLE MAPPINGS (17) — Single Source, Minimal Transformations
 2.  m_dim_branch_load
     Source: BRANCH → Target: DIM_BRANCH
     Fields: 12 (Branch reference dimension)
-    Pattern: SQ → EXP → Target
 
 3.  m_dim_product_load
     Source: PRODUCT → Target: DIM_PRODUCT
     Fields: 9 (Product reference dimension)
-    Pattern: SQ → EXP → Target
 
 4.  m_dim_date_load
     Source: DATE_STAGING → Target: DIM_DATE
     Fields: 11 (Date dimension with fiscal periods)
-    Pattern: SQ → EXP → Target
 
 5.  m_dim_currency_load
     Source: CURRENCY → Target: DIM_CURRENCY
     Fields: 6 (Currency reference)
-    Pattern: SQ → EXP → Target
 
 6.  m_dim_employee_load
     Source: EMPLOYEE → Target: DIM_EMPLOYEE
     Fields: 11 (Employee dimension)
-    Pattern: SQ → EXP → Target
 
 7.  m_dim_channel_load
     Source: CHANNEL → Target: DIM_CHANNEL
     Fields: 6 (Channel reference)
-    Pattern: SQ → EXP → Target
 
 8.  m_stg_customer_extract
     Source: CRM_CUSTOMERS → Target: STG_CUSTOMER
@@ -69,27 +63,22 @@ SIMPLE MAPPINGS (17) — Single Source, Minimal Transformations
 12. m_ref_fee_schedule
     Source: FEE_SCHEDULE → Target: REF_FEE_SCHEDULE
     Fields: 8 (Fee schedule reference)
-    Pattern: SQ → EXP → Target
 
 13. m_ref_country_codes
     Source: COUNTRY_REF → Target: REF_COUNTRY_CODES
     Fields: 6 (Country reference with sanctions)
-    Pattern: SQ → EXP → Target
 
 14. m_fct_atm_transactions_load
     Source: ATM_TRANSACTIONS → Target: FCT_ATM_TRANSACTIONS
     Fields: 9 (ATM transaction fact)
-    Pattern: SQ → EXP → Target
 
 15. m_ref_exchange_rates
     Source: FX_RATE_DAILY → Target: REF_EXCHANGE_RATES
     Fields: 6 (Daily FX reference)
-    Pattern: SQ → EXP → Target
 
 16. m_stg_customer_file_load
     Source: CUSTOMER_FILE_LOAD → Target: STG_CUSTOMER_FILE
     Fields: 8 (Customer flat-file bulk load passthru)
-    Pattern: SQ → EXP → Target
 
 ================================================================================
 MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
@@ -134,14 +123,12 @@ MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
     Sources: FEE_TRANSACTIONS
     Lookups: LKP_REF_FEE_SCHEDULE
     Targets: FCT_ACCOUNT_FEES
-    Pattern: SQ → LKP → EXP
     Business Logic: Flat vs percentage fee calculation
 
 22. m_fct_interest_accrual
     Sources: ACCOUNT_BALANCES
     Lookups: LKP_REF_INTEREST_RATES
     Targets: FCT_INTEREST_ACCRUAL
-    Pattern: SQ → LKP → EXP
     Business Logic: Daily interest accrual
 
 23. m_agg_monthly_customer_summary
@@ -151,7 +138,6 @@ MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
     Business Logic: SUM, COUNT, AVG, MAX aggregations
 
 24. m_agg_branch_daily_totals
-    Sources: FCT_DAILY_TRANSACTIONS
     Targets: AGG_BRANCH_DAILY_TOTALS
     Pattern: SQ → JNR → AGG
     Business Logic: Daily branch-level aggregations
@@ -167,7 +153,6 @@ MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
     Sources: WIRE_TRANSFERS
     Lookups: LKP_CORRESPONDENT_BANK
     Targets: FCT_WIRE_TRANSFERS
-    Pattern: SQ → LKP → EXP
     Business Logic: International flag, USD conversion
 
 27. m_fct_loan_origination
@@ -193,14 +178,12 @@ MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
     Sources: FX_TRANSACTIONS
     Lookups: LKP_REF_EXCHANGE_RATES
     Targets: FCT_FX_CONVERSIONS
-    Pattern: SQ → LKP → EXP
     Business Logic: Conversion amount, gain/loss
 
 31. m_fct_check_processing
     Sources: CHECK_DEPOSITS
     Lookups: LKP_ROUTING_NUMBERS
     Targets: FCT_CHECK_PROCESSING
-    Pattern: SQ → LKP → EXP
     Business Logic: Hold days, available date
 
 32. m_fct_direct_deposits
@@ -218,13 +201,10 @@ MEDIUM MAPPINGS (24) — Multi-source, Lookups, Aggregations, SCD2
 34. m_fct_statements
     Sources: STATEMENT_HEADERS, AGG_MONTHLY_CUSTOMER_SUMMARY
     Targets: FCT_STATEMENTS
-    Pattern: SQ(×2) → JNR → EXP
     Business Logic: Minimum payment due calculation
 
 35. m_agg_product_performance
-    Sources: FCT_DAILY_TRANSACTIONS
     Targets: AGG_PRODUCT_PERFORMANCE
-    Pattern: SQ → JNR → AGG
     Business Logic: Monthly product performance
 
 39. m_fct_txn_sk_seq
@@ -260,7 +240,6 @@ COMPLEX MAPPINGS (15) — Multi-source, Joiner, Router, Multiple Targets
     Sources: BORROWER_FINANCIALS, COLLATERAL_DATA, MARKET_DATA (×3)
     Lookups: LKP_INDUSTRY_RISK, LKP_PROPERTY_VALUATIONS
     Targets: FCT_CREDIT_RISK_RATING
-    Pattern: SQ(×3) → JNR → LKP(×2) → EXP → RTR
     Business Logic: PD, LGD, EAD, EXPECTED_LOSS; Risk rating
 
 40. m_dim_customer_hierarchy
@@ -512,21 +491,8 @@ GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
 
 
 ================================================================================
-GAP-FIX MAPPINGS (v2.16.1) — Coverage Gap Addressals
 ================================================================================
 
-  m_fct_transaction_delta
-    Pattern: incremental_append  |  Tier: medium
-    Purpose: Incremental transaction feed — watermark on UPDATED_AT
 
-  m_fct_channel_union_load
-    Pattern: union_consolidate  |  Tier: medium
-    Purpose: Union of online + branch + ATM channel transactions
 
-  m_stg_raw_event_passthru
-    Pattern: pass_through  |  Tier: simple
-    Purpose: Raw event staging passthrough — no transformation
 
-  m_fct_txn_risk_route3
-    Pattern: filter_and_route  |  Tier: medium
-    Purpose: 3-way transaction risk routing: LOW/MEDIUM/HIGH/OTHER
