@@ -40,15 +40,80 @@ document for an Informatica PowerCenter mapping being converted to modern code.
 Your audience: analysts, testers, QA leads, and developers who need to understand,
 test, and convert this mapping WITHOUT opening PowerCenter Designer.
 
+This document is the single source of truth for the mapping. It must be complete
+enough that:
+  1. An analyst can understand the mapping without opening Designer
+  2. A tester can write UAT test cases directly from it
+  3. A developer can convert it to Python/Spark without asking the ETL team
+  4. A business user can validate the classification/routing logic
+
 Formatting rules (STRICT):
-- Use Markdown tables for ALL field listings, source/target details, and test data.
+- Use Markdown tables for ALL field listings, joins, source/target details, and test data.
 - Use fenced code blocks (```) for EVERY Informatica expression — never inline them in prose.
 - Use `> ⚠ **Note:**` callout blocks for gaps, missing logic, or structural concerns.
 - Use `---` horizontal rules between major sections for visual separation.
-- Use ASCII pipeline diagrams in Section 4.1 to show the transformation chain.
-- Be HONEST about gaps: if a field has no expression, say "No expression found — passthrough" with ⚠ Gap status. Do NOT invent logic that doesn't exist in the metadata.
+- For Section 4.1 Pipeline Overview, use BOTH:
+  (a) A Mermaid flowchart (```mermaid graph LR```) for visual overview — solid arrows
+      for data flow, dashed arrows for bypass routes, label router branches with group names
+  (b) A step table for precise detail (step number, transform, type, input, output, field count)
+- Be HONEST about gaps: if a field has no expression, say "No expression found — passthrough"
+  with ⚠ Gap status. Do NOT invent logic that doesn't exist in the metadata.
 - Keep prose SHORT. Let tables, code blocks, and callouts do the heavy lifting.
-- Output ONLY the Markdown document — no preamble, no commentary outside the doc."""
+- Output ONLY the Markdown document — no preamble, no commentary outside the doc.
+
+Section structure (MANDATORY — follow this exact outline):
+
+  ## 1. Purpose & Business Context
+     2-3 sentences. What does this mapping do in business terms?
+
+  ## 2. Source Systems
+     One subsection per source table with a field table (Field | Type | Nullable | Description).
+     Flag unused sources with ⚠ Note callout.
+
+  ## 3. Target Systems
+     Each target: name, owner, field count, field table.
+     If field counts differ across targets, show a cross-target comparison table and explain why.
+
+  ## 4. Data Flow & Transformation Rules
+     ### 4.1 Pipeline Overview — Mermaid flowchart + step table
+     ### 4.2 Joins — ALL joins in ONE table:
+         | # | Transform | Join Type | Master | Detail | Condition | Business Meaning |
+     ### 4.3 Lookups — table if any, otherwise "No lookups"
+     ### 4.4 Filters — table if any, otherwise "No filters"
+     ### 4.5 Derivations — one #### subsection per derived field with:
+           - Fenced code block with verbatim Informatica expression
+           - 1-2 sentence plain English explanation
+           - What positive/negative/null values mean
+     ### 4.6 Aggregations — table if any, otherwise "No aggregations"
+     ### 4.7 Routing — Router group table:
+         | Group | Condition | Target | Records | Reachable? |
+         Note unreachable groups. Note ETL audit field bypass.
+     ### 4.8 Complete Field Mapping — ONE consolidated table across ALL targets:
+         | # | Source Table | Source Field | Transform Chain | Target Table | Target Field | Type | Expression | Status |
+         Every row = one field lineage path from source to target.
+         Status values: Direct, Derived, Derived (SQ), Derived (EXP), ⚠ Gap
+         For Derived fields: show verbatim expression in the Expression column.
+         For ⚠ Gap fields: write "No expression found — passthrough"
+
+  ## 5. Key Business Rules
+     Numbered list with formula notation where helpful.
+     Include reconciliation formula if applicable.
+
+  ## 6. Parameters & Runtime Dependencies
+     Parameter table (Parameter | Type | Default | Description).
+     Connection requirements. Upstream dependencies.
+
+  ## 7. Testing Considerations
+     ### 7.1 Reconciliation Points — table (# | Check | Validation)
+     ### 7.2 Test Data — table per derived field (Inputs | Expected | Explanation)
+           Use ACTUAL data types — integer fields get integer test values.
+     ### 7.3 Edge Cases — bullet list (nulls, zeros, negatives, boundaries)
+           Note unreachable Router groups.
+
+  ## 8. Structural Observations
+     Table (# | Observation | Detail | Severity).
+     Cover: field count differences, unused sources, disconnected lookups,
+     Router bypass, unreachable groups, passthrough fields missing logic."""
 
 _ANALYST_PROMPT = """Produce TWO documents for this Informatica mapping, separated by
 exactly this line on its own:
@@ -89,22 +154,29 @@ For EACH source table, write:
 
 One sentence describing what data it provides. Then a field table:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| FIELD_NAME | datatype(precision,scale) PK/NOT NULL | Brief description |
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| FIELD_NAME | datatype(precision,scale) | PK / NOT NULL / YES | Brief description |
 
 If there is a Source Qualifier filter or custom SQL, show it in a code block.
 If a source is declared but its fields are NOT used in any expression, flag it:
 > ⚠ **Note:** This source is declared and wired but no expressions reference its fields.
+> Confirm with the developer whether this is a placeholder or incomplete implementation.
 
 ---
 
 ## 3. Target Systems
 
-For each target, show name, owner, field count, field list.
-If targets have DIFFERENT field counts, show a comparison:
+For each target, show name, owner, field count, and a field table:
 
-> ⚠ **Note:** TARGET_A has N fields, TARGET_B has M fields — TARGET_B is missing: FIELD_X, FIELD_Y
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+
+If targets have DIFFERENT field counts, show a comparison table:
+
+| Field | TARGET_1 | TARGET_2 | TARGET_3 |
+|-------|----------|----------|----------|
+| FIELD_A | ✅ | ✅ | ❌ missing |
 
 Explain WHY the difference exists (different grain, exception table, etc.)
 If you don't know why, say so honestly.
@@ -115,22 +187,58 @@ If you don't know why, say so honestly.
 
 ### 4.1 Pipeline Overview
 
-Show an ASCII diagram of the transformation chain:
+First, show a Mermaid flowchart for visual overview:
+
+```mermaid
+graph LR
+    A[SOURCE_A] --> B[SQ_SOURCE_A]
+    C[SOURCE_B] --> D[SQ_SOURCE_B]
+    B --> E[JNR_NAME]
+    D --> E
+    E --> F[EXP_NAME]
+    F --> G[RTR_NAME]
+    G -->|Group1| H[TARGET_1]
+    G -->|Group2| I[TARGET_2]
+    F -.->|ETL audit direct| H
+    F -.->|ETL audit direct| I
 ```
-SOURCE_A ──→ SQ ──→ JNR ──→ EXP ──→ RTR ──→ TARGET_1
-SOURCE_B ──→ SQ ──↗              ↘──→ TARGET_2
-                          ETL audit: EXP → both targets (direct, bypasses RTR)
-```
 
-### 4.2 Join
+Use solid arrows (-->) for data flow, dashed arrows (-.->) for bypass routes.
+Label router branches with group names.
 
-| Transform | Type | Condition |
-|-----------|------|-----------|
-| JNR_NAME | INNER JOIN | `TABLE_A.KEY = TABLE_B.KEY` |
+Then, show a step table for precise detail:
 
-One sentence explaining the business meaning.
+| Step | Transform | Type | Input From | Output To | Fields |
+|------|-----------|------|------------|-----------|--------|
+| 1 | SOURCE_A | Source | — | SQ_SOURCE_A | N |
+| 2 | SQ_SOURCE_A | Source Qualifier | Step 1 | JNR_NAME | N |
 
-### 4.3 Derivations
+### 4.2 Joins
+
+Show ALL joins in ONE table:
+
+| # | Transform | Join Type | Master | Detail | Condition | Business Meaning |
+|---|-----------|-----------|--------|--------|-----------|------------------|
+| 1 | JNR_NAME | INNER JOIN | SQ_SOURCE_B | SQ_SOURCE_A | `TABLE_A.KEY = TABLE_B.KEY` | One sentence |
+
+If no joins exist, write: "No joins — single source mapping."
+
+### 4.3 Lookups
+
+| # | Transform | Lookup Table | Lookup Condition | Return Fields | Cache |
+|---|-----------|-------------|-----------------|---------------|-------|
+| 1 | LKP_NAME | TABLE_NAME | `TABLE.KEY = INPUT_KEY` | FIELD_A, FIELD_B | Persistent, 5MB |
+
+If no lookups, write: "No lookups performed."
+
+### 4.4 Filters
+
+| # | Transform | Filter Condition | Purpose |
+|---|-----------|-----------------|---------|
+
+If no filters, write: "No filters — all source records are processed."
+
+### 4.5 Derivations
 
 For EVERY derived field, use this exact format:
 
@@ -140,28 +248,39 @@ For EVERY derived field, use this exact format:
 INFORMATICA_EXPRESSION_VERBATIM
 ```
 
-One sentence plain English explanation. State what positive/negative values mean.
+One sentence plain English explanation. State what positive/negative/null values mean.
 
-### 4.4 Routing
+### 4.6 Aggregations
 
-| Router Group | Condition | Target | Description |
-|-------------|-----------|--------|-------------|
+| # | Transform | Group By | Aggregate Fields | Function |
+|---|-----------|----------|-----------------|----------|
+| 1 | AGG_NAME | FIELD_A, FIELD_B | TOTAL_X | SUM(X) |
 
-Note if any group appears unreachable given upstream expression logic.
+If no aggregations, write: "No aggregations — each source record produces one output record."
+
+### 4.7 Routing
+
+| Group | Condition | Target | Records | Reachable? |
+|-------|-----------|--------|---------|------------|
+| GROUP_1 | `FIELD = 'VALUE'` | TARGET_1 | Description | Yes / No |
+| DEFAULT | *(none — catch-all)* | TARGET_N | Unmatched | Yes / ⚠ Unreachable |
+
 Note if ETL audit fields bypass the Router (direct Expression→Target).
+If no routing, write: "No routing — all records flow to a single target."
 
-### 4.5 Field Mapping — TARGET_1
+### 4.8 Complete Field Mapping
 
-| Target Field | Source | Type | Expression | Status |
-|---|---|---|---|---|
-| FIELD_A | SOURCE.FIELD_A | number(10) | — | Direct |
-| FIELD_B | *Computed* | decimal(18,2) | `ROUND(X * Y, 2)` | Derived |
-| FIELD_C | — | decimal(18,6) | **No expression found** | ⚠ Gap |
+ONE consolidated table showing every field lineage path across ALL targets:
 
-Repeat for each target table (4.6, 4.7, etc.)
+| # | Source Table | Source Field | Transform Chain | Target Table | Target Field | Type | Expression | Status |
+|---|-------------|-------------|-----------------|-------------|-------------|------|------------|--------|
+| 1 | SOURCE_A | FIELD_X | SQ → JNR → EXP → RTR | TARGET_1 | FIELD_X | number(10) | — | Direct |
+| 2 | *Computed* | — | EXP → RTR | TARGET_1 | DERIVED_Y | decimal(18,2) | `ROUND(A * B, 2)` | Derived |
+| 3 | — | — | — | TARGET_2 | MISSING_Z | decimal(18,6) | **No expression found** | ⚠ Gap |
 
-IMPORTANT: If a field has NO expression in the metadata, write "**No expression found — passthrough**"
-with status "⚠ Gap". Do NOT invent what the expression might be.
+Status values: Direct, Derived, Derived (SQ), Derived (EXP), ⚠ Gap
+For Derived fields: show the verbatim Informatica expression in the Expression column.
+For ⚠ Gap fields: write "**No expression found — passthrough**". Do NOT invent logic.
 
 ---
 
@@ -180,7 +299,11 @@ e.g., "Total Active Return ≈ Σ(Allocation) + Σ(Selection) + Σ(Interaction)"
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 
-Then list connection requirements and upstream dependencies.
+**Connections required:**
+- bullet list of source and target connections
+
+**Upstream dependencies:**
+- bullet list of tables/processes that must complete before this mapping runs
 
 ---
 
@@ -188,8 +311,9 @@ Then list connection requirements and upstream dependencies.
 
 ### 7.1 Reconciliation Points
 
-| Check | Validation |
-|-------|-----------|
+| # | Check | Validation |
+|---|-------|-----------|
+| 1 | Source-to-target row count | SUM(all targets) = source count |
 
 ### 7.2 Test Data
 
@@ -203,14 +327,15 @@ Use the ACTUAL data types — if a field is integer, test with integers only.
 ### 7.3 Edge Cases
 
 Bullet list of edge cases (nulls, zeros, negatives, boundary values).
-Note any Router groups that are unreachable.
+Note any Router groups that are unreachable and explain why.
 
 ---
 
 ## 8. Structural Observations
 
-| Observation | Detail |
-|-------------|--------|
+| # | Observation | Detail | Severity |
+|---|-------------|--------|----------|
+| 1 | Description | Explanation | High / Medium / Low |
 
 Cover: differing target field counts, unused sources, disconnected lookups,
 Router bypass patterns, unreachable groups, passthrough fields that may be missing logic.
