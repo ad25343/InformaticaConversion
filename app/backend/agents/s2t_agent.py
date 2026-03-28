@@ -337,10 +337,24 @@ def _found_source_result(from_inst: str, from_field: str, chain: list, logic: li
 
 
 def _find_expr_for_port(trans: dict, port: str) -> str:
-    """Return the expression text for a named port, or empty string if not found."""
+    """Return the expression text for a named port, or empty string if not found.
+
+    Handles Router group-qualified names (e.g., FLAGGED_FRAUD_SCORE → FRAUD_SCORE)
+    by also trying the port name with the group prefix stripped.
+    """
     for expr in trans.get("expressions", []):
         if expr["port"] == port:
             return expr["expression"]
+    # Router group-qualified names: strip prefix and retry
+    # e.g., FLAGGED_FRAUD_SCORE → try FRAUD_SCORE, CLEARED_TRANSACTION_ID → TRANSACTION_ID
+    if "_" in port:
+        # Try progressively stripping prefixes (handle multi-word group names)
+        parts = port.split("_")
+        for i in range(1, len(parts)):
+            stripped = "_".join(parts[i:])
+            for expr in trans.get("expressions", []):
+                if expr["port"] == stripped:
+                    return expr["expression"]
     return ""
 
 
@@ -530,6 +544,27 @@ def _trace_to_source(
     for _ in range(max_depth):
         key = (current_inst, current_field)
         if key not in backward:
+            # Router group-qualified ports: strip prefix to find the INPUT port
+            # e.g., (RTR_X, FLAGGED_FRAUD_SCORE) not found → try (RTR_X, FRAUD_SCORE)
+            resolved = False
+            if "_" in current_field:
+                trans = get_trans(current_inst)
+                ttype = trans.get("type", "") if trans else ""
+                if ttype == "Router":
+                    parts = current_field.split("_")
+                    for i in range(1, len(parts)):
+                        stripped = "_".join(parts[i:])
+                        alt_key = (current_inst, stripped)
+                        if alt_key in backward:
+                            # Collect the Router group-qualified expression if any
+                            if trans:
+                                _collect_port_logic(trans, current_inst, current_field, logic)
+                            current_field = stripped
+                            resolved = True
+                            break
+            if resolved:
+                continue
+
             result, new_field = _handle_dead_end(
                 current_inst, current_field, hops, backward, chain, logic, notes, status, get_trans
             )
