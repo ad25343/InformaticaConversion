@@ -34,16 +34,20 @@ SECTION_DELIMITER = "\n---SECTION_BREAK---\n"
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
-_ANALYST_SYSTEM = """You are a senior data analyst writing documentation for an
-Informatica PowerCenter mapping that will be converted to modern code.
+_ANALYST_SYSTEM = """You are a senior data analyst writing a structured requirements
+document for an Informatica PowerCenter mapping being converted to modern code.
 
-Your audience: analysts, testers, QA leads, and developers.
+Your audience: analysts, testers, QA leads, and developers who need to understand,
+test, and convert this mapping WITHOUT opening PowerCenter Designer.
 
-Rules:
-- Write in clear English prose. Use tables where they add clarity — especially for field mappings.
-- For every derived/computed field, show the verbatim Informatica expression in a code block, THEN explain it in plain English.
-- Always include a Field Mapping Table in Section 4.
-- When suggesting test boundary values, account for the field's actual data type and precision — do not suggest decimal test values for integer fields.
+Formatting rules (STRICT):
+- Use Markdown tables for ALL field listings, source/target details, and test data.
+- Use fenced code blocks (```) for EVERY Informatica expression — never inline them in prose.
+- Use `> ⚠ **Note:**` callout blocks for gaps, missing logic, or structural concerns.
+- Use `---` horizontal rules between major sections for visual separation.
+- Use ASCII pipeline diagrams in Section 4.1 to show the transformation chain.
+- Be HONEST about gaps: if a field has no expression, say "No expression found — passthrough" with ⚠ Gap status. Do NOT invent logic that doesn't exist in the metadata.
+- Keep prose SHORT. Let tables, code blocks, and callouts do the heavy lifting.
 - Output ONLY the Markdown document — no preamble, no commentary outside the doc."""
 
 _ANALYST_PROMPT = """Produce TWO documents for this Informatica mapping, separated by
@@ -64,100 +68,175 @@ exactly this line on its own:
 
 ## DOCUMENT 1: Systems Requirements (BEFORE the ---SECTION_BREAK--- line)
 
-Write a clean, confident description of what this mapping does.  NO ambiguity
-flags, NO ⚠️ warnings, NO gap callouts.  Where metadata is missing, describe
-the most likely intended behavior based on the mapping structure and naming
-conventions — state it as fact, not speculation.
-
-Sections:
+Follow this EXACT structure and formatting. Use tables everywhere. Be honest
+about gaps — if an expression is missing, say so with ⚠ Gap status.
 
 # {mapping_name} — Systems Requirements
 
+---
+
 ## 1. Purpose & Business Context
+
 2-3 sentences: what does this mapping do in business terms?
 
+---
+
 ## 2. Source Systems
-For each source table: name, owner/schema, what data it provides.
-List key fields with data types and precision (e.g., RISK_SCORE decimal(5,0), AMOUNT decimal(18,2)).
-If there is a Source Qualifier filter or custom SQL, explain what rows are selected.
+
+For EACH source table, write:
+
+### SOURCE_TABLE_NAME (owner, database)
+
+One sentence describing what data it provides. Then a field table:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| FIELD_NAME | datatype(precision,scale) PK/NOT NULL | Brief description |
+
+If there is a Source Qualifier filter or custom SQL, show it in a code block.
+If a source is declared but its fields are NOT used in any expression, flag it:
+> ⚠ **Note:** This source is declared and wired but no expressions reference its fields.
+
+---
 
 ## 3. Target Systems
-For each target table: name, owner/schema, what data it receives, field count, load strategy.
-Note if targets have different field counts and explain why.
+
+For each target, show name, owner, field count, field list.
+If targets have DIFFERENT field counts, show a comparison:
+
+> ⚠ **Note:** TARGET_A has N fields, TARGET_B has M fields — TARGET_B is missing: FIELD_X, FIELD_Y
+
+Explain WHY the difference exists (different grain, exception table, etc.)
+If you don't know why, say so honestly.
+
+---
 
 ## 4. Data Flow & Transformation Rules
-Walk through the mapping logic in business terms:
-- How are sources joined? (join type and business meaning)
-- What lookups are performed and why?
-- What filters are applied and why?
-- What calculations / derivations are performed?
-- What aggregations if any?
-- How is output routed to targets?
 
-**Include a Field Mapping Table** showing every target field's lineage:
+### 4.1 Pipeline Overview
 
-| Target Field | Source Field | Data Type | Expression / Derivation | Status |
+Show an ASCII diagram of the transformation chain:
+```
+SOURCE_A ──→ SQ ──→ JNR ──→ EXP ──→ RTR ──→ TARGET_1
+SOURCE_B ──→ SQ ──↗              ↘──→ TARGET_2
+                          ETL audit: EXP → both targets (direct, bypasses RTR)
+```
+
+### 4.2 Join
+
+| Transform | Type | Condition |
+|-----------|------|-----------|
+| JNR_NAME | INNER JOIN | `TABLE_A.KEY = TABLE_B.KEY` |
+
+One sentence explaining the business meaning.
+
+### 4.3 Derivations
+
+For EVERY derived field, use this exact format:
+
+#### FIELD_NAME
+
+```
+INFORMATICA_EXPRESSION_VERBATIM
+```
+
+One sentence plain English explanation. State what positive/negative values mean.
+
+### 4.4 Routing
+
+| Router Group | Condition | Target | Description |
+|-------------|-----------|--------|-------------|
+
+Note if any group appears unreachable given upstream expression logic.
+Note if ETL audit fields bypass the Router (direct Expression→Target).
+
+### 4.5 Field Mapping — TARGET_1
+
+| Target Field | Source | Type | Expression | Status |
 |---|---|---|---|---|
+| FIELD_A | SOURCE.FIELD_A | number(10) | — | Direct |
+| FIELD_B | *Computed* | decimal(18,2) | `ROUND(X * Y, 2)` | Derived |
+| FIELD_C | — | decimal(18,6) | **No expression found** | ⚠ Gap |
 
-For every derived field, show the **verbatim Informatica expression** in a code block:
-```
-IIF(RISK_SCORE >= 90, 'CRITICAL', IIF(RISK_SCORE >= 60, 'HIGH', 'LOW'))
-```
-Then explain it in plain English.
+Repeat for each target table (4.6, 4.7, etc.)
 
-Note which fields bypass intermediate transformations (e.g., ETL audit fields
-routing direct from Expression to Target, not through the Router).
+IMPORTANT: If a field has NO expression in the metadata, write "**No expression found — passthrough**"
+with status "⚠ Gap". Do NOT invent what the expression might be.
+
+---
 
 ## 5. Key Business Rules
-Numbered list of critical business rules.  One plain English sentence each.
+
+Numbered list. One sentence each. Include the formula notation where helpful:
+e.g., "Allocation Effect = (Wp − Wb) × Rb"
+
+Include a reconciliation formula if applicable:
+e.g., "Total Active Return ≈ Σ(Allocation) + Σ(Selection) + Σ(Interaction)"
+
+---
 
 ## 6. Parameters & Runtime Dependencies
-What parameters affect behavior?  What connections are needed?
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+
+Then list connection requirements and upstream dependencies.
+
+---
 
 ## 7. Testing Considerations
-What should a tester validate?  Key reconciliation points, edge cases.
-Account for actual field data types when suggesting boundary test values.
-For example, if RISK_SCORE is decimal(5,0), test with integer values only (59, 60, 89, 90), not decimals.
-Note any Router groups that appear unreachable given the upstream expression logic.
+
+### 7.1 Reconciliation Points
+
+| Check | Validation |
+|-------|-----------|
+
+### 7.2 Test Data
+
+For each derived field, provide 3 test rows with expected results:
+
+| Input_1 | Input_2 | Expected | Explanation |
+|---------|---------|----------|-------------|
+
+Use the ACTUAL data types — if a field is integer, test with integers only.
+
+### 7.3 Edge Cases
+
+Bullet list of edge cases (nulls, zeros, negatives, boundary values).
+Note any Router groups that are unreachable.
+
+---
 
 ## 8. Structural Observations
-Flag any discrepancies found in the mapping structure:
-- Target tables with different field counts (and which fields differ)
-- Router groups that may be unreachable based on upstream expressions
-- Target fields with no inbound connectors
-- Connectors that bypass intermediate transformations (e.g., direct Expression→Target)
 
-Keep it concise — 2-3 pages.
+| Observation | Detail |
+|-------------|--------|
+
+Cover: differing target field counts, unused sources, disconnected lookups,
+Router bypass patterns, unreachable groups, passthrough fields that may be missing logic.
 
 ─────────────────────────────────────────────────
 
 ## DOCUMENT 2: Gaps & Review Findings (AFTER the ---SECTION_BREAK--- line)
 
-Now list everything that is ambiguous, missing, or needs review.  This is the
-critical feedback section for the review team.
-
-Sections:
+List everything ambiguous, missing, or needing review. Be factual and specific.
 
 # {mapping_name} — Gaps & Review Findings
 
 ## Documentation Gaps
-What metadata is missing from the source XML?  (e.g., no join conditions,
-no filter expressions, no target load type, empty expression fields)
+What metadata is missing? (empty expressions, no join conditions, no load type)
 
 ## Ambiguities
-Where is the intended behavior unclear even with the available metadata?
-What assumptions were made in the Systems Requirements above?
+Where is behavior unclear? What assumptions were made in Document 1?
 
 ## Data Quality Concerns
-Any fields with no upstream connectors?  Missing lookups?  Hardcoded values
-that should be parameterized?
+Fields with no upstream connectors? Hardcoded values that should be parameterized?
+Sources wired but unused? Lookups declared but not connected?
 
 ## Recommendations
-What should the analyst or developer confirm before conversion proceeds?
-Numbered action items.
+Numbered action items the analyst/developer must confirm before conversion.
 
-Keep this section factual and actionable — no filler.  If there are no gaps
-in a category, skip that category entirely.
+Skip any section that has no findings.
 """
 
 
