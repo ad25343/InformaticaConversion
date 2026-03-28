@@ -1,51 +1,80 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
-<POWERMART CREATION_DATE="10/03/2026 09:00:00" REPOSITORY_VERSION="112">
-<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Microsoft SQL Server" NAME="NEXUS_SCM_DWH" VERSION="112">
-<FOLDER DESCRIPTION="Nexus Manufacturing Corp — Supply Chain &amp; Inventory DWH" GROUP="" NAME="Nexus_SCM" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
+<POWERMART CREATION_DATE="09/03/2026 12:00:00" REPOSITORY_VERSION="112">
+<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Oracle" NAME="NEXUS_DWH" VERSION="112">
+<FOLDER DESCRIPTION="Nexus SCM — Supply Chain DWH" GROUP="" NAME="Nexus_SCM" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
   <CONFIG DESCRIPTION="" ISDEFAULT="NO" NAME="default_session_config" VERSIONNUMBER="1">
-    <ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
     <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
-    <ATTRIBUTE NAME="Commit Type" VALUE="Source"/>
+    <ATTRIBUTE NAME="Commit Type" VALUE="Target"/>
     <ATTRIBUTE NAME="Rollback Incomplete Target Rows" VALUE="YES"/>
   </CONFIG>
-  <TASK DESCRIPTION="Session for m_fct_supplier_risk" ISVALID="YES" NAME="s_m_fct_supplier_risk" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
-    <ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_supplier_risk"/>
-    <ATTRIBUTE NAME="Enable Test Load" VALUE="NO"/>
-    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_supplier_risk.log"/>
-      <ATTRIBUTE NAME="$Source connection value" VALUE="NEXUS_DWH_SRC"/>
+  <TASK DESCRIPTION="Session 1: m_dim_supplier_load" ISVALID="YES" NAME="s_m_dim_supplier_load" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Mapping Name" VALUE="m_dim_supplier_load"/>
+    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_dim_supplier_load.log"/>
+    <ATTRIBUTE NAME="$Source connection value" VALUE="NEXUS_DWH_SRC"/>
     <ATTRIBUTE NAME="$Target connection value" VALUE="NEXUS_DWH_TGT"/>
     <ATTRIBUTE NAME="DTM buffer size" VALUE="Auto"/>
-    <ATTRIBUTE NAME="Collect performance data" VALUE="YES"/>
-    <ATTRIBUTE NAME="Parameter Filename" VALUE="$$PMSourceFileDir/param_nexus_scm.prm"/>
-    <ATTRIBUTE NAME="Target load type" VALUE="Bulk"/>
-    <ATTRIBUTE NAME="Number of Partitions" VALUE="4"/>
+    <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Target load type" VALUE="Normal"/>
     <ATTRIBUTE NAME="Recovery Strategy" VALUE="Resume from the last checkpoint"/>
+    <ATTRIBUTE NAME="Parameter Filename" VALUE="$$PMSourceFileDir/param_nexus_scm.prm"/>
   </TASK>
-    <TASK DESCRIPTION="Pre-session staging cleanup" ISREUSABLE="NO" NAME="CMD_PRE_SESSION" REUSABLE="NO" TYPE="Command" VERSIONNUMBER="1">
+  <TASK DESCRIPTION="Session 2: m_fct_supplier_risk" ISVALID="YES" NAME="s_m_fct_supplier_risk" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_supplier_risk"/>
+    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_supplier_risk.log"/>
+    <ATTRIBUTE NAME="$Source connection value" VALUE="NEXUS_DWH_SRC"/>
+    <ATTRIBUTE NAME="$Target connection value" VALUE="NEXUS_DWH_TGT"/>
+    <ATTRIBUTE NAME="DTM buffer size" VALUE="Auto"/>
+    <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Target load type" VALUE="Normal"/>
+    <ATTRIBUTE NAME="Recovery Strategy" VALUE="Resume from the last checkpoint"/>
+    <ATTRIBUTE NAME="Parameter Filename" VALUE="$$PMSourceFileDir/param_nexus_scm.prm"/>
+  </TASK>
+  <TASK DESCRIPTION="Session 3: m_fct_abc_xyz_analysis" ISVALID="YES" NAME="s_m_fct_abc_xyz_analysis" REUSABLE="NO" TYPE="Session" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Mapping Name" VALUE="m_fct_abc_xyz_analysis"/>
+    <ATTRIBUTE NAME="Session Log File" VALUE="s_m_fct_abc_xyz_analysis.log"/>
+    <ATTRIBUTE NAME="$Source connection value" VALUE="NEXUS_DWH_SRC"/>
+    <ATTRIBUTE NAME="$Target connection value" VALUE="NEXUS_DWH_TGT"/>
+    <ATTRIBUTE NAME="DTM buffer size" VALUE="Auto"/>
+    <ATTRIBUTE NAME="Commit Interval" VALUE="10000"/>
+    <ATTRIBUTE NAME="Target load type" VALUE="Bulk"/>
+    <ATTRIBUTE NAME="Recovery Strategy" VALUE="Resume from the last checkpoint"/>
+    <ATTRIBUTE NAME="Parameter Filename" VALUE="$$PMSourceFileDir/param_nexus_scm.prm"/>
+  </TASK>
+  <TASK DESCRIPTION="Pre-session staging cleanup" ISREUSABLE="NO" NAME="CMD_PRE_SESSION" REUSABLE="NO" TYPE="Command" VERSIONNUMBER="1">
     <ATTRIBUTE NAME="command" VALUE="sqlplus $$DB_USER/$$DB_PASS@NEXUS_DWH @$$SQL_DIR/truncate_staging.sql"/>
   </TASK>
   <TASK DESCRIPTION="Failure notification" ISREUSABLE="NO" NAME="EMAIL_ON_FAILURE" REUSABLE="NO" TYPE="Email" VERSIONNUMBER="1">
     <ATTRIBUTE NAME="email_address" VALUE="$$DL_ETL_SUPPORT"/>
-    <ATTRIBUTE NAME="email_subject" VALUE="ETL FAILURE: wf_m_fct_supplier_risk"/>
-    <ATTRIBUTE NAME="email_text" VALUE="Workflow wf_m_fct_supplier_risk failed. Check session log."/>
+    <ATTRIBUTE NAME="email_subject" VALUE="ETL FAILURE: wf_m_fct_supplier_risk - Supplier pipeline: dim → risk → classification"/>
+    <ATTRIBUTE NAME="email_text" VALUE="Multi-session workflow wf_m_fct_supplier_risk failed at %e. Pipeline: m_dim_supplier_load → m_fct_supplier_risk → m_fct_abc_xyz_analysis"/>
   </TASK>
   <TASK DESCRIPTION="Success notification" ISREUSABLE="NO" NAME="EMAIL_ON_SUCCESS" REUSABLE="NO" TYPE="Email" VERSIONNUMBER="1">
     <ATTRIBUTE NAME="email_address" VALUE="$$DL_ETL_OPS"/>
-    <ATTRIBUTE NAME="email_subject" VALUE="ETL SUCCESS: wf_m_fct_supplier_risk"/>
-    <ATTRIBUTE NAME="email_text" VALUE="Workflow wf_m_fct_supplier_risk completed successfully."/>
+    <ATTRIBUTE NAME="email_subject" VALUE="ETL SUCCESS: wf_m_fct_supplier_risk - Supplier pipeline: dim → risk → classification"/>
+    <ATTRIBUTE NAME="email_text" VALUE="Pipeline completed: m_dim_supplier_load → m_fct_supplier_risk → m_fct_abc_xyz_analysis. All 3 sessions succeeded."/>
   </TASK>
-  <WORKFLOW DESCRIPTION="Workflow for m_fct_supplier_risk" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_supplier_risk" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
-    <TASKINSTANCE DESCRIPTION="" ISOVERRIDABLE="NO" NAME="s_m_fct_supplier_risk" TASKTYPENAME="Session" TASKNAME="s_m_fct_supplier_risk"/>
-  
+  <TASK DESCRIPTION="Decide whether to run aggregation based on row count" ISREUSABLE="NO" NAME="DECISION_ROW_CHECK" REUSABLE="NO" TYPE="Decision" VERSIONNUMBER="1">
+    <ATTRIBUTE NAME="Decision Name" VALUE="Check if rows were loaded"/>
+    <ATTRIBUTE NAME="Condition" VALUE="$s_m_dim_supplier_load.SrcSuccessRows &gt; 0"/>
+  </TASK>
+  <WORKFLOW DESCRIPTION="Supplier pipeline: dim → risk → classification" ISENABLED="YES" ISRUNNABLEINDEPENDENTLY="YES" ISSERVICE="NO" ISSESSIONBASEDREPO="YES" ISVALID="YES" NAME="wf_m_fct_supplier_risk" REUSABLE="NO" SCHEDULERTYPE="0" VERSIONNUMBER="1">
     <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="CMD_PRE_SESSION" REUSABLE="NO" TASKNAME="CMD_PRE_SESSION" TASKTYPE="Command"/>
     <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="EMAIL_ON_FAILURE" REUSABLE="NO" TASKNAME="EMAIL_ON_FAILURE" TASKTYPE="Email"/>
     <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="EMAIL_ON_SUCCESS" REUSABLE="NO" TASKNAME="EMAIL_ON_SUCCESS" TASKTYPE="Email"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="s_m_dim_supplier_load" REUSABLE="NO" TASKNAME="s_m_dim_supplier_load" TASKTYPE="Session"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="s_m_fct_supplier_risk" REUSABLE="NO" TASKNAME="s_m_fct_supplier_risk" TASKTYPE="Session"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="s_m_fct_abc_xyz_analysis" REUSABLE="NO" TASKNAME="s_m_fct_abc_xyz_analysis" TASKTYPE="Session"/>
+    <TASKINSTANCE DESCRIPTION="" ISENABLED="YES" NAME="DECISION_ROW_CHECK" REUSABLE="NO" TASKNAME="DECISION_ROW_CHECK" TASKTYPE="Decision"/>
     <LINK CONDITION="" FROMTASK="Start" TOTASK="CMD_PRE_SESSION"/>
-    <LINK CONDITION="$CMD_PRE_SESSION.PrevTaskStatus = SUCCEEDED" FROMTASK="CMD_PRE_SESSION" TOTASK="s_m_fct_supplier_risk"/>
+    <LINK CONDITION="$CMD_PRE_SESSION.PrevTaskStatus = SUCCEEDED" FROMTASK="CMD_PRE_SESSION" TOTASK="s_m_dim_supplier_load"/>
     <LINK CONDITION="$CMD_PRE_SESSION.PrevTaskStatus = FAILED" FROMTASK="CMD_PRE_SESSION" TOTASK="EMAIL_ON_FAILURE"/>
-    <LINK CONDITION="$s_m_fct_supplier_risk.PrevTaskStatus = SUCCEEDED" FROMTASK="s_m_fct_supplier_risk" TOTASK="EMAIL_ON_SUCCESS"/>
+    <LINK CONDITION="$s_m_dim_supplier_load.PrevTaskStatus = SUCCEEDED" FROMTASK="s_m_dim_supplier_load" TOTASK="s_m_fct_supplier_risk"/>
+    <LINK CONDITION="$s_m_dim_supplier_load.PrevTaskStatus = FAILED" FROMTASK="s_m_dim_supplier_load" TOTASK="EMAIL_ON_FAILURE"/>
+    <LINK CONDITION="$s_m_fct_supplier_risk.PrevTaskStatus = SUCCEEDED" FROMTASK="s_m_fct_supplier_risk" TOTASK="s_m_fct_abc_xyz_analysis"/>
     <LINK CONDITION="$s_m_fct_supplier_risk.PrevTaskStatus = FAILED" FROMTASK="s_m_fct_supplier_risk" TOTASK="EMAIL_ON_FAILURE"/>
+    <LINK CONDITION="$s_m_fct_abc_xyz_analysis.PrevTaskStatus = SUCCEEDED" FROMTASK="s_m_fct_abc_xyz_analysis" TOTASK="EMAIL_ON_SUCCESS"/>
+    <LINK CONDITION="$s_m_fct_abc_xyz_analysis.PrevTaskStatus = FAILED" FROMTASK="s_m_fct_abc_xyz_analysis" TOTASK="EMAIL_ON_FAILURE"/>
   </WORKFLOW>
 </FOLDER>
 </REPOSITORY>
