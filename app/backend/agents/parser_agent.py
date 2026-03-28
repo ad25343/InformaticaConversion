@@ -94,8 +94,27 @@ def _scan_mappings(
 ) -> None:
     for mapping in root.iter("MAPPING"):
         counts["Mapping"] = counts.get("Mapping", 0) + 1
-        m = _extract_mapping(mapping, flags, reusable, unresolved_params, mapplet_defs)
+        # In Informatica XML, TRANSFORMATIONs are siblings of MAPPING under FOLDER,
+        # not children of MAPPING. Pass the parent FOLDER element so _extract_mapping
+        # can find transformations defined at the folder level.
+        folder_el = _find_parent_folder(root, mapping)
+        m = _extract_mapping(mapping, flags, reusable, unresolved_params, mapplet_defs, folder_el)
         graph["mappings"].append(m)
+
+
+def _find_parent_folder(root: etree._Element, target: etree._Element) -> etree._Element | None:
+    """Walk the tree to find the FOLDER parent of a given element."""
+    for folder in root.iter("FOLDER"):
+        for child in folder:
+            if child is target:
+                return folder
+            # Also check if MAPPING is nested deeper
+            if child.tag == "MAPPING" or target in child.iter("MAPPING"):
+                pass
+        # Direct iteration over folder's children
+        if target in list(folder):
+            return folder
+    return None
 
 
 def _scan_workflows(root: etree._Element, graph: dict, counts: dict) -> None:
@@ -495,6 +514,7 @@ def _extract_mapping(
     reusable: list,
     unresolved_params: list,
     mapplet_defs: dict[str, dict] | None = None,
+    folder_el: etree._Element | None = None,
 ) -> dict:
     if mapplet_defs is None:
         mapplet_defs = {}
@@ -503,10 +523,21 @@ def _extract_mapping(
 
     instance_map = _scan_mapping_instances(mapping_el, name, mapplet_defs, flags)
 
+    # In Informatica XML, TRANSFORMATION elements can be either:
+    # 1. Children of MAPPING (inline transforms) — common in some exports
+    # 2. Children of FOLDER (siblings of MAPPING) — standard PowerCenter export format
+    # Search both locations to handle all XML variants.
     transformations = [
         _extract_transformation(trans, flags)
         for trans in mapping_el.iter("TRANSFORMATION")
     ]
+    if not transformations and folder_el is not None:
+        # Transformations are at FOLDER level — extract those referenced by this mapping's INSTANCEs
+        instance_names = set(instance_map.values()) | set(instance_map.keys())
+        for trans in folder_el.findall("TRANSFORMATION"):
+            tname = trans.get("NAME", "")
+            if tname in instance_names or not instance_names:
+                transformations.append(_extract_transformation(trans, flags))
 
     connectors = _scan_mapping_connectors(mapping_el)
 

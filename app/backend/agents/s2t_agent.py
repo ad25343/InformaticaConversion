@@ -509,13 +509,33 @@ def _handle_dead_end(
     or (None, new_field) if we should redirect and continue tracing.
     """
     if hops == 0:
+        # Even at hops==0, check for OUTPUT-only expressions (e.g., SYSDATE, $$param)
+        trans = get_trans(current_inst)
+        if trans:
+            expr_text = _find_expr_for_port(trans, current_field)
+            if expr_text and expr_text != current_field:
+                logic.append(f"{current_inst}.{current_field}: {_truncate(expr_text, 120)}")
+                return _trace_result(
+                    None, None, chain, "; ".join(logic), STATUS_DERIVED,
+                    STATUS_DERIVED, f"Computed field — {_truncate(expr_text, 60)}"
+                ), None
         return _no_upstream_result(chain, status), None
 
+    # Try to find and follow an expression token upstream
     new_field = _try_follow_expression(
         current_inst, current_field, backward, chain, logic, notes, status, get_trans
     )
     if new_field:
         return None, new_field  # redirect to follow this expression token
+
+    # No followable token — but still capture the expression as derivation logic
+    trans = get_trans(current_inst)
+    if trans:
+        expr_text = _find_expr_for_port(trans, current_field)
+        if expr_text and expr_text != current_field:
+            logic.append(f"{current_inst}.{current_field}: {_truncate(expr_text, 120)}")
+            status = STATUS_DERIVED
+
     return _found_source_result(current_inst, current_field, chain, logic, status, notes), None
 
 
