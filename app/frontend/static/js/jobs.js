@@ -637,8 +637,16 @@ function renderJobPanel(job) {
 
   // ── STEP 3a — ANALYST VIEW (Systems Requirements) ────────────────
   if (state.analyst_view_md) {
+    const av = state.analyst_validation?.['3a'];
+    const avBadge = av
+      ? (av.critical > 0
+          ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px" title="${av.critical} critical, ${av.warnings} warnings">${av.critical} issues</span>`
+          : av.warnings > 0
+            ? `<span class="badge badge-waiting" style="font-size:9px;margin-left:6px" title="${av.warnings} warnings">${av.warnings} warnings</span>`
+            : `<span class="badge badge-done" style="font-size:9px;margin-left:6px" title="${av.sections} sections, ${av.tables} tables validated">Validated</span>`)
+      : '';
     html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3a — Systems Requirements
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3a — Systems Requirements ${avBadge}
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
@@ -646,6 +654,9 @@ function renderJobPanel(job) {
         </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
+      ${av && av.issues?.length ? '<div class="validation-bar">' + av.issues.map(i =>
+        '<span class="v-issue v-' + i.severity + '" title="' + esc(i.message) + '">' + esc(i.code) + '</span>'
+      ).join('') + '</div>' : ''}
       <div class="doc-content">${markdownToHtml(state.analyst_view_md)}</div>
       </div>
     </div>`;
@@ -653,8 +664,14 @@ function renderJobPanel(job) {
 
   // ── STEP 3b — GAPS & REVIEW FINDINGS ────────────────
   if (state.analyst_gaps_md) {
+    const gv = state.analyst_validation?.['3b'];
+    const gvBadge = gv
+      ? (gv.critical > 0
+          ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px">${gv.critical} issues</span>`
+          : `<span class="badge badge-done" style="font-size:9px;margin-left:6px">Validated</span>`)
+      : '';
     html += `<div class="card" style="border-color:var(--warn)">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3b — Gaps &amp; Review Findings
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3b — Gaps &amp; Review Findings ${gvBadge}
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
@@ -662,6 +679,9 @@ function renderJobPanel(job) {
         </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
+      ${gv && gv.issues?.length ? '<div class="validation-bar">' + gv.issues.map(i =>
+        '<span class="v-issue v-' + i.severity + '" title="' + esc(i.message) + '">' + esc(i.code) + '</span>'
+      ).join('') + '</div>' : ''}
       <div class="doc-content">${markdownToHtml(state.analyst_gaps_md)}</div>
       </div>
     </div>`;

@@ -73,6 +73,13 @@ hr { border: none; border-top: 1px solid var(--border); }
 .btn-dl-ghost { opacity: .6; }
 .btn-dl-ghost:hover { opacity: 1; }
 
+/* ── Validation bar ── */
+.validation-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; padding: 8px 10px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border); }
+.v-issue { font-size: 9px; padding: 2px 6px; border-radius: 3px; font-weight: 600; letter-spacing: .3px; cursor: help; }
+.v-critical { background: rgba(239,68,68,.15); color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
+.v-warning  { background: rgba(251,146,60,.12); color: #fb923c; border: 1px solid rgba(251,146,60,.25); }
+.v-info     { background: rgba(99,102,241,.1);  color: #818cf8; border: 1px solid rgba(99,102,241,.2); }
+
 /* ── Job list ── */
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
 .job-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1; }

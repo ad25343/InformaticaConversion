@@ -699,6 +699,43 @@ async def _step_3_run_doc_agent(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]
         ctx.analyst_view_md = ""
         ctx.analyst_gaps_md = ""
 
+    # Validate and auto-repair the analyst documents
+    if ctx.analyst_view_md or ctx.analyst_gaps_md:
+        try:
+            from .agents.analyst_view_validator import validate_and_repair
+            ctx.analyst_view_md, ctx.analyst_gaps_md, report_3a, report_3b = \
+                validate_and_repair(ctx.analyst_view_md, ctx.analyst_gaps_md)
+            ctx.log.info(f"Analyst doc validation: {report_3a.summary()}", step=3)
+            ctx.log.info(f"Analyst doc validation: {report_3b.summary()}", step=3)
+            # Store validation results in state for UI display
+            ctx._analyst_validation = {
+                "3a": {
+                    "valid": report_3a.is_valid,
+                    "sections": report_3a.section_count,
+                    "tables": report_3a.table_count,
+                    "mermaid_diagrams": report_3a.mermaid_count,
+                    "critical": report_3a.critical_count,
+                    "warnings": report_3a.warning_count,
+                    "issues": [
+                        {"section": i.section, "severity": i.severity, "code": i.code, "message": i.message}
+                        for i in report_3a.issues
+                    ],
+                },
+                "3b": {
+                    "valid": report_3b.is_valid,
+                    "sections": report_3b.section_count,
+                    "tables": report_3b.table_count,
+                    "critical": report_3b.critical_count,
+                    "warnings": report_3b.warning_count,
+                    "issues": [
+                        {"section": i.section, "severity": i.severity, "code": i.code, "message": i.message}
+                        for i in report_3b.issues
+                    ],
+                },
+            }
+        except Exception as e:
+            ctx.log.warning(f"Analyst view validation failed (non-blocking): {e}", step=3)
+
 
 async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
     """Step 3 — Generate documentation"""
@@ -730,8 +767,15 @@ async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
         return
 
     doc_truncated = getattr(ctx, "_doc_truncated", False)
-    yield await ctx.emit(3, JobStatus.DOCUMENTING, _doc_complete_msg(doc_truncated),
-                         {"documentation_md": ctx.documentation_md, "analyst_view_md": ctx.analyst_view_md, "analyst_gaps_md": ctx.analyst_gaps_md, "doc_truncated": doc_truncated})
+    state_payload = {
+        "documentation_md": ctx.documentation_md,
+        "analyst_view_md": ctx.analyst_view_md,
+        "analyst_gaps_md": ctx.analyst_gaps_md,
+        "doc_truncated": doc_truncated,
+    }
+    if hasattr(ctx, "_analyst_validation"):
+        state_payload["analyst_validation"] = ctx._analyst_validation
+    yield await ctx.emit(3, JobStatus.DOCUMENTING, _doc_complete_msg(doc_truncated), state_payload)
 
 
 def _inject_doc_truncation_flag(ctx: _PipelineCtx, doc_truncated: bool, doc_missing_sentinel: bool) -> None:
