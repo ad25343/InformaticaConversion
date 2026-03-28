@@ -1,12 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<POWERMART CREATION_DATE="10/03/2026 09:00:00" REPOSITORY_VERSION="112">
-  <REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Oracle" NAME="APEX_INS_DWH" VERSION="112">
-    <PARAMFILE NAME="params_apex_insurance_uat.xml">
-      <PARAM NAME="$$SRC_SCHEMA" VALUE="OLTP_UAT" />
-      <PARAM NAME="$$TGT_SCHEMA" VALUE="DWH_UAT" />
-      <PARAM NAME="$$LOAD_DATE" VALUE="TRUNC(SYSDATE)" />
-      <PARAM NAME="$$ENVIRONMENT" VALUE="UAT" />
-    </PARAMFILE>
-  </REPOSITORY>
-  <PARAM NAME="$$LAST_EXTRACT_DT" VALUE="DEFAULT_UAT" />
+<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
+<POWERMART CREATION_DATE="09/03/2026 12:00:00" REPOSITORY_VERSION="112">
+<REPOSITORY CODEPAGE="UTF-8" DATABASETYPE="Oracle" NAME="APEX_DWH" VERSION="112">
+<FOLDER DESCRIPTION="Apex Insurance — Insurance DWH" GROUP="" NAME="Apex_Insurance" OWNER="Administrator" PERMISSIONS="rwx---r--" SHARED="NOTSHARED">
+  <PARAMFILE DESCRIPTION="Environment parameters for UAT" NAME="param_apex_insurance_uat" VERSIONNUMBER="1">
+    <PARAM NAME="$$PM_SRC_DBCONNECTION" VALUE="Oracle:uat-db-01.apex-insurance.com:1521:APEX_OLTP"/>
+    <PARAM NAME="$$PM_TGT_DBCONNECTION" VALUE="Oracle:uat-db-01.apex-insurance.com:1521:APEX_DWH"/>
+    <PARAM NAME="$$PM_SRC_SCHEMA" VALUE="APEX_OLTP"/>
+    <PARAM NAME="$$PM_TGT_SCHEMA" VALUE="APEX_DWH"/>
+    <PARAM NAME="$$PM_CACHE_DIR" VALUE="/informatica/apex_insurance/cache/uat"/>
+    <PARAM NAME="$$PM_LOG_DIR" VALUE="/informatica/apex_insurance/logs/uat"/>
+    <PARAM NAME="$$PM_BAD_FILE_DIR" VALUE="/informatica/apex_insurance/bad/uat"/>
+    <PARAM NAME="$$PM_REJECT_DIR" VALUE="/informatica/apex_insurance/reject/uat"/>
+    <PARAM NAME="$$PM_SORT_DIR" VALUE="/informatica/apex_insurance/sort/uat"/>
+    <PARAM NAME="$$PM_LOOKUP_DIR" VALUE="/informatica/apex_insurance/lookup/uat"/>
+    <PARAM NAME="$$SRC_FILE_DIR" VALUE="/data/apex_insurance/inbound/uat"/>
+    <PARAM NAME="$$ARCHIVE_DIR" VALUE="/data/apex_insurance/archive/uat"/>
+    <PARAM NAME="$$SQL_DIR" VALUE="/etl/apex_insurance/sql"/>
+    <PARAM NAME="$$ETL_BATCH_ID" VALUE="0"/>
+    <PARAM NAME="$$SOURCE_SYSTEM" VALUE="APEX_INSURANCE"/>
+    <PARAM NAME="$$ENVIRONMENT" VALUE="UAT"/>
+    <PARAM NAME="$$LAST_EXTRACT_DT" VALUE="1900-01-01 00:00:00"/>
+    <PARAM NAME="$$HIGH_WATERMARK" VALUE="0"/>
+    <PARAM NAME="$$START_DATE" VALUE="1900-01-01"/>
+    <PARAM NAME="$$END_DATE" VALUE="2099-12-31"/>
+    <PARAM NAME="$$COMMIT_INTERVAL" VALUE="10000"/>
+    <PARAM NAME="$$DTM_BUFFER_SIZE" VALUE="128000000"/>
+    <PARAM NAME="$$MAX_PARALLEL" VALUE="4"/>
+    <PARAM NAME="$$TARGET_LOAD_TYPE" VALUE="Normal"/>
+    <PARAM NAME="$$TRUNCATE_TARGET" VALUE="NO"/>
+    <PARAM NAME="$$REJECT_THRESHOLD" VALUE="100"/>
+    <PARAM NAME="$$LOG_LEVEL" VALUE="Normal"/>
+    <PARAM NAME="$$DL_ETL_SUPPORT" VALUE="etl-support@apex-insurance.com"/>
+    <PARAM NAME="$$DL_ETL_OPS" VALUE="etl-ops@apex-insurance.com"/>
+    <PARAM NAME="$$DL_BUSINESS_USERS" VALUE="business-reports@apex-insurance.com"/>
+    <PARAM NAME="$$DB_USER" VALUE="etl_uat"/>
+    <PARAM NAME="$$ENABLE_PUSHDOWN" VALUE="NO"/>
+    <PARAM NAME="$$SESSION_SORT_ORDER" VALUE="Binary"/>
+    <PARAM NAME="$$RECOVERY_STRATEGY" VALUE="Resume from the last checkpoint"/>
+  </PARAMFILE>
+</FOLDER>
+</REPOSITORY>
 </POWERMART>
