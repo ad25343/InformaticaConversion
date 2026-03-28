@@ -49,17 +49,21 @@ enough that:
 
 Formatting rules (STRICT):
 - Use Markdown tables for ALL field listings, joins, source/target details, and test data.
+- Table columns MUST match the template EXACTLY — do not add, remove, or rename columns.
 - Use fenced code blocks (```) for EVERY Informatica expression — never inline them in prose.
 - Use `> ⚠ **Note:**` callout blocks for gaps, missing logic, or structural concerns.
 - Use `---` horizontal rules between major sections for visual separation.
 - For Section 4.1 Pipeline Overview, use BOTH:
   (a) A Mermaid flowchart (```mermaid graph LR```) for visual overview — solid arrows
-      for data flow, dashed arrows for bypass routes, label router branches with group names
+      for data flow, dashed arrows for bypass routes, label router branches with group names.
+      Every node MUST have a label in brackets, e.g. `A[SOURCE_NAME]` not bare `A`.
   (b) A step table for precise detail (step number, transform, type, input, output, field count)
 - Be HONEST about gaps: if a field has no expression, say "No expression found — passthrough"
   with ⚠ Gap status. Do NOT invent logic that doesn't exist in the metadata.
 - Keep prose SHORT. Let tables, code blocks, and callouts do the heavy lifting.
 - Output ONLY the Markdown document — no preamble, no commentary outside the doc.
+- This document will be exported as PDF and DOCX. Ensure tables are well-structured
+  and mermaid diagrams have labeled nodes for proper rendering in all formats.
 
 Section structure (MANDATORY — follow this exact outline):
 
@@ -247,11 +251,14 @@ If no joins exist, write: "No joins — single source mapping."
 
 ### 4.3 Lookups
 
+Use EXACTLY these columns:
+
 | # | Transform | Lookup Table | Lookup Condition | Return Fields | Cache |
 |---|-----------|-------------|-----------------|---------------|-------|
 | 1 | LKP_NAME | TABLE_NAME | `TABLE.KEY = INPUT_KEY` | FIELD_A, FIELD_B | Persistent, 5MB |
 
 If no lookups, write: "No lookups performed."
+Do NOT add extra columns (e.g., Status) beyond the six above.
 
 ### 4.4 Filters
 
@@ -339,12 +346,17 @@ e.g., "Total Active Return ≈ Σ(Allocation) + Σ(Selection) + Σ(Interaction)"
 
 ### 7.2 Test Data
 
-For each derived field, provide 3 test rows with expected results:
+For each derived field, provide a test table with 3 rows.
+Use EXACTLY these columns (replace Input_N with actual field names):
 
-| Input_1 | Input_2 | Expected | Explanation |
-|---------|---------|----------|-------------|
+| Input_1 | Input_2 | Expected Output | Explanation |
+|---------|---------|-----------------|-------------|
+| value_a | value_b | expected_result | Why this result |
 
-Use the ACTUAL data types — if a field is integer, test with integers only.
+Rules:
+- Use ACTUAL data types — integer fields get integer test values, not strings.
+- Include at least one NULL input row to test null handling.
+- Column headers MUST name the actual input fields (e.g., `INDICATOR_SCORE | PATTERN_WEIGHT | Expected FRAUD_SCORE`).
 
 ### 7.3 Edge Cases
 
@@ -368,6 +380,8 @@ Router bypass patterns, unreachable groups, passthrough fields that may be missi
 
 This is a structured review checklist. Be factual, specific, and actionable.
 Skip any section that has zero findings — do NOT include empty sections.
+Table columns MUST match the templates below EXACTLY — do not add or remove columns.
+Use `---` horizontal rules between major sections, same as Document 1.
 
 # {mapping_name} — Gaps & Review Findings
 
