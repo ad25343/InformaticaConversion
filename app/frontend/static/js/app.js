@@ -77,6 +77,10 @@ function utcDate(s) { if (!s) return new Date(NaN); return new Date(s.endsWith('
 function shortId(jobId) { return jobId ? '#' + jobId.replace(/-/g,'').slice(0,8).toUpperCase() : '–'; }
 
 function markdownToHtml(md) {
+  if (typeof marked !== 'undefined') {
+    return marked.parse(md, { gfm: true, breaks: false });
+  }
+  // Fallback if marked.js not loaded
   return md
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
@@ -335,6 +339,212 @@ async function downloadAuditReport(jobId) {
     a.click();
     URL.revokeObjectURL(url);
   } catch (e) { alert('Audit report download failed: ' + e.message); }
+}
+
+function downloadStateMd(stateKey, suffix) {
+  const state = window._currentJobState;
+  const job   = window._currentJob;
+  if (!state || !state[stateKey]) return;
+  const blob = new Blob([state[stateKey]], { type: 'text/markdown' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safe = (job?.filename || 'mapping').replace(/[^a-z0-9_\-\.]/gi, '_');
+  a.href     = url;
+  a.download = `${safe}_${suffix}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadStatePdf(stateKey, suffix, title) {
+  const state = window._currentJobState;
+  const job   = window._currentJob;
+  if (!state || !state[stateKey]) return;
+  const md   = state[stateKey];
+  const safe = (job?.filename || 'mapping').replace(/[^a-z0-9_\-\.]/gi, '_');
+  const mappingName = (job?.filename || '').replace('.xml','');
+  const tier = state.complexity?.tier || '';
+  const html = `<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="UTF-8"/>
+  <title>${title} — ${safe}</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"><\/script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"><\/script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 10.5pt; line-height: 1.65; color: #1e293b; background: #fff;
+      max-width: 880px; margin: 0 auto; padding: 0 40px 40px;
+    }
+
+    /* ── Cover header ── */
+    .cover {
+      padding: 48px 0 32px; margin-bottom: 28px;
+      border-bottom: 3px solid #1e3a5f;
+    }
+    .cover h1 {
+      font-size: 22pt; font-weight: 700; color: #0f172a;
+      margin: 0 0 6px; letter-spacing: -0.3px;
+    }
+    .cover .subtitle {
+      font-size: 11pt; color: #64748b; font-weight: 400;
+    }
+    .cover .meta-row {
+      display: flex; gap: 24px; margin-top: 14px; font-size: 9pt;
+      color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 10px;
+    }
+    .cover .meta-row strong { color: #334155; font-weight: 600; }
+    .tier-badge {
+      display: inline-block; padding: 2px 10px; border-radius: 10px;
+      font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    }
+    .tier-simple  { background: #dcfce7; color: #166534; }
+    .tier-medium  { background: #fef3c7; color: #92400e; }
+    .tier-complex { background: #fee2e2; color: #991b1b; }
+
+    /* ── Headings ── */
+    h2 {
+      font-size: 14pt; font-weight: 700; color: #1e3a5f;
+      border-bottom: 2px solid #e2e8f0; padding-bottom: 6px;
+      margin: 32px 0 12px; letter-spacing: -0.2px;
+    }
+    h3 {
+      font-size: 11.5pt; font-weight: 600; color: #334155;
+      margin: 20px 0 8px; padding-bottom: 3px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    h4 { font-size: 10.5pt; font-weight: 600; color: #475569; margin: 14px 0 6px; }
+    p  { margin: 0 0 10px; }
+    ul, ol { margin: 4px 0 12px 22px; }
+    li { margin-bottom: 3px; }
+    hr { border: none; border-top: 1px solid #e2e8f0; margin: 20px 0; }
+
+    /* ── Tables ── */
+    table {
+      border-collapse: collapse; width: 100%; margin: 10px 0 16px;
+      font-size: 8.5pt; border: 1px solid #cbd5e1; border-radius: 6px;
+    }
+    thead th {
+      background: linear-gradient(180deg, #f1f5f9 0%, #e8edf3 100%);
+      color: #1e3a5f; font-weight: 600; text-transform: uppercase;
+      font-size: 7.5pt; letter-spacing: .4px;
+      padding: 7px 10px; border-bottom: 2px solid #cbd5e1;
+      text-align: left;
+    }
+    td {
+      padding: 5px 10px; border-bottom: 1px solid #e2e8f0;
+      color: #334155; vertical-align: top;
+    }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody tr:hover { background: #f1f5f9; }
+
+    /* ── Code ── */
+    pre {
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+      padding: 14px 16px; font-size: 8pt;
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      white-space: pre-wrap; word-break: break-all; margin: 8px 0 14px;
+      border-left: 3px solid #6366f1;
+    }
+    code {
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      background: #f1f5f9; padding: 1px 5px; border-radius: 3px;
+      font-size: 8.5pt; color: #6366f1;
+    }
+    pre code { background: none; padding: 0; color: #334155; }
+
+    /* ── Blockquotes (warnings, notes) ── */
+    blockquote {
+      border-left: 4px solid #f59e0b; padding: 10px 16px; margin: 10px 0;
+      background: #fffbeb; border-radius: 0 6px 6px 0;
+      font-size: 9.5pt; color: #92400e;
+    }
+
+    /* ── Mermaid ── */
+    .mermaid {
+      margin: 16px 0; padding: 16px; background: #fafbfc;
+      border: 1px solid #e2e8f0; border-radius: 8px; text-align: center;
+    }
+    .mermaid svg { max-width: 100%; }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 40px; font-size: 8pt; color: #94a3b8;
+      border-top: 2px solid #e2e8f0; padding-top: 12px;
+      display: flex; justify-content: space-between;
+    }
+
+    /* ── Print ── */
+    @media print {
+      body { padding: 0; max-width: 100%; }
+      .cover { padding-top: 20px; }
+      h2 { break-after: avoid; }
+      h3 { break-after: avoid; }
+      pre, table, .mermaid, blockquote { break-inside: avoid; }
+      tbody tr:hover { background: inherit; }
+      @page { margin: 0.6in 0.65in; size: A4; }
+      @page :first { margin-top: 0.4in; }
+    }
+  </style>
+</head>
+<body>
+<div class="cover">
+  <h1>${title}</h1>
+  <div class="subtitle">${mappingName}</div>
+  <div class="meta-row">
+    <span><strong>Generated:</strong> ${new Date().toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'})}</span>
+    ${tier ? '<span><strong>Complexity:</strong> <span class="tier-badge tier-' + tier.toLowerCase() + '">' + tier + '</span></span>' : ''}
+    <span><strong>Tool:</strong> Informatica Conversion Platform</span>
+  </div>
+</div>
+<div id="content"></div>
+<div class="footer">
+  <span>Informatica Conversion Tool &middot; Confidential</span>
+  <span>${new Date().toLocaleString()}</span>
+</div>
+<script>
+  var md = ${JSON.stringify(md).replace(/<\//g, '<\\/')};
+  mermaid.initialize({ startOnLoad: false, theme: 'neutral',
+    themeVariables: { fontSize: '11px', primaryColor: '#e0e7ff', primaryBorderColor: '#6366f1',
+      lineColor: '#94a3b8', tertiaryColor: '#f8fafc' }
+  });
+  document.getElementById('content').innerHTML = marked.parse(md, { gfm: true, breaks: false });
+  document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {
+    var pre = el.parentElement;
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    pre.replaceWith(div);
+  });
+  mermaid.run().then(function() {
+    setTimeout(function() { window.print(); }, 800);
+  });
+<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) { alert('Pop-up blocked — please allow pop-ups and try again.'); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
+async function downloadStateDocx(docKey) {
+  const job = window._currentJob;
+  if (!job) return;
+  try {
+    const res = await fetch(`/api/jobs/${job.job_id}/doc/${docKey}.docx`);
+    if (!res.ok) { alert('DOCX download failed: ' + res.statusText); return; }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const cd   = res.headers.get('content-disposition') || '';
+    const fname = cd.match(/filename="([^"]+)"/)?.[1] || `${docKey}.docx`;
+    a.href     = url;
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert('DOCX download failed: ' + e.message); }
 }
 
 function openPrintReport() {

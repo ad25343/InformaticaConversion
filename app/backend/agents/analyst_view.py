@@ -26,7 +26,7 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.analyst_view")
 
 MODEL = _cfg.claude_model
-_ANALYST_MAX_TOKENS = 16_000
+_ANALYST_MAX_TOKENS = 20_000
 
 # Delimiter used to split the two sections in Claude's response
 SECTION_DELIMITER = "\n---SECTION_BREAK---\n"
@@ -150,18 +150,40 @@ about gaps — if an expression is missing, say so with ⚠ Gap status.
 
 For EACH source table, write:
 
-### SOURCE_TABLE_NAME (owner, database)
+### SOURCE_TABLE_NAME
+**Oracle** · `DBDNAME.OWNERNAME` · Description from metadata or one sentence you infer
 
-One sentence describing what data it provides. Then a field table:
+For Flat File sources instead show:
+**Flat File** · `filename.csv` · delimiter: `,` · header: yes/no
+
+Then a field table:
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
 | FIELD_NAME | datatype(precision,scale) | PK / NOT NULL / YES | Brief description |
 
-If there is a Source Qualifier filter or custom SQL, show it in a code block.
+Under the field table, state the extraction method:
+- If the Source Qualifier has a custom SQL override, write: **Extraction:** Custom SQL override (see Section 2.N)
+- If there is a Source Filter (WHERE clause), write: **Extraction:** Default with filter — `WHERE condition`
+- If neither exists, write: **Extraction:** Default (all rows, no SQL override)
+
 If a source is declared but its fields are NOT used in any expression, flag it:
 > ⚠ **Note:** This source is declared and wired but no expressions reference its fields.
 > Confirm with the developer whether this is a placeholder or incomplete implementation.
+
+After ALL source tables, if ANY Source Qualifiers have custom SQL, add:
+
+### 2.N Source Qualifier Overrides
+
+For each SQ with custom SQL:
+1. One-sentence plain English summary of what the SQL does
+2. The full SQL in a fenced code block
+
+```sql
+SELECT ... FROM ... WHERE ...
+```
+
+If no Source Qualifiers have custom SQL, omit this subsection entirely.
 
 ---
 
@@ -344,24 +366,75 @@ Router bypass patterns, unreachable groups, passthrough fields that may be missi
 
 ## DOCUMENT 2: Gaps & Review Findings (AFTER the ---SECTION_BREAK--- line)
 
-List everything ambiguous, missing, or needing review. Be factual and specific.
+This is a structured review checklist. Be factual, specific, and actionable.
+Skip any section that has zero findings — do NOT include empty sections.
 
 # {mapping_name} — Gaps & Review Findings
 
-## Documentation Gaps
-What metadata is missing? (empty expressions, no join conditions, no load type)
+---
 
-## Ambiguities
-Where is behavior unclear? What assumptions were made in Document 1?
+## 1. Summary
 
-## Data Quality Concerns
-Fields with no upstream connectors? Hardcoded values that should be parameterized?
-Sources wired but unused? Lookups declared but not connected?
+| Category | Count | Highest Severity |
+|----------|-------|-----------------|
+| Documentation Gaps | N | Critical / High / Medium / Low |
+| Ambiguities | N | ... |
+| Data Quality Concerns | N | ... |
+| Structural Issues | N | ... |
 
-## Recommendations
-Numbered action items the analyst/developer must confirm before conversion.
+---
 
-Skip any section that has no findings.
+## 2. Documentation Gaps
+
+Missing metadata that blocks accurate conversion or testing.
+
+| # | Field / Transform | Gap | Impact | Severity |
+|---|-------------------|-----|--------|----------|
+| 1 | EXP_NAME.FIELD | No expression found — passthrough assumed | Tester cannot validate derivation | High |
+| 2 | JNR_NAME | Join condition empty | Cannot verify join correctness | Critical |
+
+---
+
+## 3. Ambiguities
+
+Where behavior is unclear or Document 1 made assumptions.
+
+| # | Area | Assumption Made | Risk if Wrong | Severity |
+|---|------|----------------|---------------|----------|
+| 1 | Router group DEFAULT | Assumed catch-all for unmatched records | Records silently dropped if not catch-all | Medium |
+
+---
+
+## 4. Data Quality Concerns
+
+| # | Issue | Detail | Recommendation | Severity |
+|---|-------|--------|----------------|----------|
+| 1 | Hardcoded value | 'SYSTEM' used for SOURCE_SYSTEM instead of $$param | Parameterize for environment portability | Low |
+| 2 | Unused source | SOURCE_B wired but no fields referenced in expressions | Confirm if intentional or incomplete | Medium |
+
+---
+
+## 5. Structural Issues
+
+| # | Issue | Detail | Severity |
+|---|-------|--------|----------|
+| 1 | Target field count mismatch | TARGET_A has 12 fields, TARGET_B has 10 — missing: X, Y | Medium |
+| 2 | Router bypass | ETL audit fields route direct EXP→Target, bypassing Router | Low (expected pattern) |
+| 3 | Unreachable Router group | Group X condition can never be TRUE given upstream logic | High |
+
+---
+
+## 6. Pre-Conversion Checklist
+
+Action items that MUST be confirmed before starting conversion:
+
+| # | Action | Owner | Priority |
+|---|--------|-------|----------|
+| 1 | Confirm FIELD_X derivation logic with source team — no expression in metadata | Analyst | P1 |
+| 2 | Validate Router group DEFAULT is intentional catch-all | Developer | P2 |
+| 3 | Confirm SOURCE_B is needed — appears unused | Analyst | P2 |
+
+Priority: P1 = blocks conversion, P2 = should resolve before UAT, P3 = nice to have.
 """
 
 
@@ -382,8 +455,23 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
         lines.append("### Sources")
         for s in sources:
             fields = s.get("fields", [])
-            lines.append(f"- **{s.get('name', '?')}** (owner: {s.get('owner', '—')}, "
-                         f"db: {s.get('db_type', '—')}, {len(fields)} fields)")
+            db_type = s.get("db_type", "—")
+            db_name = s.get("db_name", "")
+            owner = s.get("owner", "—")
+            desc = s.get("description", "")
+            flat = s.get("flat_file", {})
+            source_info = f"type: {db_type}"
+            if db_name:
+                source_info += f", database: {db_name}"
+            source_info += f", owner: {owner}"
+            if flat:
+                fname = flat.get("file_name", "")
+                delim = flat.get("delimiter", ",")
+                if fname:
+                    source_info += f", file: {fname}, delimiter: '{delim}'"
+            lines.append(f"- **{s.get('name', '?')}** ({source_info}, {len(fields)} fields)")
+            if desc:
+                lines.append(f"  Description: {desc}")
             for f in fields:
                 dtype = f.get("datatype", "?")
                 prec = f.get("precision", "")
@@ -392,6 +480,29 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
                 nullable = "" if f.get("nullable", "YES") == "YES" else " NOT NULL"
                 type_str = f"{dtype}({prec},{scale})" if scale and scale != "0" else f"{dtype}({prec})"
                 lines.append(f"  - {f.get('name', '?')}: {type_str}{pk}{nullable}")
+
+    # Source Qualifier overrides — only show what's explicitly in the XML
+    sq_sql_lines: list[str] = []
+    for t in txns:
+        if "source qualifier" not in t.get("type", "").lower():
+            continue
+        attribs = t.get("table_attribs", {})
+        sq_name = t.get("name", "")
+        custom_sql = (attribs.get("Sql Query", "") or "").strip()
+        source_filter = (attribs.get("Source Filter", "") or "").strip()
+        user_join = (attribs.get("User Defined Join", "") or "").strip()
+
+        if custom_sql:
+            sq_sql_lines.append(f"- **{sq_name}** — SQL Override:")
+            sq_sql_lines.append(f"  ```sql\n  {custom_sql}\n  ```")
+        if source_filter:
+            sq_sql_lines.append(f"- **{sq_name}** — Source Filter: `{source_filter}`")
+        if user_join:
+            sq_sql_lines.append(f"- **{sq_name}** — User Defined Join: `{user_join}`")
+
+    if sq_sql_lines:
+        lines.append("### Source Qualifier Overrides")
+        lines.extend(sq_sql_lines)
 
     # Targets with field-level detail + cross-target comparison
     targets = graph.get("targets", [])
@@ -402,8 +513,14 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
             fields = t.get("fields", [])
             field_names = [f.get("name", "") for f in fields]
             field_counts[t.get("name", "?")] = set(field_names)
-            lines.append(f"- **{t.get('name', '?')}** (owner: {t.get('owner', '—')}, "
-                         f"db: {t.get('db_type', '—')}, {len(fields)} fields: "
+            db_type = t.get("db_type", "—")
+            db_name = t.get("db_name", "")
+            owner = t.get("owner", "—")
+            tgt_info = f"type: {db_type}"
+            if db_name:
+                tgt_info += f", database: {db_name}"
+            tgt_info += f", owner: {owner}"
+            lines.append(f"- **{t.get('name', '?')}** ({tgt_info}, {len(fields)} fields: "
                          f"{', '.join(field_names)})")
 
         # Flag differing field counts

@@ -639,6 +639,11 @@ function renderJobPanel(job) {
   if (state.analyst_view_md) {
     html += `<div class="card">
       <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3a — Systems Requirements
+        <span class="dl-group">
+          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','systems_requirements')">&#x2913; MD</button>
+        </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
       <div class="doc-content">${markdownToHtml(state.analyst_view_md)}</div>
@@ -650,6 +655,11 @@ function renderJobPanel(job) {
   if (state.analyst_gaps_md) {
     html += `<div class="card" style="border-color:var(--warn)">
       <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3b — Gaps &amp; Review Findings
+        <span class="dl-group">
+          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_gaps_md','gaps_review')">&#x2913; MD</button>
+        </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
       <div class="doc-content">${markdownToHtml(state.analyst_gaps_md)}</div>
@@ -666,8 +676,8 @@ function renderJobPanel(job) {
            Review carefully before approving at Analysis Sign-off. If critical sections are missing, Reject and re-upload.
          </div>`
       : '';
-    html += `<div class="card" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3c — Technical Documentation
+    html += `<div class="card card-collapsed" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3c — Technical Documentation (Reference)
         ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
@@ -1377,6 +1387,9 @@ function renderJobPanel(job) {
   if (_jdc) { _jdc.innerHTML = html; _jdc.style.display = 'flex'; _jdc.scrollTop = 0; }
   if (_sfc) _sfc.style.display = 'none';
   setMainView('dashboard');
+
+  // Render Mermaid diagrams in doc content
+  if (typeof renderMermaid === 'function') { try { renderMermaid(); } catch(e) { console.warn('Mermaid render:', e); } }
 
   const ls = document.getElementById('logScroll');
   if (ls) ls.scrollTop = ls.scrollHeight;

@@ -719,10 +719,12 @@ def _extract_source(src_el: etree._Element) -> dict:
             "length":   f.get("LENGTH", ""),
         })
     result = {
-        "name":    src_el.get("NAME", ""),
-        "db_type": src_el.get("DATABASETYPE", ""),
-        "owner":   src_el.get("OWNERNAME", ""),
-        "fields":  fields,
+        "name":        src_el.get("NAME", ""),
+        "db_type":     src_el.get("DATABASETYPE", ""),
+        "owner":       src_el.get("OWNERNAME", ""),
+        "db_name":     src_el.get("DBDNAME", ""),
+        "description": src_el.get("DESCRIPTION", ""),
+        "fields":      fields,
     }
 
     # For flat file sources Informatica stores file metadata on the SOURCE
@@ -750,10 +752,12 @@ def _extract_target(tgt_el: etree._Element) -> dict:
             "length":   f.get("LENGTH", ""),
         })
     return {
-        "name":    tgt_el.get("NAME", ""),
-        "db_type": tgt_el.get("DATABASETYPE", ""),
-        "owner":   tgt_el.get("OWNERNAME", ""),
-        "fields":  fields,
+        "name":        tgt_el.get("NAME", ""),
+        "db_type":     tgt_el.get("DATABASETYPE", ""),
+        "owner":       tgt_el.get("OWNERNAME", ""),
+        "db_name":     tgt_el.get("DBDNAME", ""),
+        "description": tgt_el.get("DESCRIPTION", ""),
+        "fields":      fields,
     }
 
 

@@ -235,3 +235,395 @@ async def download_output_zip(job_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ─────────────────────────────────────────────
+# DOCX export for analyst docs (3a / 3b)
+# ─────────────────────────────────────────────
+
+def _md_to_docx_bytes(md_text: str, title: str, mapping_name: str = "", tier: str = "") -> bytes:
+    """Convert markdown text to a polished, visually appealing DOCX document."""
+    import io as _io
+    import re as _re
+    from datetime import datetime
+    from docx import Document
+    from docx.shared import Pt, Inches, RGBColor, Cm, Emu
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn, nsdecls
+    from docx.oxml import parse_xml
+
+    # Colour palette
+    C_NAVY    = RGBColor(0x1e, 0x3a, 0x5f)
+    C_DARK    = RGBColor(0x1e, 0x29, 0x3b)
+    C_BODY    = RGBColor(0x33, 0x41, 0x55)
+    C_MUTED   = RGBColor(0x64, 0x74, 0x8b)
+    C_CODE    = RGBColor(0x4f, 0x46, 0xe5)   # indigo
+    C_WARN    = RGBColor(0x92, 0x40, 0x0e)   # amber-800
+    C_WHITE   = RGBColor(0xff, 0xff, 0xff)
+
+    HEADER_BG = "1e3a5f"
+    STRIPE_BG = "f8fafc"
+    BORDER_CLR = "cbd5e1"
+
+    doc = Document()
+
+    # ── Global styles ──
+    style_normal = doc.styles["Normal"]
+    style_normal.font.name = "Calibri"
+    style_normal.font.size = Pt(10)
+    style_normal.font.color.rgb = C_BODY
+    style_normal.paragraph_format.space_after = Pt(5)
+    style_normal.paragraph_format.line_spacing = 1.25
+
+    for lvl, (sz, clr) in {0: (22, C_DARK), 1: (16, C_NAVY), 2: (13, C_NAVY), 3: (11, C_BODY)}.items():
+        hs = doc.styles[f"Heading {lvl + 1}" if lvl else "Title"]
+        hs.font.name = "Calibri"
+        hs.font.size = Pt(sz)
+        hs.font.color.rgb = clr
+        hs.font.bold = True
+
+    # ── Margins ──
+    for section in doc.sections:
+        section.top_margin = Cm(2.0)
+        section.bottom_margin = Cm(2.0)
+        section.left_margin = Cm(2.5)
+        section.right_margin = Cm(2.5)
+
+    # ── Cover / Title block ──
+    p_title = doc.add_paragraph()
+    p_title.paragraph_format.space_after = Pt(4)
+    run = p_title.add_run(title)
+    run.font.size = Pt(22)
+    run.font.color.rgb = C_DARK
+    run.bold = True
+
+    if mapping_name:
+        p_sub = doc.add_paragraph()
+        p_sub.paragraph_format.space_after = Pt(2)
+        run = p_sub.add_run(mapping_name)
+        run.font.size = Pt(11)
+        run.font.color.rgb = C_MUTED
+
+    # Metadata line
+    p_meta = doc.add_paragraph()
+    p_meta.paragraph_format.space_before = Pt(8)
+    p_meta.paragraph_format.space_after = Pt(16)
+    meta_parts = [f"Generated: {datetime.now().strftime('%B %d, %Y')}"]
+    if tier:
+        meta_parts.append(f"Complexity: {tier.upper()}")
+    meta_parts.append("Informatica Conversion Platform")
+    run = p_meta.add_run("  |  ".join(meta_parts))
+    run.font.size = Pt(8)
+    run.font.color.rgb = C_MUTED
+
+    # Divider line
+    p_div = doc.add_paragraph()
+    p_div.paragraph_format.space_after = Pt(12)
+    pPr = p_div._p.get_or_add_pPr()
+    pBdr = parse_xml(f'<w:pBdr {nsdecls("w")}><w:bottom w:val="single" w:sz="12" w:space="1" w:color="{HEADER_BG}"/></w:pBdr>')
+    pPr.append(pBdr)
+
+    # ── Helper: add inline-formatted runs to a paragraph ──
+    def _add_rich_runs(para, text):
+        parts = _re.split(r"(\*\*[^*]+\*\*|`[^`]+`)", text)
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("**") and part.endswith("**"):
+                r = para.add_run(part[2:-2])
+                r.bold = True
+                r.font.color.rgb = C_DARK
+            elif part.startswith("`") and part.endswith("`"):
+                r = para.add_run(part[1:-1])
+                r.font.name = "Consolas"
+                r.font.size = Pt(9)
+                r.font.color.rgb = C_CODE
+            else:
+                r = para.add_run(part)
+
+    # ── Helper: style a table ──
+    def _style_table(table, rows):
+        table.alignment = WD_TABLE_ALIGNMENT.LEFT
+        # Set border on table
+        tbl = table._tbl
+        tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+        borders = parse_xml(
+            f'<w:tblBorders {nsdecls("w")}>'
+            f'<w:top w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'<w:left w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'<w:bottom w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'<w:right w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'<w:insideH w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'<w:insideV w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+            f'</w:tblBorders>'
+        )
+        tblPr.append(borders)
+
+        ncols = max(len(r) for r in rows)
+        for ri, row_cells in enumerate(rows):
+            for ci, cell_text in enumerate(row_cells):
+                if ci >= ncols:
+                    continue
+                cell = table.rows[ri].cells[ci]
+                cell.text = ""
+                p = cell.paragraphs[0]
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(2)
+
+                # Header row
+                if ri == 0:
+                    shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{HEADER_BG}" w:val="clear"/>')
+                    cell._tc.get_or_add_tcPr().append(shading)
+                    r = p.add_run(cell_text.upper() if len(cell_text) < 30 else cell_text)
+                    r.bold = True
+                    r.font.size = Pt(7.5)
+                    r.font.color.rgb = C_WHITE
+                    r.font.name = "Calibri"
+                # Striped body rows
+                elif ri % 2 == 0:
+                    shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{STRIPE_BG}" w:val="clear"/>')
+                    cell._tc.get_or_add_tcPr().append(shading)
+                    _add_rich_runs(p, cell_text)
+                    for r in p.runs:
+                        r.font.size = Pt(8.5)
+                else:
+                    _add_rich_runs(p, cell_text)
+                    for r in p.runs:
+                        r.font.size = Pt(8.5)
+
+    # ── Main document body ──
+    lines = md_text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Headings
+        if stripped.startswith("### "):
+            h = doc.add_heading(stripped[4:], level=3)
+            h.paragraph_format.space_before = Pt(14)
+            h.paragraph_format.space_after = Pt(6)
+        elif stripped.startswith("## "):
+            h = doc.add_heading(stripped[3:], level=2)
+            h.paragraph_format.space_before = Pt(20)
+            h.paragraph_format.space_after = Pt(8)
+            # Add subtle bottom border
+            pPr = h._p.get_or_add_pPr()
+            pBdr = parse_xml(f'<w:pBdr {nsdecls("w")}><w:bottom w:val="single" w:sz="6" w:space="2" w:color="{BORDER_CLR}"/></w:pBdr>')
+            pPr.append(pBdr)
+        elif stripped.startswith("# "):
+            h = doc.add_heading(stripped[2:], level=1)
+            h.paragraph_format.space_before = Pt(24)
+        elif stripped.startswith("---"):
+            pass  # skip
+
+        # Tables
+        elif stripped.startswith("|") and "|" in stripped[1:]:
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                table_lines.append(lines[i].strip())
+                i += 1
+            i -= 1
+
+            rows = []
+            for tl in table_lines:
+                cells = [c.strip() for c in tl.strip("|").split("|")]
+                if all(_re.match(r"^[-:]+$", c) for c in cells):
+                    continue
+                rows.append(cells)
+
+            if rows:
+                ncols = max(len(r) for r in rows)
+                table = doc.add_table(rows=len(rows), cols=ncols)
+                _style_table(table, rows)
+
+        # Code blocks
+        elif stripped.startswith("```"):
+            lang = stripped[3:].strip().lower()
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+
+            if lang == "mermaid":
+                # Build node ID → label map from all lines first
+                node_labels = {}
+                for cl in code_lines:
+                    for nm in _re.finditer(r'(\w+)\[([^\]]+)\]', cl):
+                        node_labels[nm.group(1)] = nm.group(2)
+
+                def _lbl(nid):
+                    return node_labels.get(nid, nid)
+
+                # Parse flow connections
+                flow_steps = []
+                for cl in code_lines:
+                    cl = cl.strip()
+                    if not cl or cl.startswith("graph ") or cl.startswith("%%"):
+                        continue
+                    # Match arrows: A --> B, A -.-> B, A -->|label| B
+                    arrow_m = _re.match(
+                        r'\s*(\w+)(?:\[[^\]]*\])?\s*(?:-+\.?->?|==+>)\s*(?:\|([^|]*)\|)?\s*(\w+)(?:\[[^\]]*\])?',
+                        cl
+                    )
+                    if arrow_m:
+                        src = _lbl(arrow_m.group(1))
+                        edge_label = arrow_m.group(2)
+                        tgt = _lbl(arrow_m.group(3))
+                        if edge_label:
+                            flow_steps.append(f"{src}  \u2192  {tgt}  ({edge_label})")
+                        else:
+                            flow_steps.append(f"{src}  \u2192  {tgt}")
+
+                # Render as styled flow box
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(10)
+                p.paragraph_format.space_after = Pt(4)
+                pPr = p._p.get_or_add_pPr()
+                pBdr = parse_xml(
+                    f'<w:pBdr {nsdecls("w")}>'
+                    f'<w:top w:val="single" w:sz="6" w:color="{HEADER_BG}"/>'
+                    f'<w:left w:val="single" w:sz="6" w:color="{HEADER_BG}"/>'
+                    f'<w:bottom w:val="single" w:sz="6" w:color="{HEADER_BG}"/>'
+                    f'<w:right w:val="single" w:sz="6" w:color="{HEADER_BG}"/>'
+                    f'</w:pBdr>'
+                )
+                pPr.append(pBdr)
+                shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="f0f4ff" w:val="clear"/>')
+                pPr.append(shd)
+                r = p.add_run("  \u25B6  Data Flow Diagram")
+                r.bold = True
+                r.font.size = Pt(9.5)
+                r.font.color.rgb = C_NAVY
+
+                if flow_steps:
+                    for step in flow_steps:
+                        sp = doc.add_paragraph(style="List Bullet")
+                        sp.paragraph_format.space_after = Pt(1)
+                        sr = sp.add_run(step)
+                        sr.font.size = Pt(8.5)
+                        sr.font.color.rgb = C_BODY
+                else:
+                    # Fallback: show mermaid source formatted
+                    p2 = doc.add_paragraph()
+                    p2.paragraph_format.space_after = Pt(6)
+                    r2 = p2.add_run("\n".join(code_lines))
+                    r2.font.name = "Consolas"
+                    r2.font.size = Pt(7.5)
+                    r2.font.color.rgb = C_MUTED
+            else:
+                # Styled code block with left accent bar
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(6)
+                p.paragraph_format.space_after = Pt(6)
+                pPr = p._p.get_or_add_pPr()
+                pBdr = parse_xml(
+                    f'<w:pBdr {nsdecls("w")}>'
+                    f'<w:left w:val="single" w:sz="16" w:space="8" w:color="6366f1"/>'
+                    f'<w:top w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+                    f'<w:bottom w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+                    f'<w:right w:val="single" w:sz="4" w:color="{BORDER_CLR}"/>'
+                    f'</w:pBdr>'
+                )
+                pPr.append(pBdr)
+                shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="f8fafc" w:val="clear"/>')
+                pPr.append(shd)
+                if lang and lang != "mermaid":
+                    r_lang = p.add_run(f"  {lang.upper()}\n")
+                    r_lang.font.size = Pt(6.5)
+                    r_lang.font.color.rgb = C_MUTED
+                    r_lang.bold = True
+                r = p.add_run("\n".join(code_lines))
+                r.font.name = "Consolas"
+                r.font.size = Pt(8)
+                r.font.color.rgb = C_BODY
+
+        # Blockquotes (warnings / notes)
+        elif stripped.startswith(">"):
+            text = _re.sub(r"^>\s*", "", stripped)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(6)
+            pPr = p._p.get_or_add_pPr()
+            pBdr = parse_xml(
+                f'<w:pBdr {nsdecls("w")}>'
+                f'<w:left w:val="single" w:sz="16" w:space="8" w:color="f59e0b"/>'
+                f'</w:pBdr>'
+            )
+            pPr.append(pBdr)
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="fffbeb" w:val="clear"/>')
+            pPr.append(shd)
+            _add_rich_runs(p, text)
+            for r in p.runs:
+                r.font.size = Pt(9)
+
+        # Bullet lists
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            text = stripped[2:]
+            p = doc.add_paragraph(style="List Bullet")
+            _add_rich_runs(p, text)
+
+        # Numbered lists
+        elif _re.match(r"^\d+\.\s", stripped):
+            text = _re.sub(r"^\d+\.\s", "", stripped)
+            p = doc.add_paragraph(style="List Number")
+            _add_rich_runs(p, text)
+
+        # Regular paragraph with inline formatting
+        elif stripped:
+            p = doc.add_paragraph()
+            _add_rich_runs(p, stripped)
+
+        i += 1
+
+    # ── Footer ──
+    p_foot = doc.add_paragraph()
+    p_foot.paragraph_format.space_before = Pt(24)
+    pPr = p_foot._p.get_or_add_pPr()
+    pBdr = parse_xml(f'<w:pBdr {nsdecls("w")}><w:top w:val="single" w:sz="6" w:space="4" w:color="{BORDER_CLR}"/></w:pBdr>')
+    pPr.append(pBdr)
+    r = p_foot.add_run(f"Generated by Informatica Conversion Tool  |  {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Confidential")
+    r.font.size = Pt(7.5)
+    r.font.color.rgb = C_MUTED
+
+    buf = _io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+@router.get("/jobs/{job_id}/doc/{doc_key}.docx")
+async def download_doc_docx(job_id: str, doc_key: str):
+    """Download analyst_view_md or analyst_gaps_md as a styled DOCX."""
+    import io as _io
+
+    ALLOWED = {
+        "analyst_view": ("analyst_view_md", "Systems Requirements"),
+        "analyst_gaps": ("analyst_gaps_md", "Gaps & Review Findings"),
+    }
+    if doc_key not in ALLOWED:
+        raise HTTPException(400, f"Invalid doc_key: {doc_key}. Allowed: {list(ALLOWED)}")
+
+    state_key, title = ALLOWED[doc_key]
+    job = await db.get_job(job_id)
+    if not job:
+        _validate_job_id(job_id)
+        raise HTTPException(404, "Job not found")
+
+    state = job.get("state", {})
+    md_text = state.get(state_key, "")
+    if not md_text:
+        raise HTTPException(404, f"{state_key} not available for this job.")
+
+    safe = _safe_filename(job.get("filename", job_id).replace(".xml", ""))
+    mapping_name = job.get("filename", "").replace(".xml", "")
+    tier = state.get("complexity", {}).get("tier", "")
+    docx_bytes = _md_to_docx_bytes(md_text, title, mapping_name=mapping_name, tier=tier)
+
+    suffix = "systems_requirements" if doc_key == "analyst_view" else "gaps_review"
+    return StreamingResponse(
+        _io.BytesIO(docx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe}_{suffix}.docx"'},
+    )

@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Informatica Conversion Tool</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <script>
+    // Apply saved theme immediately to prevent flash
+    (function(){
+      var t = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
 </head>
 <body>
 <!-- ── Toast notification container ──────────────────────────────────── -->
@@ -103,16 +110,6 @@
 
     </div>
 
-    <!-- Sign out at bottom -->
-    <div style="margin-top:8px">
-      <a href="/logout" style="text-decoration:none">
-        <button style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--border);background:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:color .15s,border-color .15s,background .15s"
-                onmouseover="this.style.color='var(--danger)';this.style.borderColor='var(--danger)';this.style.background='rgba(248,113,113,.06)'"
-                onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)';this.style.background='none'">
-          ↩ Sign out
-        </button>
-      </a>
-    </div>
   </aside>
 
   <!-- ── Main Panel ───────────────────────── -->
@@ -156,6 +153,9 @@
           <div class="persona-chip-role" id="personaRoleNav">–</div>
         </div>
       </div>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark / light mode" style="width:auto;padding:6px 10px;margin-right:4px">
+        <span class="theme-toggle-icon" id="themeIcon">🌙</span>
+      </button>
       <a href="/logout"><button class="logout-btn">Sign out</button></a>
     </nav>
 
@@ -572,14 +572,54 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <!-- marked.js — used to render USER_GUIDE.md in the Guide panel -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<!-- mermaid.js — renders Mermaid flowcharts in documentation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark' ? 'dark' : 'default',
+    themeVariables: { fontSize: '12px' }
+  });
+  // Re-render mermaid diagrams after doc content is inserted
+  window.renderMermaid = function() {
+    document.querySelectorAll('.doc-content pre code.language-mermaid').forEach(function(el) {
+      var pre = el.parentElement;
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = el.textContent;
+      pre.replaceWith(div);
+    });
+    mermaid.run();
+  };
+</script>
+
+<!-- Theme toggle -->
+<script>
+function toggleTheme() {
+  var current = document.documentElement.getAttribute('data-theme') || 'dark';
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  updateThemeUI(next);
+}
+function updateThemeUI(t) {
+  var icon = document.getElementById('themeIcon');
+  var label = document.getElementById('themeLabel');
+  if (icon) icon.textContent = t === 'dark' ? '\u{1F319}' : '\u{2600}\u{FE0F}';
+  if (label) label.textContent = t === 'dark' ? 'Dark' : 'Light';
+}
+document.addEventListener('DOMContentLoaded', function() {
+  updateThemeUI(document.documentElement.getAttribute('data-theme') || 'dark');
+});
+</script>
 
 <!-- Application scripts (dependency order) -->
-<script src="/static/js/api.js?v=5"></script>
-<script src="/static/js/upload.js?v=5"></script>
-<script src="/static/js/jobs.js?v=8"></script>
-<script src="/static/js/gates.js?v=5"></script>
-<script src="/static/js/batch.js?v=5"></script>
-<script src="/static/js/app.js?v=5"></script>
+<script src="/static/js/api.js?v=6"></script>
+<script src="/static/js/upload.js?v=6"></script>
+<script src="/static/js/jobs.js?v=9"></script>
+<script src="/static/js/gates.js?v=6"></script>
+<script src="/static/js/batch.js?v=6"></script>
+<script src="/static/js/app.js?v=6"></script>
 
 <!-- ── S2T Full Mapping Modal ───────────────────────────────────── -->
 <div id="s2tModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px">
