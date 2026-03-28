@@ -23,7 +23,7 @@
     <ATTRIBUTE NAME="Recovery Strategy" VALUE="Resume from the last checkpoint"/>
   </TASK>
     <TASK DESCRIPTION="Pre-session staging cleanup" ISREUSABLE="NO" NAME="CMD_PRE_SESSION" REUSABLE="NO" TYPE="Command" VERSIONNUMBER="1">
-    <ATTRIBUTE NAME="command" VALUE="sqlplus $$DB_USER/$$DB_PASS@NEXUS_DWH @$$SQL_DIR/truncate_staging.sql"/>
+    <ATTRIBUTE NAME="command" VALUE="sqlcmd -S $$DB_HOST -d NEXUS_DWH -U $$DB_USER -P $$DB_PASS -i $$SQL_DIR/truncate_staging.sql"/>
   </TASK>
   <TASK DESCRIPTION="Failure notification" ISREUSABLE="NO" NAME="EMAIL_ON_FAILURE" REUSABLE="NO" TYPE="Email" VERSIONNUMBER="1">
     <ATTRIBUTE NAME="email_address" VALUE="$$DL_ETL_SUPPORT"/>

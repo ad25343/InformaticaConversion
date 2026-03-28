@@ -69,6 +69,12 @@
     <TABLEATTRIBUTE NAME="Lookup Policy on Multiple Match" VALUE="Use first value"/>
     <TABLEATTRIBUTE NAME="Cache Directory" VALUE="$PMCacheDir"/>
     <TABLEATTRIBUTE NAME="Cache Size" VALUE="Auto"/>
+  
+    <TABLEATTRIBUTE NAME="Lookup condition" VALUE="DIM_PRODUCT.PRODUCT_ID = IN_PRODUCT_ID"/>
+    <TABLEATTRIBUTE NAME="Lookup Policy on Multiple Match" VALUE="Use First Value"/>
+    <TABLEATTRIBUTE NAME="Lookup cache directory name" VALUE="$PMCacheDir"/>
+    <TABLEATTRIBUTE NAME="Lookup cache persistent" VALUE="YES"/>
+    <TABLEATTRIBUTE NAME="Lookup Cache Size" VALUE="5000000"/>
   </TRANSFORMATION>
 
   <!-- Expression — compute incoming hash and SCD2 control columns -->
