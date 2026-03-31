@@ -463,14 +463,23 @@ def _md_to_docx_bytes(md_text: str, title: str, mapping_name: str = "", tier: st
                     cl = cl.strip()
                     if not cl or cl.startswith("graph ") or cl.startswith("%%"):
                         continue
-                    # Match arrows: A --> B, A -.-> B, A -->|label| B
+                    # Normalize arrow syntax to extract: src, edge_label, tgt
+                    # Handles: -->, -.-> , -.text.->, ==>, -->|label|
+                    edge_label = None
+                    # Extract dotted-arrow text like -.lookup.->
+                    dot_m = _re.search(r'-\.([^.]+)\.->', cl)
+                    if dot_m:
+                        edge_label = dot_m.group(1).strip()
+                    # Normalize all arrow variants to -->
+                    normalized = _re.sub(r'-+(?:\.[^.]*\.)?->?', '-->', cl)
+                    normalized = _re.sub(r'==+>', '-->', normalized)
                     arrow_m = _re.match(
-                        r'\s*(\w+)(?:\[[^\]]*\])?\s*(?:-+\.?->?|==+>)\s*(?:\|([^|]*)\|)?\s*(\w+)(?:\[[^\]]*\])?',
-                        cl
+                        r'\s*(\w+)(?:\[[^\]]*\])?\s*-->\s*(?:\|([^|]*)\|)?\s*(\w+)(?:\[[^\]]*\])?',
+                        normalized
                     )
                     if arrow_m:
                         src = _lbl(arrow_m.group(1))
-                        edge_label = arrow_m.group(2)
+                        edge_label = edge_label or arrow_m.group(2)
                         tgt = _lbl(arrow_m.group(3))
                         if edge_label:
                             flow_steps.append(f"{src}  \u2192  {tgt}  ({edge_label})")
