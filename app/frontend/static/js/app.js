@@ -424,17 +424,18 @@ function downloadStatePdf(stateKey, suffix, title) {
     table {
       border-collapse: collapse; width: 100%; margin: 10px 0 16px;
       font-size: 8.5pt; border: 1px solid #cbd5e1; border-radius: 6px;
+      table-layout: fixed; word-wrap: break-word;
     }
     thead th {
       background: linear-gradient(180deg, #f1f5f9 0%, #e8edf3 100%);
       color: #1e3a5f; font-weight: 600; text-transform: uppercase;
       font-size: 7.5pt; letter-spacing: .4px;
-      padding: 7px 10px; border-bottom: 2px solid #cbd5e1;
-      text-align: left;
+      padding: 7px 8px; border-bottom: 2px solid #cbd5e1;
+      text-align: left; overflow-wrap: break-word;
     }
     td {
-      padding: 5px 10px; border-bottom: 1px solid #e2e8f0;
-      color: #334155; vertical-align: top;
+      padding: 5px 8px; border-bottom: 1px solid #e2e8f0;
+      color: #334155; vertical-align: top; overflow-wrap: break-word;
     }
     tbody tr:nth-child(even) { background: #f8fafc; }
     tbody tr:hover { background: #f1f5f9; }
@@ -481,9 +482,12 @@ function downloadStatePdf(stateKey, suffix, title) {
       .cover { padding-top: 20px; }
       h2 { break-after: avoid; }
       h3 { break-after: avoid; }
-      pre, table, .mermaid, blockquote { break-inside: avoid; }
+      pre, .mermaid, blockquote { break-inside: avoid; }
+      table { font-size: 7.5pt; table-layout: fixed; width: 100%; }
+      thead th { font-size: 6.5pt; padding: 5px 5px; }
+      td { padding: 4px 5px; font-size: 7.5pt; }
       tbody tr:hover { background: inherit; }
-      @page { margin: 0.6in 0.65in; size: A4; }
+      @page { margin: 0.6in 0.55in; size: A4; }
       @page :first { margin-top: 0.4in; }
     }
   </style>
