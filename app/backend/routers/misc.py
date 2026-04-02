@@ -272,7 +272,7 @@ async def export_progress_csv():
 
 
 # ─────────────────────────────────────────────
-# Test Runner  (admin only — persona: Asin D)
+# Test Runner  (admin only — persona: Alex Rivera)
 # ─────────────────────────────────────────────
 
 _SUITE_FILES = {
@@ -402,11 +402,11 @@ def _parse_suites(suites_str: str) -> tuple[list[str], list[str]]:
 async def run_tests(request: Request, suites: str = ""):
     """
     SSE stream that runs the selected Playwright suites and streams output
-    line-by-line.  Admin-only: requires persona cookie == 'Asin D'.
+    line-by-line.  Admin-only: requires persona cookie == 'Alex Rivera'.
     """
     from urllib.parse import unquote as _unquote
     persona = _unquote(request.cookies.get("persona", ""))
-    if persona != "Asin D":
+    if persona != "Alex Rivera":
         raise HTTPException(403, "Test runner is restricted to the admin persona.")
 
     selected, spec_paths = _parse_suites(suites)
