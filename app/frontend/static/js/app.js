@@ -182,12 +182,11 @@ function initPersonaUI() {
   if (snm) snm.textContent = name;
   if (srl) srl.textContent = meta.role;
 
-  const firstName = name.split(' ')[0];
   const greet = document.getElementById('landingGreeting');
   if (greet) {
     const hour = new Date().getHours();
     const tod = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-    greet.textContent = `${tod}, ${firstName} 👋`;
+    greet.textContent = `${tod} 👋`;
   }
 
   const sn = document.getElementById('submitterName');

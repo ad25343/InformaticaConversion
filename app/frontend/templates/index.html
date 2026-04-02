@@ -72,14 +72,10 @@
       </div>
       <div class="logo-sub" onclick="setMainView('landing')" title="Go to home" style="cursor:pointer">PowerCenter Converter</div>
     </div>
-    <!-- Compact user tag -->
-    <div style="display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;background:var(--surface2);border:1px solid var(--border)">
-      <div id="sidebarAvatar" style="width:22px;height:22px;border-radius:50%;background:rgba(108,99,255,.25);color:#a5b4fc;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0">?</div>
-      <div style="min-width:0;flex:1">
-        <div id="sidebarName" style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2">User</div>
-        <div id="sidebarRole" style="font-size:10px;color:var(--muted);line-height:1.2">–</div>
-      </div>
-    </div>
+    <!-- hidden sidebar persona refs kept for JS logic -->
+    <span id="sidebarAvatar" style="display:none"></span>
+    <span id="sidebarName" style="display:none"></span>
+    <span id="sidebarRole" style="display:none"></span>
     <hr/>
 
     <!-- ── Running now ──────────────────────── -->
@@ -145,24 +141,20 @@
               style="margin-left:auto;margin-right:8px;padding:6px 12px;font-size:12px;font-weight:600;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">
         🔍 <span>Search jobs</span> <span style="font-size:10px;opacity:.6;font-weight:400">⌘K</span>
       </button>
-      <!-- Persona chip (right side) -->
-      <div class="persona-chip" id="personaChip" title="Signed in as…">
-        <div class="persona-avatar-sm" id="personaAvatarNav">?</div>
-        <div>
-          <div class="persona-chip-name" id="personaNameNav">User</div>
-          <div class="persona-chip-role" id="personaRoleNav">–</div>
-        </div>
-      </div>
+      <!-- hidden persona refs kept for JS audit/admin logic -->
+      <span id="personaAvatarNav" style="display:none"></span>
+      <span id="personaNameNav" style="display:none"></span>
+      <span id="personaRoleNav" style="display:none"></span>
       <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark / light mode" style="width:auto;padding:6px 10px;margin-right:4px">
         <span class="theme-toggle-icon" id="themeIcon">🌙</span>
       </button>
-      <a href="/logout"><button class="logout-btn">Sign out</button></a>
+      <a href="/logout"><button class="logout-btn">Switch profile</button></a>
     </nav>
 
     <!-- ── Landing page ── -->
     <div id="panelLanding" style="display:none;flex:1;overflow-y:auto">
       <div class="landing-wrap">
-        <div class="landing-greeting" id="landingGreeting">Welcome back</div>
+        <div class="landing-greeting" id="landingGreeting">Welcome 👋</div>
         <div class="landing-sub">What would you like to do today?</div>
 
         <!-- Action cards -->
