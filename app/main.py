@@ -31,11 +31,10 @@ from backend.db.database import init_db, DB_PATH
 from backend.routes import router
 from backend.logger import configure_app_logging
 from backend.auth import (
-    is_authenticated, check_password,
+    is_authenticated,
     create_session_token, COOKIE_NAME, SESSION_HOURS,
     SECRET_KEY,
 )
-from backend.limiter import login_limiter
 from backend.cleanup import run_cleanup_loop, run_watchdog_loop
 
 _startup_log = logging.getLogger("conversion.startup")
@@ -321,39 +320,34 @@ _VALID_PERSONAS = {
 @app.post("/login")
 async def login_submit(
     request: Request,
-    password: str = Form(...),
-    persona:  str = Form(default=""),
+    persona: str = Form(default=""),
 ):
-    # Check failed-attempt rate limit before processing (successful logins never count)
-    await login_limiter.check(request)
+    # Validate persona — redirect back if none selected
+    safe_persona = persona.strip() if persona.strip() in _VALID_PERSONAS else ""
+    if not safe_persona:
+        return RedirectResponse("/login", status_code=302)
 
-    if check_password(password):
-        token = create_session_token()
-        response = RedirectResponse("/", status_code=302)
-        response.set_cookie(
-            key=COOKIE_NAME,
-            value=token,
-            httponly=True,
-            samesite="lax",
-            max_age=SESSION_HOURS * 3600,
-            secure=_cfg.https,
-        )
-        # Store persona in a JS-readable cookie (not httponly) so the UI can
-        # display the current user's name without a round-trip.
-        safe_persona = persona.strip() if persona.strip() in _VALID_PERSONAS else "User"
-        response.set_cookie(
-            key="persona",
-            value=urllib.parse.quote(safe_persona),  # URL-encode to avoid RFC-2109 auto-quoting of spaces
-            httponly=False,      # readable by JS
-            samesite="lax",
-            max_age=SESSION_HOURS * 3600,
-            secure=_cfg.https,
-        )
-        return response
-
-    # Wrong password — record this failure toward the rate limit
-    await login_limiter.record_failure(request)
-    return RedirectResponse("/login?error=1", status_code=302)
+    token = create_session_token()
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_HOURS * 3600,
+        secure=_cfg.https,
+    )
+    # Store persona in a JS-readable cookie (not httponly) so the UI can
+    # display the current user's name without a round-trip.
+    response.set_cookie(
+        key="persona",
+        value=urllib.parse.quote(safe_persona),  # URL-encode to avoid RFC-2109 auto-quoting of spaces
+        httponly=False,      # readable by JS
+        samesite="lax",
+        max_age=SESSION_HOURS * 3600,
+        secure=_cfg.https,
+    )
+    return response
 
 
 @app.get("/logout")

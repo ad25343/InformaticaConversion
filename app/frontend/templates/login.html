@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Informatica Conversion Tool — Sign In</title>
+  <title>Informatica Conversion Tool — Select Profile</title>
   <script>
     (function(){ var t=localStorage.getItem('theme')||'dark'; document.documentElement.setAttribute('data-theme',t); })();
   </script>
@@ -57,14 +57,12 @@
     h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
     .subtitle { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
 
-    /* ── Form ── */
+    /* ── Persona pick list ── */
     .field { margin-bottom: 16px; }
-    label {
+    label.field-label {
       display: block; font-size: 12px; color: var(--muted);
       font-weight: 600; margin-bottom: 7px; letter-spacing: .2px;
     }
-
-    /* Persona pick list */
     .persona-grid {
       display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;
     }
@@ -93,30 +91,16 @@
     }
     .persona-option.selected .persona-check { opacity: 1; }
 
-    input[type="password"] {
-      width: 100%; padding: 11px 14px;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 9px; color: var(--text); font-size: 14px; outline: none;
-      transition: border-color .2s;
-    }
-    input[type="password"]:focus { border-color: var(--accent); }
-
     .submit-btn {
       width: 100%; padding: 12px; background: var(--accent);
       border: none; border-radius: 9px; color: #fff;
       font-size: 14px; font-weight: 600; cursor: pointer;
-      transition: opacity .15s, transform .1s; margin-top: 20px;
-      letter-spacing: .2px;
+      transition: opacity .15s, transform .1s;
+      letter-spacing: .2px; opacity: .45; pointer-events: none;
     }
+    .submit-btn.active { opacity: 1; pointer-events: auto; }
     .submit-btn:hover  { opacity: .88; }
     .submit-btn:active { transform: scale(.98); }
-
-    .error {
-      background: rgba(248,113,113,.1); border: 1px solid var(--danger);
-      color: var(--danger); border-radius: 8px; padding: 10px 14px;
-      font-size: 13px; margin-bottom: 18px; display: none;
-    }
-    .error.show { display: block; }
 
     .footer {
       text-align: center; font-size: 11px; color: var(--muted);
@@ -137,21 +121,18 @@
     </div>
   </div>
 
-  <h1>Sign in</h1>
-  <p class="subtitle">Select your profile and enter the access password.</p>
-
-  <div class="error" id="errorMsg">Incorrect password — please try again.</div>
+  <h1>Who are you?</h1>
+  <p class="subtitle">Select your profile to continue.</p>
 
   <form method="POST" action="/login" id="loginForm">
 
-    <!-- ── Persona pick list ── -->
     <div class="field">
-      <label>Who are you?</label>
+      <label class="field-label">Select your profile</label>
       <div class="persona-grid" id="personaGrid">
 
         <label class="persona-option" id="opt0">
           <input type="radio" name="persona" value="Alex Rivera"/>
-          <div class="persona-avatar" style="background:rgba(108,99,255,.2);color:#a5b4fc">AD</div>
+          <div class="persona-avatar" style="background:rgba(108,99,255,.2);color:#a5b4fc">AR</div>
           <div class="persona-info">
             <div class="persona-name">Alex Rivera</div>
             <div class="persona-role">Data Engineer · Submitter</div>
@@ -202,30 +183,19 @@
       </div>
     </div>
 
-    <!-- ── Password ── -->
-    <div class="field">
-      <label for="password">Access Password</label>
-      <input type="password" id="password" name="password"
-             placeholder="Enter password" autocomplete="current-password"/>
-    </div>
-
-    <button type="submit" class="submit-btn">Sign in →</button>
+    <button type="submit" class="submit-btn" id="submitBtn">Continue →</button>
   </form>
 
   <div class="footer">Informatica Conversion Tool · Internal</div>
 </div>
 
 <script>
-  // Show error if redirected back with ?error=1
-  if (new URLSearchParams(window.location.search).get('error')) {
-    document.getElementById('errorMsg').classList.add('show');
-  }
-
-  // Persona selection highlight
+  // Enable button only when a persona is selected
   document.querySelectorAll('.persona-option input[type="radio"]').forEach(radio => {
     radio.addEventListener('change', () => {
       document.querySelectorAll('.persona-option').forEach(opt => opt.classList.remove('selected'));
       radio.closest('.persona-option').classList.add('selected');
+      document.getElementById('submitBtn').classList.add('active');
     });
   });
 </script>
