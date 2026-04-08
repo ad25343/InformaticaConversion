@@ -201,6 +201,38 @@ class Settings(BaseSettings):
     # Update when Anthropic promotes a newer beta.
     extended_output_beta: str = "output-128k-2025-02-19"
 
+    # ── Enterprise AI Gateway (optional) ────────────────────────────────────
+    # Set USE_API_GATEWAY=true to route all Claude API calls through your
+    # enterprise gateway (Bedrock, Apigee, Azure APIM, etc.) instead of
+    # calling the Anthropic API directly.
+    #
+    # When false (default) every setting in this section is completely ignored
+    # and the existing AsyncAnthropic code path runs unchanged.
+    use_api_gateway: bool = False
+
+    # Full inference endpoint URL of the gateway.
+    ai_gw_url: str = ""
+
+    # Static API key / bearer token accepted by the gateway.
+    # Used as the x-api-key header on every request.
+    ai_key: str = ""
+
+    # OAuth2 client-credentials grant — leave both empty to skip token fetch.
+    # When set, the client fetches a bearer token and adds Authorization: Bearer <token>.
+    client_id: str = ""
+    client_secret: str = ""
+
+    # Model identifier sent inside the request body to the gateway.
+    # May differ from claude_model (e.g. a Bedrock ARN or an Apigee model alias).
+    model_id: str = ""
+
+    # Number of retry attempts for gateway calls (default matches Anthropic path).
+    no_of_retries: int = 3
+
+    # Log the full request body and first 500 chars of the response for debugging.
+    # Do NOT enable in production — responses contain customer data.
+    enable_trace: bool = False
+
 
 # Single shared instance — imported by all modules
 settings = Settings()
