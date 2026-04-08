@@ -86,12 +86,8 @@ class _GatewayMessage:
 
 def _extract_gateway_text(response_data: dict) -> str:
     """Extract the model's text from an OpenAI-compatible gateway response."""
-    return (
-        response_data
-        .get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
+    choices = response_data.get("choices") or [{}]
+    return choices[0].get("message", {}).get("content", "")
 
 
 def _build_gateway_body(**kwargs) -> dict:

@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
-        extra="ignore",       # silently ignore unknown env vars
+        extra="ignore",                        # silently ignore unknown env vars
+        protected_namespaces=("settings_",),   # allow model_id field without warning
     )
 
     # ── Claude API ──────────────────────────────────────────────────────────
