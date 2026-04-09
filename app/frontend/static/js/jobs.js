@@ -429,7 +429,7 @@ function renderJobPanel(job) {
                   onblur="setTimeout(()=>this.closest('.report-dropdown').classList.remove('open'),150)">
             📄 Complete Report ▾
           </button>
-          <div class="report-dropdown-menu" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--surface2);border:1px solid var(--border);border-radius:8px;min-width:160px;z-index:200;box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden">
+          <div class="report-dropdown-menu" style="position:absolute;right:0;top:calc(100% + 4px);background:var(--surface2);border:1px solid var(--border);border-radius:8px;min-width:160px;z-index:200;box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden">
             <button class="report-dropdown-item" onclick="downloadReportMd();this.closest('.report-dropdown').classList.remove('open')"
                     style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 14px;background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;text-align:left;white-space:nowrap"
                     onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background='none'">
