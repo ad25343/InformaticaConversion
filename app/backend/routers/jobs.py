@@ -311,7 +311,7 @@ async def get_audit_report(job_id: str):
     state: dict = _decode_state(dict(job).get("state_json") or "")
 
     # Attach audit entries to job dict so the renderer can include sign-off chain
-    audit_rows = await db.get_audit_entries(job_id)
+    audit_rows = await db.get_audit_log(job_id)
     job_dict = dict(job)
     job_dict["audit_entries"] = [dict(r) for r in (audit_rows or [])]
 

@@ -532,6 +532,98 @@ function downloadStatePdf(stateKey, suffix, title) {
   win.document.close();
 }
 
+function downloadStateHtml(stateKey, suffix, title) {
+  const state = window._currentJobState;
+  const job   = window._currentJob;
+  if (!state || !state[stateKey]) return;
+  const md   = state[stateKey];
+  const safe = (job?.filename || 'mapping').replace(/[^a-z0-9_\-\.]/gi, '_');
+  const mappingName = (job?.filename || '').replace('.xml','');
+  const tier = state.complexity?.tier || '';
+  const html = `<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="UTF-8"/>
+  <title>${title} — ${safe}</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"><\/script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"><\/script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 10.5pt; line-height: 1.65; color: #1e293b; background: #fff;
+      max-width: 880px; margin: 0 auto; padding: 0 40px 40px;
+    }
+    .cover { padding: 48px 0 32px; margin-bottom: 28px; border-bottom: 3px solid #1e3a5f; }
+    .cover h1 { font-size: 22pt; font-weight: 700; color: #0f172a; margin: 0 0 6px; letter-spacing: -0.3px; }
+    .cover .subtitle { font-size: 11pt; color: #64748b; }
+    .cover .meta-row { display: flex; gap: 24px; margin-top: 14px; font-size: 9pt; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 10px; }
+    .cover .meta-row strong { color: #334155; font-weight: 600; }
+    .tier-badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+    .tier-simple  { background: #dcfce7; color: #166534; }
+    .tier-medium  { background: #fef3c7; color: #92400e; }
+    .tier-complex { background: #fee2e2; color: #991b1b; }
+    h2 { font-size: 14pt; font-weight: 700; color: #1e3a5f; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin: 32px 0 12px; }
+    h3 { font-size: 11.5pt; font-weight: 600; color: #334155; margin: 20px 0 8px; border-bottom: 1px solid #f1f5f9; padding-bottom: 3px; }
+    h4 { font-size: 10.5pt; font-weight: 600; color: #475569; margin: 14px 0 6px; }
+    p  { margin: 0 0 10px; }
+    ul, ol { margin: 4px 0 12px 22px; }
+    li { margin-bottom: 3px; }
+    hr { border: none; border-top: 1px solid #e2e8f0; margin: 20px 0; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 8.5pt; border: 1px solid #cbd5e1; table-layout: fixed; word-wrap: break-word; }
+    thead th { background: linear-gradient(180deg,#f1f5f9 0%,#e8edf3 100%); color: #1e3a5f; font-weight: 600; text-transform: uppercase; font-size: 7.5pt; letter-spacing: .4px; padding: 7px 8px; border-bottom: 2px solid #cbd5e1; text-align: left; overflow-wrap: break-word; }
+    td { padding: 5px 8px; border-bottom: 1px solid #e2e8f0; color: #334155; vertical-align: top; overflow-wrap: break-word; }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody tr:hover { background: #f1f5f9; }
+    pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px 16px; font-size: 8pt; font-family: 'JetBrains Mono','Courier New',monospace; white-space: pre-wrap; word-break: break-all; margin: 8px 0 14px; border-left: 3px solid #6366f1; }
+    code { font-family: 'JetBrains Mono','Courier New',monospace; background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 8.5pt; color: #6366f1; }
+    pre code { background: none; padding: 0; color: #334155; }
+    blockquote { border-left: 4px solid #f59e0b; padding: 10px 16px; margin: 10px 0; background: #fffbeb; border-radius: 0 6px 6px 0; font-size: 9.5pt; color: #92400e; }
+    .mermaid { margin: 16px 0; padding: 16px; background: #fafbfc; border: 1px solid #e2e8f0; border-radius: 8px; text-align: center; }
+    .mermaid svg { max-width: 100%; }
+    .footer { margin-top: 40px; font-size: 8pt; color: #94a3b8; border-top: 2px solid #e2e8f0; padding-top: 12px; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+<div class="cover">
+  <h1>${title}</h1>
+  <div class="subtitle">${mappingName}</div>
+  <div class="meta-row">
+    <span><strong>Generated:</strong> ${new Date().toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'})}</span>
+    ${tier ? '<span><strong>Complexity:</strong> <span class="tier-badge tier-' + tier.toLowerCase() + '">' + tier + '</span></span>' : ''}
+    <span><strong>Tool:</strong> Informatica Conversion Platform</span>
+  </div>
+</div>
+<div id="content"></div>
+<div class="footer">
+  <span>Informatica Conversion Tool &middot; Confidential</span>
+  <span>${new Date().toLocaleString()}</span>
+</div>
+<script>
+  var md = ${JSON.stringify(md).replace(/<\//g, '<\\/')};
+  mermaid.initialize({ startOnLoad: false, theme: 'neutral',
+    themeVariables: { fontSize: '11px', primaryColor: '#e0e7ff', primaryBorderColor: '#6366f1', lineColor: '#94a3b8', tertiaryColor: '#f8fafc' }
+  });
+  document.getElementById('content').innerHTML = marked.parse(md, { gfm: true, breaks: false });
+  document.querySelectorAll('pre code.language-mermaid').forEach(function(el) {
+    var pre = el.parentElement;
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    pre.replaceWith(div);
+  });
+  mermaid.run();
+<\/script>
+</body></html>`;
+  const blob = new Blob([html], { type: 'text/html' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `${safe}_${suffix}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function downloadStateDocx(docKey) {
   const job = window._currentJob;
   if (!job) return;

@@ -650,6 +650,7 @@ function renderJobPanel(job) {
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; HTML</button>
           <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','systems_requirements')">&#x2913; MD</button>
         </span>
         <span class="card-chevron">▼</span></div>
@@ -675,6 +676,7 @@ function renderJobPanel(job) {
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_gaps_md','gaps_review','Gaps and Review Findings')">&#x2913; HTML</button>
           <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_gaps_md','gaps_review')">&#x2913; MD</button>
         </span>
         <span class="card-chevron">▼</span></div>
@@ -699,6 +701,12 @@ function renderJobPanel(job) {
     html += `<div class="card card-collapsed" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
       <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3c — Technical Documentation (Reference)
         ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
+        <span class="dl-group">
+          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('documentation_md','technical_documentation','Technical Documentation')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('documentation')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('documentation_md','technical_documentation','Technical Documentation')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('documentation_md','technical_documentation')">&#x2913; MD</button>
+        </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
       ${truncBanner}
