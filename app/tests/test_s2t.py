@@ -22,6 +22,7 @@ Coverage areas:
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from backend.agents.s2t_agent import (
     _build_backward_index,
@@ -922,3 +923,361 @@ class TestEdgeCases:
         )
         assert result["source_table"] == "SRC"
         assert "EXP1" in result["chain"] or "EXP2" in result["chain"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Joiner Style B — OUT_ prefix + _M/_D suffix (regression: sample XMLs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestJoinerStyleB:
+    """
+    Tests for the OUT_* output / _M _D suffix input naming convention
+    used in sample XMLs (m_ORDERS_CUSTOMERS_to_FACT_SALES,
+    m_LOAN_APPLICATIONS_to_FACT).
+
+    Convention:
+      - Joiner output ports are named OUT_<FIELD>
+      - Ambiguous input ports (same field name in both master and detail)
+        are named <FIELD>_M (master) or <FIELD>_D (detail)
+      - Non-ambiguous input ports keep the original field name
+    """
+
+    def test_out_prefix_non_ambiguous_resolves(self):
+        """
+        OUT_APPLICATION_ID → strip OUT_ → APPLICATION_ID directly in backward.
+        Non-ambiguous field (only comes from one source).
+        """
+        conns = [
+            _conn("SQ_APPS",   "APPLICATION_ID", "JNR_X", "APPLICATION_ID"),
+            _conn("JNR_X",     "OUT_APPLICATION_ID", "EXP", "APPLICATION_ID"),
+            _conn("EXP",       "APPLICATION_ID", "FCT",  "APPLICATION_ID"),
+        ]
+        backward = _build_backward_index(conns)
+        source_names = {"LOAN_APPS"}
+        sq_resolution = {"SQ_APPS": "LOAN_APPS"}
+        jnr = _trans("JNR_X", "Joiner",
+            ports=[_port("APPLICATION_ID"), _port("OUT_APPLICATION_ID")])
+        exp = _trans("EXP", "Expression",
+            ports=[_port("APPLICATION_ID")],
+            expressions=[_expr("APPLICATION_ID", "APPLICATION_ID")])
+        by_name, get_trans = _make_get_trans([jnr, exp])
+
+        result = _trace_to_source(
+            "FCT", "APPLICATION_ID",
+            backward, source_names, by_name, get_trans,
+            sq_resolution=sq_resolution,
+        )
+        assert result["source_table"] == "LOAN_APPS"
+        assert result["source_field"] == "APPLICATION_ID"
+
+    def test_out_prefix_ambiguous_suffix_m_resolves(self):
+        """
+        OUT_CUSTOMER_ID → strip OUT_ → CUSTOMER_ID not in backward →
+        try CUSTOMER_ID_M → found → resolves to master source (STG_CUSTOMERS).
+        """
+        conns = [
+            _conn("SQ_ORDERS",    "CUSTOMER_ID", "JNR_X", "CUSTOMER_ID_D"),
+            _conn("SQ_CUSTOMERS", "CUSTOMER_ID", "JNR_X", "CUSTOMER_ID_M"),
+            _conn("JNR_X", "OUT_CUSTOMER_ID", "EXP", "CUSTOMER_ID"),
+            _conn("EXP",   "CUSTOMER_ID", "FCT", "CUSTOMER_ID"),
+        ]
+        backward = _build_backward_index(conns)
+        source_names = {"STG_ORDERS", "STG_CUSTOMERS"}
+        sq_resolution = {
+            "SQ_ORDERS":    "STG_ORDERS",
+            "SQ_CUSTOMERS": "STG_CUSTOMERS",
+        }
+        jnr = _trans("JNR_X", "Joiner",
+            ports=[_port("CUSTOMER_ID_M"), _port("CUSTOMER_ID_D"), _port("OUT_CUSTOMER_ID")])
+        exp = _trans("EXP", "Expression",
+            ports=[_port("CUSTOMER_ID")],
+            expressions=[_expr("CUSTOMER_ID", "CUSTOMER_ID")])
+        by_name, get_trans = _make_get_trans([jnr, exp])
+
+        result = _trace_to_source(
+            "FCT", "CUSTOMER_ID",
+            backward, source_names, by_name, get_trans,
+            sq_resolution=sq_resolution,
+        )
+        # _M suffix resolves to master = STG_CUSTOMERS
+        assert result["source_table"] == "STG_CUSTOMERS"
+        assert result["source_field"] == "CUSTOMER_ID"
+
+    def test_out_prefix_ambiguous_suffix_d_resolves(self):
+        """
+        Trace a field that uses _D (detail) disambiguation.
+        OUT_PROPERTY_ID → PROPERTY_ID_D → resolves to detail source.
+        """
+        conns = [
+            _conn("SQ_APPS",      "PROPERTY_ID", "JNR_X", "PROPERTY_ID_M"),
+            _conn("SQ_APPRAISALS","PROPERTY_ID", "JNR_X", "PROPERTY_ID_D"),
+            _conn("JNR_X", "OUT_PROPERTY_ID_D_RESULT", "EXP", "PROP_D"),
+            _conn("EXP",   "PROP_D", "FCT", "PROP_D"),
+        ]
+        # Simpler setup: verify _D suffix is tried
+        conns2 = [
+            _conn("SQ_APPRAISALS","PROPERTY_ID", "JNR_X", "PROPERTY_ID_D"),
+            _conn("JNR_X", "OUT_PROPERTY_ID", "EXP", "PROPERTY_ID"),
+            _conn("EXP",   "PROPERTY_ID", "FCT", "PROPERTY_ID"),
+        ]
+        backward = _build_backward_index(conns2)
+        source_names = {"PROPERTY_APPRAISALS"}
+        sq_resolution = {"SQ_APPRAISALS": "PROPERTY_APPRAISALS"}
+        jnr = _trans("JNR_X", "Joiner",
+            ports=[_port("PROPERTY_ID_D"), _port("OUT_PROPERTY_ID")])
+        exp = _trans("EXP", "Expression",
+            ports=[_port("PROPERTY_ID")],
+            expressions=[_expr("PROPERTY_ID", "PROPERTY_ID")])
+        by_name, get_trans = _make_get_trans([jnr, exp])
+
+        result = _trace_to_source(
+            "FCT", "PROPERTY_ID",
+            backward, source_names, by_name, get_trans,
+            sq_resolution=sq_resolution,
+        )
+        assert result["source_table"] == "PROPERTY_APPRAISALS"
+        assert result["source_field"] == "PROPERTY_ID"
+
+    def test_non_ambiguous_through_joiner_no_suffix(self):
+        """
+        Fields that exist in only ONE source get no disambiguation suffix.
+        OUT_CUSTOMER_NAME → CUSTOMER_NAME → in backward directly.
+        """
+        conns = [
+            _conn("SQ_CUSTOMERS", "CUSTOMER_NAME", "JNR_X", "CUSTOMER_NAME"),
+            _conn("JNR_X", "OUT_CUSTOMER_NAME", "EXP", "CUSTOMER_NAME"),
+            _conn("EXP",   "CUSTOMER_NAME", "FCT", "CUSTOMER_NAME"),
+        ]
+        backward = _build_backward_index(conns)
+        source_names = {"STG_CUSTOMERS"}
+        sq_resolution = {"SQ_CUSTOMERS": "STG_CUSTOMERS"}
+        jnr = _trans("JNR_X", "Joiner",
+            ports=[_port("CUSTOMER_NAME"), _port("OUT_CUSTOMER_NAME")])
+        exp = _trans("EXP", "Expression",
+            ports=[_port("CUSTOMER_NAME")],
+            expressions=[_expr("CUSTOMER_NAME", "CUSTOMER_NAME")])
+        by_name, get_trans = _make_get_trans([jnr, exp])
+
+        result = _trace_to_source(
+            "FCT", "CUSTOMER_NAME",
+            backward, source_names, by_name, get_trans,
+            sq_resolution=sq_resolution,
+        )
+        assert result["source_table"] == "STG_CUSTOMERS"
+        assert result["source_field"] == "CUSTOMER_NAME"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Integration tests — full parse_xml → build_s2t pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+SAMPLE_XML_DIR = Path(__file__).parent.parent / "sample_xml"
+
+
+def _run_s2t(xml_path: Path) -> dict:
+    """Parse an XML file and run the full S2T pipeline."""
+    from backend.agents.parser_agent import parse_xml
+    from backend.agents.s2t_agent import _build_s2t_impl
+    xml_content = xml_path.read_text()
+    parse_report, graph = parse_xml(xml_content)
+    return _build_s2t_impl(parse_report, graph, job_id="test0000")
+
+
+def _field_result(s2t: dict, target_table: str, target_field: str) -> dict | None:
+    """Find a specific target field's S2T record."""
+    for r in s2t["records"]:
+        if r["target_table"] == target_table and r["target_field"] == target_field:
+            return r
+    return None
+
+
+class TestIntegrationHrEmployees:
+    """
+    Simple mapping: single source → SQ → Expression → Target.
+    All fields should trace back to STG_EMPLOYEES.
+    """
+
+    @pytest.fixture(scope="class")
+    def s2t(self):
+        xml = SAMPLE_XML_DIR / "simple" / "m_HR_EMPLOYEES_to_DIM_EMPLOYEES.xml"
+        return _run_s2t(xml)
+
+    def test_no_intermediate_as_source(self, s2t):
+        """No transformation name should appear as source_table."""
+        bad = [r for r in s2t["records"]
+               if r["source_table"] and r["source_table"].startswith(("EXP_", "SQ_", "FIL_"))]
+        assert bad == [], f"Transformations leaked as source: {[r['source_table'] for r in bad]}"
+
+    def test_passthrough_field_traces_to_source(self, s2t):
+        r = _field_result(s2t, "DIM_EMPLOYEES", "DEPT_CODE")
+        assert r is not None
+        assert r["source_table"] == "STG_EMPLOYEES"
+        assert r["source_field"] == "DEPT_CODE"
+        assert r["status"] == STATUS_DIRECT
+
+    def test_derived_field_traces_to_source(self, s2t):
+        """SALARY_BAND is derived from SALARY — should trace to STG_EMPLOYEES.SALARY."""
+        r = _field_result(s2t, "DIM_EMPLOYEES", "SALARY_BAND")
+        assert r is not None
+        assert r["source_table"] == "STG_EMPLOYEES"
+        assert r["status"] == STATUS_DERIVED
+
+    def test_derived_field_has_expression(self, s2t):
+        """Logic/Expression column should contain the IIF expression."""
+        r = _field_result(s2t, "DIM_EMPLOYEES", "SALARY_BAND")
+        assert r is not None
+        assert "IIF" in r.get("logic", "") or "BAND" in r.get("logic", "")
+
+    def test_hire_year_month_traces_to_hire_date(self, s2t):
+        r = _field_result(s2t, "DIM_EMPLOYEES", "HIRE_YEAR_MONTH")
+        assert r is not None
+        assert r["source_table"] == "STG_EMPLOYEES"
+        assert r["source_field"] == "HIRE_DATE"
+        assert r["status"] == STATUS_DERIVED
+
+
+class TestIntegrationOrdersCustomers:
+    """
+    Medium mapping: two sources joined (SQ_STG_ORDERS + SQ_STG_CUSTOMERS)
+    via JNR with OUT_* output ports and _M/_D suffix disambiguation.
+    Lookup on DIM_REGION. Expression with DECODE/IIF derivations.
+
+    Key assertions:
+    - ORDER_ID → STG_ORDERS (pass-through through Joiner + Expression)
+    - CUSTOMER_NAME → STG_CUSTOMERS (from master side of Joiner)
+    - CUSTOMER_ID → STG_CUSTOMERS (ambiguous field, _M suffix)
+    - REGION_CODE → DIM_REGION (via Lookup)
+    - ORDER_YEAR_MONTH → STG_ORDERS.ORDER_DATE (derived via TO_CHAR)
+    - IS_LARGE_ORDER → STG_ORDERS.ORDER_AMOUNT (derived)
+    - DISCOUNT_AMOUNT → derived (uses CUSTOMER_TIER + ORDER_AMOUNT)
+    """
+
+    @pytest.fixture(scope="class")
+    def s2t(self):
+        xml = SAMPLE_XML_DIR / "medium" / "m_ORDERS_CUSTOMERS_to_FACT_SALES.xml"
+        return _run_s2t(xml)
+
+    def test_no_intermediate_as_source(self, s2t):
+        """SQ_, JNR_, FIL_, AGG_, LKP_ must never appear as source_table.
+        EXP_ is allowed for computed fields (SYSDATE etc.)."""
+        bad = [r for r in s2t["records"]
+               if r["source_table"] and r["source_table"].startswith(
+                   ("SQ_", "JNR_", "FIL_", "AGG_", "LKP_"))]
+        assert bad == [], f"Transformations leaked as source: {[(r['target_field'], r['source_table']) for r in bad]}"
+
+    def test_order_id_traces_to_stg_orders(self, s2t):
+        r = _field_result(s2t, "FACT_SALES", "ORDER_ID")
+        assert r is not None
+        assert r["source_table"] == "STG_ORDERS"
+        assert r["source_field"] == "ORDER_ID"
+
+    def test_customer_name_traces_to_stg_customers(self, s2t):
+        """CUSTOMER_NAME comes from master side — JNR input is CUSTOMER_NAME (no suffix)."""
+        r = _field_result(s2t, "FACT_SALES", "CUSTOMER_NAME")
+        assert r is not None
+        assert r["source_table"] == "STG_CUSTOMERS"
+        assert r["source_field"] == "CUSTOMER_NAME"
+
+    def test_customer_id_ambiguous_traces_to_stg_customers(self, s2t):
+        """CUSTOMER_ID is ambiguous (both sources have it). Master side wins (_M suffix)."""
+        r = _field_result(s2t, "FACT_SALES", "CUSTOMER_ID")
+        assert r is not None
+        assert r["source_table"] == "STG_CUSTOMERS"
+        assert r["source_field"] == "CUSTOMER_ID"
+
+    def test_product_id_traces_to_stg_orders(self, s2t):
+        r = _field_result(s2t, "FACT_SALES", "PRODUCT_ID")
+        assert r is not None
+        assert r["source_table"] == "STG_ORDERS"
+        assert r["source_field"] == "PRODUCT_ID"
+
+    def test_derived_field_order_year_month(self, s2t):
+        r = _field_result(s2t, "FACT_SALES", "ORDER_YEAR_MONTH")
+        assert r is not None
+        assert r["source_table"] == "STG_ORDERS"
+        assert r["source_field"] == "ORDER_DATE"
+        assert r["status"] == STATUS_DERIVED
+
+    def test_derived_flag_is_large_order(self, s2t):
+        r = _field_result(s2t, "FACT_SALES", "IS_LARGE_ORDER")
+        assert r is not None
+        assert r["source_table"] == "STG_ORDERS"
+        assert r["status"] == STATUS_DERIVED
+
+    def test_lookup_field_region_code(self, s2t):
+        """REGION_CODE comes from LKP_DIM_REGION → source should be DIM_REGION."""
+        r = _field_result(s2t, "FACT_SALES", "REGION_CODE")
+        assert r is not None
+        # Lookup sourced from DIM_REGION
+        assert r["source_table"] == "DIM_REGION"
+
+
+class TestIntegrationLoanApplications:
+    """
+    Medium mapping: LOAN_APPLICATIONS joined to PROPERTY_APPRAISALS via JNR.
+    Joiner uses OUT_ prefix on outputs + _M/_D suffix on ambiguous PROPERTY_ID.
+    Expression with multi-level derivations (LTV_RATIO → LOAN_AMOUNT / APPRAISED_VALUE).
+
+    Key assertions:
+    - APPLICATION_ID → LOAN_APPLICATIONS (non-ambiguous through Joiner)
+    - APPRAISED_VALUE → PROPERTY_APPRAISALS (detail side)
+    - PROPERTY_ID → LOAN_APPLICATIONS (master side, _M suffix)
+    - LTV_RATIO → derived (uses LOAN_AMOUNT from LOAN_APPLICATIONS)
+    - ETL_LOAD_DATE → computed (SYSDATE, stays at EXP)
+    """
+
+    @pytest.fixture(scope="class")
+    def s2t(self):
+        xml = SAMPLE_XML_DIR / "medium" / "m_LOAN_APPLICATIONS_to_FACT.xml"
+        return _run_s2t(xml)
+
+    def test_no_intermediate_as_source(self, s2t):
+        """
+        SQ_, JNR_, FIL_, AGG_, LKP_ must never appear as source_table.
+        EXP_ is allowed — computed fields (SYSDATE, literals) legitimately
+        dead-end at an Expression transformation with no database source.
+        """
+        bad = [r for r in s2t["records"]
+               if r["source_table"] and r["source_table"].startswith(
+                   ("SQ_", "JNR_", "FIL_", "AGG_", "LKP_"))]
+        assert bad == [], f"Transformations leaked as source: {[(r['target_field'], r['source_table']) for r in bad]}"
+
+    def test_application_id_traces_to_loan_applications(self, s2t):
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "APPLICATION_ID")
+        assert r is not None
+        assert r["source_table"] == "STG_LOAN_APPLICATIONS"
+        assert r["source_field"] == "APPLICATION_ID"
+
+    def test_appraised_value_traces_to_property_appraisals(self, s2t):
+        """APPRAISED_VALUE comes from detail side of Joiner (PROPERTY_APPRAISALS)."""
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "APPRAISED_VALUE")
+        assert r is not None
+        assert r["source_table"] == "PROPERTY_APPRAISALS"
+        assert r["source_field"] == "APPRAISED_VALUE"
+
+    def test_loan_amount_traces_to_loan_applications(self, s2t):
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "LOAN_AMOUNT")
+        assert r is not None
+        assert r["source_table"] == "STG_LOAN_APPLICATIONS"
+        assert r["source_field"] == "LOAN_AMOUNT"
+
+    def test_credit_score_traces_to_loan_applications(self, s2t):
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "CREDIT_SCORE")
+        assert r is not None
+        assert r["source_table"] == "STG_LOAN_APPLICATIONS"
+        assert r["source_field"] == "CREDIT_SCORE"
+
+    def test_ltv_ratio_is_derived(self, s2t):
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "LTV_RATIO")
+        assert r is not None
+        assert r["status"] == STATUS_DERIVED
+        # LTV_RATIO = LOAN_AMOUNT / APPRAISED_VALUE — source is one of the input fields
+        assert r["source_table"] in ("LOAN_APPLICATIONS", "PROPERTY_APPRAISALS")
+
+    def test_etl_load_date_is_computed(self, s2t):
+        """SYSDATE fields are genuinely computed — no database source."""
+        r = _field_result(s2t, "FACT_LOAN_APPLICATIONS", "ETL_LOAD_DATE")
+        assert r is not None
+        # SYSDATE has no source; trace dead-ends at EXP with expression in logic
+        assert r["status"] == STATUS_DERIVED
+        assert "SYSDATE" in r.get("logic", "")

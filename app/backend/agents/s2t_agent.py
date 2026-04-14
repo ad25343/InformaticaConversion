@@ -175,6 +175,32 @@ def _build_target_record(
     }
 
 
+def _build_lkp_resolution(graph: dict) -> dict[str, str]:
+    """
+    Build a mapping of Lookup transformation instance names → actual lookup table names.
+
+    Lookup transformations read from an external table (the lookup table) but have no
+    CONNECTOR from that table — so the backward trace dead-ends at the LKP instance.
+    This map lets us resolve LKP instances to their real source table when dead-ending.
+
+    The lookup table name comes from the 'Lookup Table' or 'Lookup table name' attribute
+    in the transformation definition.
+    """
+    lkp_map: dict[str, str] = {}
+    for mapping in graph.get("mappings", []):
+        for t in mapping.get("transformations", []):
+            if "lookup" not in t.get("type", "").lower():
+                continue
+            inst = t["name"]
+            attribs = t.get("table_attribs", {})
+            lkp_table = (attribs.get("Lookup Table") or
+                         attribs.get("Lookup table name") or
+                         attribs.get("Lookup Table Name") or "").strip()
+            if lkp_table:
+                lkp_map[inst] = lkp_table
+    return lkp_map
+
+
 def _build_sq_resolution(graph: dict, source_names: set) -> dict[str, str]:
     """
     Build a mapping of Source Qualifier instance names → actual source table names.
@@ -188,22 +214,60 @@ def _build_sq_resolution(graph: dict, source_names: set) -> dict[str, str]:
     """
     sq_map: dict[str, str] = {}
     sq_prefixes = ("SQ_", "SQI_", "SRC_SQ_")
+    source_upper = {s.upper(): s for s in source_names}
+
     for mapping in graph.get("mappings", []):
         for t in mapping.get("transformations", []):
             if "Source Qualifier" not in t.get("type", ""):
                 continue
             inst = t["name"]
             for pfx in sq_prefixes:
-                if inst.upper().startswith(pfx):
-                    candidate = inst[len(pfx):]
-                    # Case-insensitive match against source_names
-                    for sname in source_names:
-                        if sname.upper() == candidate.upper():
-                            sq_map[inst] = sname
-                            break
-                    if inst in sq_map:
+                if not inst.upper().startswith(pfx):
+                    continue
+                candidate = inst[len(pfx):]
+                cu = candidate.upper()
+
+                # 1) Exact match (e.g. SQ_ORDERS → ORDERS)
+                if cu in source_upper:
+                    sq_map[inst] = source_upper[cu]
+                    break
+
+                # 2) Suffix match: source may have an extra schema prefix
+                #    e.g. SQ_LOAN_APPLICATIONS → LOAN_APPLICATIONS
+                #         matches STG_LOAN_APPLICATIONS (ends with _LOAN_APPLICATIONS)
+                for sname_upper, sname in source_upper.items():
+                    if sname_upper.endswith("_" + cu):
+                        sq_map[inst] = sname
                         break
+
+                if inst in sq_map:
+                    break
     return sq_map
+
+
+def _build_target_instance_map(backward: dict, target_names: set) -> dict[str, str]:
+    """
+    Some mappings use a 'TGT_' prefixed instance name for target definitions
+    (e.g. instance TGT_FACT_ORDERS connects to target definition FACT_ORDERS).
+    Build a map: target_definition_name → instance_name_in_connectors so that
+    the trace starts at the right key in the backward index.
+    """
+    # Collect all instance names that appear as to_instance in the backward index
+    to_instances = {k[0] for k in backward}
+    result: dict[str, str] = {}
+    for tname in target_names:
+        if tname in to_instances:
+            result[tname] = tname          # instance name matches definition name
+        elif f"TGT_{tname}" in to_instances:
+            result[tname] = f"TGT_{tname}" # TGT_ prefix convention
+        else:
+            # Fallback: try case-insensitive prefix match
+            upper = tname.upper()
+            for inst in to_instances:
+                if inst.upper().endswith(upper) or upper.endswith(inst.upper().lstrip("TGT_")):
+                    result[tname] = inst
+                    break
+    return result
 
 
 def _process_mapping_targets(
@@ -215,6 +279,7 @@ def _process_mapping_targets(
     trans_by_name: dict,
     get_trans,
     sq_resolution: dict,
+    lkp_resolution: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """
     Trace each target field in a mapping to its source.
@@ -224,16 +289,22 @@ def _process_mapping_targets(
     records: list[dict] = []
     unmapped_targets: list[dict] = []
 
+    target_names = {tgt["name"] for tgt in graph.get("targets", [])}
+    tgt_instance_map = _build_target_instance_map(backward, target_names)
+
     for tgt in graph.get("targets", []):
         tgt_name = tgt["name"]
+        # Resolve instance name (may have TGT_ prefix in connectors)
+        start_instance = tgt_instance_map.get(tgt_name, tgt_name)
         for tgt_field_def in tgt.get("fields", []):
             tgt_field = tgt_field_def["name"]
             tgt_type  = tgt_field_def.get("datatype", "")
 
             result = _trace_to_source(
-                tgt_name, tgt_field,
+                start_instance, tgt_field,
                 backward, source_names, trans_by_name, get_trans,
                 sq_resolution=sq_resolution,
+                lkp_resolution=lkp_resolution,
             )
 
             if result["source_table"] is None:
@@ -296,8 +367,9 @@ def _build_s2t_impl(
     source_lookup  = {s["name"]: s for s in graph.get("sources", [])}
     source_names   = set(source_lookup.keys())
 
-    # Build SQ instance → actual source table resolution map (once, across all mappings)
+    # Build resolution maps (once, across all mappings)
     sq_resolution  = _build_sq_resolution(graph, source_names)
+    lkp_resolution = _build_lkp_resolution(graph)
 
     for mapping in graph.get("mappings", []):
         connectors   = mapping.get("connectors", [])
@@ -311,7 +383,7 @@ def _build_s2t_impl(
 
         m_records, m_unmapped_tgt = _process_mapping_targets(
             mapping, graph, source_lookup, backward, source_names,
-            trans_by_name, get_trans, sq_resolution,
+            trans_by_name, get_trans, sq_resolution, lkp_resolution,
         )
         records.extend(m_records)
         unmapped_targets.extend(m_unmapped_tgt)
@@ -645,18 +717,20 @@ def _trace_to_source(
     get_trans,
     max_depth: int = 20,
     sq_resolution: dict | None = None,
+    lkp_resolution: dict | None = None,
 ) -> dict:
     """
     Walk the backward connector graph from a target field to its ultimate source.
     Returns a dict with: source_table, source_field, chain, logic, logic_type, status, notes.
 
-    sq_resolution: optional dict mapping Source Qualifier instance names to their
-    underlying source table names (e.g. SQ_ORDERS → ORDERS).  When a backward hop
-    lands on a SQ instance the real source table name is substituted so the S2T
-    report shows the actual database table rather than the transformation name.
+    sq_resolution:  maps Source Qualifier instance names → actual source table names.
+    lkp_resolution: maps Lookup transformation names → their lookup table names.
+    Both are applied when the trace dead-ends at one of these transformation types.
     """
     if sq_resolution is None:
         sq_resolution = {}
+    if lkp_resolution is None:
+        lkp_resolution = {}
 
     chain:  list[str] = []
     logic:  list[str] = []
@@ -667,10 +741,23 @@ def _trace_to_source(
     current_field = start_field
     hops = 0
 
-    # Joiner group prefixes to try when an output port has no direct backward entry.
-    # Informatica Joiner input ports are prefixed with the group name (M_ = master,
-    # D_ / DETAIL_ = detail).  The output port carries the field name without prefix.
+    # Informatica Joiner port-name conventions (multiple styles exist in the wild):
+    #
+    #   Style A — M_/D_ prefix on INPUT:
+    #     SQ → JNR input port  M_INDICATOR_ID  (master)
+    #     JNR output port  INDICATOR_ID        (no prefix)
+    #     → at (JNR, INDICATOR_ID) try M_INDICATOR_ID in backward
+    #
+    #   Style B — OUT_ prefix on OUTPUT + optional _M/_D suffix on ambiguous inputs:
+    #     SQ → JNR input port  CUSTOMER_ID_M   (master, only on clashing names)
+    #     SQ → JNR input port  APPLICATION_ID  (no suffix — field exists in one side only)
+    #     JNR output port  OUT_CUSTOMER_ID / OUT_APPLICATION_ID
+    #     → at (JNR, OUT_CUSTOMER_ID):
+    #         1. strip OUT_ → CUSTOMER_ID
+    #         2. check (JNR, CUSTOMER_ID) in backward (works for non-ambiguous fields)
+    #         3. try _M / _D suffixes (works for ambiguous ones)
     _JOINER_PREFIXES = ("M_", "MASTER_", "D_", "DETAIL_")
+    _JOINER_SUFFIXES = ("_M", "_D", "_MASTER", "_DETAIL")
 
     for _ in range(max_depth):
         key = (current_inst, current_field)
@@ -693,16 +780,36 @@ def _trace_to_source(
                         resolved = True
                         break
 
-            # Joiner group-qualified ports: output port has no prefix, but the
-            # corresponding INPUT port has a group prefix (M_, D_, etc.).
-            # e.g., (JNR_X, INDICATOR_ID) → try (JNR_X, M_INDICATOR_ID)
+            # Joiner port disambiguation — handles two naming conventions:
             elif ttype == "Joiner":
-                for pfx in _JOINER_PREFIXES:
-                    alt_key = (current_inst, pfx + current_field)
+                # Style B: strip leading OUT_ from output port, then resolve
+                base_field = (current_field[4:] if current_field.upper().startswith("OUT_")
+                              else current_field)
+
+                # 1) Base name directly (non-ambiguous fields, no disambiguation suffix)
+                if base_field != current_field:
+                    alt_key = (current_inst, base_field)
                     if alt_key in backward:
-                        current_field = pfx + current_field
+                        current_field = base_field
                         resolved = True
-                        break
+
+                # 2) Style A: M_/D_/MASTER_/DETAIL_ prefix on input port
+                if not resolved:
+                    for pfx in _JOINER_PREFIXES:
+                        alt_key = (current_inst, pfx + base_field)
+                        if alt_key in backward:
+                            current_field = pfx + base_field
+                            resolved = True
+                            break
+
+                # 3) Style B: _M/_D/_MASTER/_DETAIL suffix on input port
+                if not resolved:
+                    for sfx in _JOINER_SUFFIXES:
+                        alt_key = (current_inst, base_field + sfx)
+                        if alt_key in backward:
+                            current_field = base_field + sfx
+                            resolved = True
+                            break
 
             if resolved:
                 continue
@@ -716,6 +823,11 @@ def _trace_to_source(
                         result["source_table"] in sq_resolution):
                     result = dict(result)
                     result["source_table"] = sq_resolution[result["source_table"]]
+                # Lookup dead-end resolution
+                elif (result.get("source_table") and
+                        result["source_table"] in lkp_resolution):
+                    result = dict(result)
+                    result["source_table"] = lkp_resolution[result["source_table"]]
                 return result
             current_field = new_field
             continue
@@ -730,6 +842,11 @@ def _trace_to_source(
         # connectors exist between SOURCE and SQ in Informatica XML).
         if from_inst in sq_resolution:
             return _found_source_result(sq_resolution[from_inst], from_field, chain, logic, status, notes)
+
+        # Lookup resolution: Lookup output fields have no backward connector to
+        # their source table — resolve via the Lookup Table attribute.
+        if from_inst in lkp_resolution:
+            return _found_source_result(lkp_resolution[from_inst], from_field, chain, logic, status, notes)
 
         status = _process_intermediate_node(
             from_inst, from_field, trans_by_name, get_trans, chain, logic, notes, status
