@@ -175,6 +175,37 @@ def _build_target_record(
     }
 
 
+def _build_sq_resolution(graph: dict, source_names: set) -> dict[str, str]:
+    """
+    Build a mapping of Source Qualifier instance names → actual source table names.
+
+    In Informatica, Source Qualifiers (SQ_*) read from SOURCE definitions but are
+    not connected to them via CONNECTOR elements — so the backward trace can reach
+    a SQ and find no further connectors.  This map lets us resolve SQ instances to
+    their real source table when the trace dead-ends at one.
+
+    Strategy: strip common SQ prefixes (SQ_, SQI_) and check against source_names.
+    """
+    sq_map: dict[str, str] = {}
+    sq_prefixes = ("SQ_", "SQI_", "SRC_SQ_")
+    for mapping in graph.get("mappings", []):
+        for t in mapping.get("transformations", []):
+            if "Source Qualifier" not in t.get("type", ""):
+                continue
+            inst = t["name"]
+            for pfx in sq_prefixes:
+                if inst.upper().startswith(pfx):
+                    candidate = inst[len(pfx):]
+                    # Case-insensitive match against source_names
+                    for sname in source_names:
+                        if sname.upper() == candidate.upper():
+                            sq_map[inst] = sname
+                            break
+                    if inst in sq_map:
+                        break
+    return sq_map
+
+
 def _process_mapping_targets(
     mapping: dict,
     graph: dict,
@@ -183,6 +214,7 @@ def _process_mapping_targets(
     source_names: set,
     trans_by_name: dict,
     get_trans,
+    sq_resolution: dict,
 ) -> tuple[list[dict], list[dict]]:
     """
     Trace each target field in a mapping to its source.
@@ -201,6 +233,7 @@ def _process_mapping_targets(
             result = _trace_to_source(
                 tgt_name, tgt_field,
                 backward, source_names, trans_by_name, get_trans,
+                sq_resolution=sq_resolution,
             )
 
             if result["source_table"] is None:
@@ -263,6 +296,9 @@ def _build_s2t_impl(
     source_lookup  = {s["name"]: s for s in graph.get("sources", [])}
     source_names   = set(source_lookup.keys())
 
+    # Build SQ instance → actual source table resolution map (once, across all mappings)
+    sq_resolution  = _build_sq_resolution(graph, source_names)
+
     for mapping in graph.get("mappings", []):
         connectors   = mapping.get("connectors", [])
         instance_map = mapping.get("instance_map", {})
@@ -274,7 +310,8 @@ def _build_s2t_impl(
         backward  = _build_backward_index(connectors)
 
         m_records, m_unmapped_tgt = _process_mapping_targets(
-            mapping, graph, source_lookup, backward, source_names, trans_by_name, get_trans
+            mapping, graph, source_lookup, backward, source_names,
+            trans_by_name, get_trans, sq_resolution,
         )
         records.extend(m_records)
         unmapped_targets.extend(m_unmapped_tgt)
@@ -358,6 +395,49 @@ def _find_expr_for_port(trans: dict, port: str) -> str:
     return ""
 
 
+def _follow_internal_expr_chain(
+    trans: dict,
+    start_port: str,
+    current_inst: str,
+    backward: dict,
+    max_depth: int = 5,
+) -> str:
+    """
+    Walk the expression chain *within* a single transformation to find an input
+    port that has a backward connector.
+
+    Handles multi-level internal derivations such as:
+        RISK_BAND   → IIF(FRAUD_SCORE >= 80, ...)
+        FRAUD_SCORE → ROUND(INDICATOR_SCORE * PATTERN_WEIGHT, 2)
+        INDICATOR_SCORE has backward[(EXP, INDICATOR_SCORE)] = (JNR, INDICATOR_SCORE) ← found
+
+    Returns the first discoverable input port name, or "" if none found.
+    """
+    port_names = {p["name"] for p in trans.get("ports", [])}
+    visited: set[str] = {start_port}
+    queue: list[str] = [start_port]
+
+    for _ in range(max_depth):
+        if not queue:
+            break
+        next_queue: list[str] = []
+        for port in queue:
+            expr = _find_expr_for_port(trans, port)
+            if not expr or expr == port:
+                continue
+            tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr)
+            for token in tokens:
+                if token in visited:
+                    continue
+                if token in port_names:
+                    if (current_inst, token) in backward:
+                        return token          # found an input with a backward connector
+                    visited.add(token)
+                    next_queue.append(token)  # internal derived port — explore further
+        queue = next_queue
+    return ""
+
+
 def _find_followable_token(
     expr_text: str,
     current_field: str,
@@ -365,22 +445,39 @@ def _find_followable_token(
     port_names: set,
     backward: dict,
     notes: list,
+    trans: dict | None = None,
 ) -> str:
     """
     Scan expression tokens for one that has a backward connector.
-    Returns the token name on success, or "" if none found.
+
+    When a token is an internal derived port (in port_names but not in backward),
+    the expression chain within the transformation is followed recursively to find
+    an upstream input port that does have a backward connector.
+
+    Returns the resolved port name on success, or "" if none found.
     Appends to notes when a redirect is found.
     """
     tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr_text)
     for token in tokens:
         if token == current_field:
             continue
-        if token in port_names and (current_inst, token) in backward:
+        if token not in port_names:
+            continue
+        if (current_inst, token) in backward:
             notes.append(
                 f"'{current_field}' derived via expression "
                 f"({_truncate(expr_text, 80)}); tracing through '{token}'"
             )
             return token
+        # token is an internal derived port — follow its expression chain
+        if trans is not None:
+            resolved = _follow_internal_expr_chain(trans, token, current_inst, backward)
+            if resolved:
+                notes.append(
+                    f"'{current_field}' derived via internal chain "
+                    f"({_truncate(expr_text, 80)}) → '{token}' → '{resolved}'"
+                )
+                return resolved
     return ""
 
 
@@ -410,7 +507,7 @@ def _try_follow_expression(
         return None  # no expression, treat as root
 
     port_names = {p["name"] for p in trans.get("ports", [])}
-    return _find_followable_token(expr_text, current_field, current_inst, port_names, backward, notes)
+    return _find_followable_token(expr_text, current_field, current_inst, port_names, backward, notes, trans=trans)
 
 
 _STATUS_FOR_TTYPE: dict[str, str] = {
@@ -547,11 +644,20 @@ def _trace_to_source(
     trans_by_name: dict,
     get_trans,
     max_depth: int = 20,
+    sq_resolution: dict | None = None,
 ) -> dict:
     """
     Walk the backward connector graph from a target field to its ultimate source.
     Returns a dict with: source_table, source_field, chain, logic, logic_type, status, notes.
+
+    sq_resolution: optional dict mapping Source Qualifier instance names to their
+    underlying source table names (e.g. SQ_ORDERS → ORDERS).  When a backward hop
+    lands on a SQ instance the real source table name is substituted so the S2T
+    report shows the actual database table rather than the transformation name.
     """
+    if sq_resolution is None:
+        sq_resolution = {}
+
     chain:  list[str] = []
     logic:  list[str] = []
     notes:  list[str] = []
@@ -561,27 +667,43 @@ def _trace_to_source(
     current_field = start_field
     hops = 0
 
+    # Joiner group prefixes to try when an output port has no direct backward entry.
+    # Informatica Joiner input ports are prefixed with the group name (M_ = master,
+    # D_ / DETAIL_ = detail).  The output port carries the field name without prefix.
+    _JOINER_PREFIXES = ("M_", "MASTER_", "D_", "DETAIL_")
+
     for _ in range(max_depth):
         key = (current_inst, current_field)
         if key not in backward:
-            # Router group-qualified ports: strip prefix to find the INPUT port
-            # e.g., (RTR_X, FLAGGED_FRAUD_SCORE) not found → try (RTR_X, FRAUD_SCORE)
             resolved = False
-            if "_" in current_field:
-                trans = get_trans(current_inst)
-                ttype = trans.get("type", "") if trans else ""
-                if ttype == "Router":
-                    parts = current_field.split("_")
-                    for i in range(1, len(parts)):
-                        stripped = "_".join(parts[i:])
-                        alt_key = (current_inst, stripped)
-                        if alt_key in backward:
-                            # Collect the Router group-qualified expression if any
-                            if trans:
-                                _collect_port_logic(trans, current_inst, current_field, logic)
-                            current_field = stripped
-                            resolved = True
-                            break
+            trans = get_trans(current_inst)
+            ttype = trans.get("type", "") if trans else ""
+
+            # Router group-qualified ports: strip prefix to find the INPUT port
+            # e.g., (RTR_X, FLAGGED_FRAUD_SCORE) → try (RTR_X, FRAUD_SCORE)
+            if ttype == "Router" and "_" in current_field:
+                parts = current_field.split("_")
+                for i in range(1, len(parts)):
+                    stripped = "_".join(parts[i:])
+                    alt_key = (current_inst, stripped)
+                    if alt_key in backward:
+                        if trans:
+                            _collect_port_logic(trans, current_inst, current_field, logic)
+                        current_field = stripped
+                        resolved = True
+                        break
+
+            # Joiner group-qualified ports: output port has no prefix, but the
+            # corresponding INPUT port has a group prefix (M_, D_, etc.).
+            # e.g., (JNR_X, INDICATOR_ID) → try (JNR_X, M_INDICATOR_ID)
+            elif ttype == "Joiner":
+                for pfx in _JOINER_PREFIXES:
+                    alt_key = (current_inst, pfx + current_field)
+                    if alt_key in backward:
+                        current_field = pfx + current_field
+                        resolved = True
+                        break
+
             if resolved:
                 continue
 
@@ -589,6 +711,11 @@ def _trace_to_source(
                 current_inst, current_field, hops, backward, chain, logic, notes, status, get_trans
             )
             if result is not None:
+                # If we dead-ended on a Source Qualifier, resolve to real source name
+                if (result.get("source_table") and
+                        result["source_table"] in sq_resolution):
+                    result = dict(result)
+                    result["source_table"] = sq_resolution[result["source_table"]]
                 return result
             current_field = new_field
             continue
@@ -598,6 +725,11 @@ def _trace_to_source(
 
         if from_inst in source_names:
             return _found_source_result(from_inst, from_field, chain, logic, status, notes)
+
+        # Source Qualifier resolution: SQ instances are roots (no further backward
+        # connectors exist between SOURCE and SQ in Informatica XML).
+        if from_inst in sq_resolution:
+            return _found_source_result(sq_resolution[from_inst], from_field, chain, logic, status, notes)
 
         status = _process_intermediate_node(
             from_inst, from_field, trans_by_name, get_trans, chain, logic, notes, status
