@@ -257,6 +257,51 @@ def _pick_first_with_warning(
             )
 
 
+def _stem(filename: str) -> str:
+    """
+    Return a normalised base name for similarity matching.
+
+    Strips the file extension and common Informatica prefixes
+    (m_, wkf_, wf_, s_, seq_) so that
+    ``m_FNMA_LOAN_DELIVERY.xml`` and ``wkf_FNMA_LOAN_DELIVERY.xml``
+    both reduce to ``fnma_loan_delivery`` and match each other.
+    """
+    import os
+    base = os.path.splitext(os.path.basename(filename))[0].lower()
+    for prefix in ("m_", "wkf_", "wf_", "s_", "seq_"):
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    return base
+
+
+def _best_match(mapping_stem: str, candidates: dict[str, str]) -> Optional[tuple[str, str]]:
+    """
+    Return the (rel_path, content) from *candidates* whose stem best matches
+    *mapping_stem*, or None if no candidate scores above 0.5.
+
+    Scoring (highest wins):
+      1.0  — stems are identical after prefix stripping
+      0.8  — one stem contains the other
+      n    — length of shared leading characters / max stem length
+    """
+    best_path, best_text, best_score = None, None, 0.0
+    for rel_path, text in candidates.items():
+        cand_stem = _stem(rel_path)
+        if mapping_stem == cand_stem:
+            score = 1.0
+        elif mapping_stem in cand_stem or cand_stem in mapping_stem:
+            score = 0.8
+        else:
+            common = sum(1 for a, b in zip(mapping_stem, cand_stem) if a == b)
+            score  = common / max(len(mapping_stem), len(cand_stem), 1)
+        if score > best_score:
+            best_score, best_path, best_text = score, rel_path, text
+    if best_score >= 0.5:
+        return best_path, best_text
+    return None
+
+
 def _process_standard_folder(
     folder_name: str,
     mapping_xmls: dict[str, str],
@@ -264,7 +309,7 @@ def _process_standard_folder(
     parameter_files: dict[str, str],
     skipped_in_folder: list[str],
 ) -> "ZipParseResult":
-    """Build a ZipParseResult for a standard one-mapping-per-folder structure."""
+    """Build a ZipParseResult for a single-mapping folder."""
     result = ZipParseResult()
     result.warnings = []
     result.skipped  = list(skipped_in_folder)
@@ -281,7 +326,7 @@ def _process_standard_folder(
 def _process_flat_folder(
     folder_name: str, mapping_xmls: dict[str, str],
 ) -> list["ZipParseResult"]:
-    """Expand a flat folder of mapping XMLs into one ZipParseResult per file."""
+    """Expand a flat folder of mapping XMLs (no workflow/params) into one job each."""
     log.info(
         "Batch folder '%s': flat-folder mode — %d mapping XML(s) → %d job(s)",
         folder_name, len(mapping_xmls), len(mapping_xmls),
@@ -297,11 +342,71 @@ def _process_flat_folder(
     return results
 
 
-def _is_flat_folder(
-    mapping_xmls: dict, workflow_xmls: dict, parameter_files: dict,
-) -> bool:
-    """Return True when folder has multiple mappings and no workflow/params (flat mode)."""
-    return len(mapping_xmls) > 1 and not workflow_xmls and not parameter_files
+def _process_mixed_folder(
+    folder_name: str,
+    mapping_xmls: dict[str, str],
+    workflow_xmls: dict[str, str],
+    parameter_files: dict[str, str],
+) -> list["ZipParseResult"]:
+    """
+    Expand a flat folder that has multiple mappings WITH workflows/params.
+
+    Matches each mapping to its best-fit workflow and parameter file by
+    filename similarity (after stripping Informatica prefixes like m_, wkf_).
+
+    Example — all in one folder:
+        m_FNMA_LOAN.xml   →  wkf_FNMA_LOAN.xml  +  m_FNMA_LOAN.par
+        m_FRAUD_SCORE.xml →  wkf_FRAUD_SCORE.xml +  m_FRAUD_SCORE.par
+    """
+    log.info(
+        "Batch folder '%s': mixed flat mode — %d mappings, %d workflows, %d params → matching by name",
+        folder_name, len(mapping_xmls), len(workflow_xmls), len(parameter_files),
+    )
+    remaining_wf  = dict(workflow_xmls)
+    remaining_par = dict(parameter_files)
+    results: list[ZipParseResult] = []
+
+    for rel_path, text in sorted(mapping_xmls.items()):
+        r = ZipParseResult()
+        r.mapping_xml      = text
+        r.mapping_filename = f"{folder_name}/{rel_path}"
+        r.warnings         = []
+        r.skipped          = []
+
+        m_stem = _stem(rel_path)
+
+        # Match workflow
+        wf_match = _best_match(m_stem, remaining_wf)
+        if wf_match:
+            wf_path, wf_text = wf_match
+            r.workflow_xml      = wf_text
+            r.workflow_filename = f"{folder_name}/{wf_path}"
+            del remaining_wf[wf_path]   # consume so it can't match another mapping
+
+        # Match parameter file
+        par_match = _best_match(m_stem, remaining_par)
+        if par_match:
+            par_path, par_text = par_match
+            r.parameter_file = par_text
+            r.param_filename = f"{folder_name}/{par_path}"
+            del remaining_par[par_path]
+
+        log.info(
+            "  %s → workflow=%s params=%s",
+            r.mapping_filename,
+            r.workflow_filename or "(none)",
+            r.param_filename    or "(none)",
+        )
+        results.append(r)
+
+    # Anything left unmatched goes into warnings on the first result
+    for leftover in list(remaining_wf) + list(remaining_par):
+        msg = f"Unmatched file in '{folder_name}': {leftover} — could not pair with any mapping"
+        log.warning(msg)
+        if results:
+            results[0].warnings.append(msg)
+
+    return results
 
 
 def _process_folder(
@@ -315,11 +420,21 @@ def _process_folder(
     if not mapping_xmls:
         log.warning("Batch ZIP: folder '%s' has no Mapping XML — skipping", folder_name)
         return []
-    if _is_flat_folder(mapping_xmls, workflow_xmls, parameter_files):
+
+    n_mappings = len(mapping_xmls)
+
+    if n_mappings == 1:
+        # Single mapping — standard mode (existing behaviour)
+        return [_process_standard_folder(
+            folder_name, mapping_xmls, workflow_xmls, parameter_files, skipped_in_folder
+        )]
+
+    if not workflow_xmls and not parameter_files:
+        # Multiple mappings, no support files — simple flat expand
         return _process_flat_folder(folder_name, mapping_xmls)
-    return [_process_standard_folder(
-        folder_name, mapping_xmls, workflow_xmls, parameter_files, skipped_in_folder
-    )]
+
+    # Multiple mappings WITH workflows/params — match by filename similarity
+    return _process_mixed_folder(folder_name, mapping_xmls, workflow_xmls, parameter_files)
 
 
 def extract_batch_zip(zip_bytes: bytes) -> list[ZipParseResult]:
