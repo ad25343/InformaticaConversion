@@ -24,6 +24,7 @@ from .agents import parser_agent, classifier_agent, documentation_agent, \
     verification_agent, conversion_agent, s2t_agent, review_agent, test_agent, \
     session_parser_agent, security_agent, manifest_agent
 from .org_config_loader import should_skip_step, should_auto_approve_gate
+from .config import settings
 from .agents.documentation_agent import DOC_TRUNCATION_SENTINEL, DOC_COMPLETE_SENTINEL
 from .agents.reconciliation_agent import generate_reconciliation_report
 from .smoke_execute import smoke_execute_files, format_smoke_results
