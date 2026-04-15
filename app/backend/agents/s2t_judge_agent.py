@@ -31,7 +31,7 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.s2t_judge")
 
 MODEL = _cfg.claude_model
-_MAX_TOKENS = 4_000
+_MAX_TOKENS = 8_000          # raised: 40-field mapping needs ~3K tokens just for annotations
 _CONFIDENCE_VALUES = ("HIGH", "MEDIUM", "LOW")
 _SEVERITY_VALUES   = ("HIGH", "MEDIUM", "LOW")
 
@@ -50,14 +50,26 @@ accurate but can miss fields due to:
 - Lookup or Sequence transformations that have no backward connector
 
 Your job:
-1. Review every MAPPED record and assign a confidence rating.
+1. Review every MAPPED record — its source, expression, and chain — and assign a
+   confidence rating based on whether the lineage and expression logic make sense together.
 2. Review every UNMAPPED target field and assess whether it is genuinely unmapped
    or whether the tracer likely missed something.
-3. Flag any mapped records that look suspicious.
+3. Flag any mapped records where the source, expression, or chain looks wrong.
 4. Provide an overall completeness verdict.
 
+Informatica patterns you can trust (always rate HIGH, never flag as a gap):
+- ETL audit fields: ETL_LOAD_DT, ETL_UPDATE_DT, ETL_BATCH_ID, ETL_SOURCE_SYSTEM,
+  SOURCE_SYSTEM, LOAD_DT — these are always populated by constants or SYSDATE().
+- SCD2 management fields: ROW_EFF_DT, ROW_EXP_DT, CURR_ROW_IND, ROW_EFF_DT — standard
+  surrogate key/SCD2 lifecycle columns with no meaningful business source.
+- Sequence generator outputs (NEXTVAL, CURRVAL) — system-generated surrogate keys.
+- Any field whose Logic column shows SYSDATE(), GETDATE(), or a literal constant.
+
 Be factual and specific. Do not invent sources — only flag gaps when the evidence
-supports it. Return ONLY valid JSON — no markdown fences, no commentary."""
+supports it. Use the Logic/Expression column as the primary signal for confidence:
+a Derived field with a clear IIF() expression and a matching source is HIGH confidence;
+a Derived field with no expression or a dead-ended chain is LOW confidence.
+Return ONLY valid JSON — no markdown fences, no commentary."""
 
 
 # ── User prompt template ──────────────────────────────────────────────────────
@@ -110,17 +122,21 @@ Return a JSON object with EXACTLY this structure — no extra keys:
 }}
 
 Confidence rating guide:
-- HIGH:   Clean trace, source and field name make obvious sense, chain is short and logical
-- MEDIUM: Trace looks plausible but chain is long, source is unexpected, or field name is ambiguous
-- LOW:    Trace dead-ended at an expression/aggregator, source seems wrong, or chain is suspicious
+- HIGH:   Expression is present and makes sense for the field name, OR it's a direct passthrough
+          with matching field names, OR it's a known ETL audit/SCD2 pattern (SYSDATE, constant, NEXTVAL)
+- MEDIUM: Expression is present but complex/long, OR source field name doesn't obviously match target,
+          OR chain passes through an aggregator or lookup whose condition isn't visible
+- LOW:    No expression and the field isn't a simple rename, OR source seems wrong for the target name,
+          OR chain is suspiciously short/long in a way that suggests a missed connector
 
 Gap finding guide:
 - Only raise a gap for UNMAPPED fields where you believe the tracer missed something
-- For genuinely unconnected fields (audit columns, SCD2 mgmt columns), note that but do NOT
-  raise a gap finding — they belong in the unmapped section
-- Severity HIGH = blocks conversion (analyst cannot determine source)
-- Severity MEDIUM = should investigate before UAT
-- Severity LOW = advisory"""
+- Do NOT raise gaps for ETL audit columns (ETL_LOAD_DT, ETL_BATCH_ID, etc.),
+  SCD2 management columns (ROW_EFF_DT, ROW_EXP_DT, CURR_ROW_IND), or
+  system-generated keys (NEXTVAL) — these are intentionally constant/derived
+- Severity HIGH = analyst cannot determine source; blocks conversion
+- Severity MEDIUM = worth investigating before UAT
+- Severity LOW = advisory only"""
 
 
 # ── Compact builders ──────────────────────────────────────────────────────────
@@ -134,16 +150,21 @@ def _build_mapped_section(records: list[dict]) -> str:
     if not records:
         return "(none)"
     shown = records[:_MAX_MAPPED_ROWS]
-    lines = ["| # | Target Table | Target Field | Source Table | Source Field | Status | Chain |",
-             "|---|-------------|-------------|-------------|-------------|--------|-------|"]
+    lines = [
+        "| # | Target Table | Target Field | Source Table | Source Field | Status | Logic / Expression | Chain |",
+        "|---|-------------|-------------|-------------|-------------|--------|-------------------|-------|",
+    ]
     for i, r in enumerate(shown, 1):
         chain = r.get("transformation_chain_str") or "—"
-        if len(chain) > 60:
-            chain = chain[:57] + "…"
+        if len(chain) > 55:
+            chain = chain[:52] + "…"
+        logic = r.get("logic") or "—"
+        if len(logic) > 80:
+            logic = logic[:77] + "…"
         lines.append(
             f"| {i} | {r['target_table']} | {r['target_field']} "
             f"| {r.get('source_table') or '—'} | {r.get('source_field') or '—'} "
-            f"| {r.get('status','?')} | {chain} |"
+            f"| {r.get('status','?')} | {logic} | {chain} |"
         )
     if len(records) > _MAX_MAPPED_ROWS:
         lines.append(f"\n_(first {_MAX_MAPPED_ROWS} of {len(records)} rows shown — remainder omitted for length)_")
