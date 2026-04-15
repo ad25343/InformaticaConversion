@@ -783,10 +783,16 @@ async def generate_analyst_view(
     log.info("analyst_view: launching 3a + 3b in parallel for %s (3a max=%d, 3b max=%d)",
              mapping_name, _MAX_TOKENS_3A, _MAX_TOKENS_3B)
 
-    _timeout = _cfg.agent_timeout_secs
+    # 3a generates up to 16K tokens (2× 3b) so give it proportionally more time.
+    # Both run in parallel so wall-clock ≈ max(timeout_3a, timeout_3b) — not additive.
+    _timeout_3b = _cfg.agent_timeout_secs          # e.g. 300s
+    _timeout_3a = _cfg.agent_timeout_secs * 2      # e.g. 600s — 3a is the larger doc
+
+    log.info("analyst_view: timeouts — 3a=%ds, 3b=%ds", _timeout_3a, _timeout_3b)
+
     results = await asyncio.gather(
-        asyncio.wait_for(_call_claude(prompt_3a, _MAX_TOKENS_3A, "analyst view 3a"), timeout=_timeout),
-        asyncio.wait_for(_call_claude(prompt_3b, _MAX_TOKENS_3B, "analyst view 3b"), timeout=_timeout),
+        asyncio.wait_for(_call_claude(prompt_3a, _MAX_TOKENS_3A, "analyst view 3a"), timeout=_timeout_3a),
+        asyncio.wait_for(_call_claude(prompt_3b, _MAX_TOKENS_3B, "analyst view 3b"), timeout=_timeout_3b),
         return_exceptions=True,
     )
 
@@ -794,9 +800,9 @@ async def generate_analyst_view(
     gaps_md    = results[1] if isinstance(results[1], str) else ""
 
     if not isinstance(results[0], str):
-        log.warning("analyst_view: 3a failed — %s", results[0])
+        log.warning("analyst_view: 3a failed — %s: %s", type(results[0]).__name__, results[0])
     if not isinstance(results[1], str):
-        log.warning("analyst_view: 3b failed — %s", results[1])
+        log.warning("analyst_view: 3b failed — %s: %s", type(results[1]).__name__, results[1])
 
     log.info("analyst_view: 3a=%d chars, 3b=%d chars", len(analyst_md), len(gaps_md))
     return analyst_md, gaps_md
