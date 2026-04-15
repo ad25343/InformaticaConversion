@@ -620,7 +620,7 @@ function renderJobPanel(job) {
             : `<span style="font-size:11px;color:#4ade80">No gaps</span>`;
           const summary = j.judge_summary
             ? `<span style="font-size:11px;color:#94a3b8;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.judge_summary)}">${esc(j.judge_summary.length>90?j.judge_summary.slice(0,90)+'…':j.judge_summary)}</span>`
-            : (j.judge_error ? `<span style="font-size:11px;color:var(--danger)" title="${esc(j.judge_error)}">Judge failed — ${esc(j.judge_error.slice(0,60))}</span>` : '');
+            : (j.judge_error ? `<span style="font-size:11px;color:var(--danger)" title="${esc(j.judge_error)}">Judge failed — ${esc(j.judge_error.slice(0,120))}</span>` : '');
           return `<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(15,23,42,.6);border-radius:6px;border:1px solid #2e3145;margin-bottom:12px;overflow:hidden">
             <span style="font-size:11px;font-weight:700;color:#64748b;white-space:nowrap">🤖 Judge</span>
             ${badge}${gapTxt}${summary}

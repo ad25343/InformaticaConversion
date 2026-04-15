@@ -25,9 +25,8 @@ import logging
 from typing import Optional
 
 from ..models.schemas import ParseReport
-from ._client import make_client
+from ._client import make_client, call_claude_with_retry
 from ..config import settings as _cfg
-from .retry import claude_with_retry
 
 log = logging.getLogger("conversion.s2t_judge")
 
@@ -320,14 +319,12 @@ async def judge_s2t(
     try:
         client = make_client()
         message = await asyncio.wait_for(
-            claude_with_retry(
-                lambda: client.messages.create(
-                    model=MODEL,
-                    max_tokens=_MAX_TOKENS,
-                    system=_SYSTEM,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                label="s2t judge",
+            call_claude_with_retry(
+                client,
+                model=MODEL,
+                max_tokens=_MAX_TOKENS,
+                system=_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
             ),
             timeout=timeout_secs,
         )
