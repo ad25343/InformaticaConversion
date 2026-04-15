@@ -451,3 +451,47 @@ python3 sample_data_validator.py --fix
 ### Extending the validator
 
 Each agent is a Python class inheriting from `BaseAgent` in `sample_data_validator.py`. To add a new check, subclass `BaseAgent`, implement `run(self, fix, verbose) -> AgentReport`, and add it to `LeaderAgent.AGENTS`. The leader agent will pick it up automatically on the next run.
+
+---
+
+## Backend S2T Unit & Integration Tests
+
+The S2T (Source-to-Target) lineage engine has its own pytest suite at `app/tests/test_s2t.py` (92 tests as of v2.26.0). These run without any Claude API calls — they test the deterministic graph-traversal logic only.
+
+### Running the S2T tests
+
+```bash
+cd /path/to/InformaticaConversion/app
+python3 -m pytest tests/test_s2t.py -v
+```
+
+### Test classes
+
+| Class | Coverage area | Tests |
+|-------|--------------|-------|
+| `TestIndexBuilders` | `_build_backward_index`, `_build_forward_index` | 4 |
+| `TestBuildSqResolution` | SQ→source name resolution (exact, suffix, field-overlap) | 6 |
+| `TestFollowInternalExprChain` | Multi-level expression chain BFS | 4 |
+| `TestFindFollowableToken` | Token extraction from Informatica expressions | 4 |
+| `TestTraceToSource` | End-to-end `_trace_to_source` with synthetic graphs | 16 |
+| `TestFindUnmappedSourceFields` | Orphaned source field detection | 3 |
+| `TestEdgeCases` | SQ fallback, multi-word Router groups, deep chains | 4 |
+| `TestJoinerStyleB` | `OUT_`/`O_` prefix + `_M`/`_D` suffix Joiner resolution | 4 |
+| `TestIntegrationHrEmployees` | Simple mapping (single source → EXP → target) | 5 |
+| `TestIntegrationOrdersCustomers` | Medium mapping (Joiner + Lookup + Router) | 8 |
+| `TestIntegrationLoanApplications` | Medium mapping (Style B Joiner, LTV derivation) | 6 |
+| `TestIntegrationFNMALoanDelivery` | Complex mapping — **covers the original Joiner Style A bug** | 13 |
+| `TestIntegrationSalesFactLoad` | Complex mapping — nested Style B Joiners, two Router targets | 11 |
+
+### Key integration assertions (regression coverage)
+
+The two complex integration classes guard against the original real-world bugs:
+
+**`TestIntegrationFNMALoanDelivery.test_borrower_fico_traces_to_credit_scores`**
+The original bug: `BORROWER_FICO` dead-ended at `JNR_LOAN_CREDIT` instead of tracing through to `BORROWER_CREDIT_SCORES`. The test asserts `source_table == "BORROWER_CREDIT_SCORES"` and will fail if the Style A Joiner prefix resolution (`D_BORROWER_FICO` input → `BORROWER_FICO` output) regresses.
+
+**`TestIntegrationSalesFactLoad.test_account_key_traces_to_stg_accounts`**
+Guards against the `O_` prefix regression: `ACCOUNT_KEY` traces through two nested Joiners (`O_ACCOUNT_ID` → `ACCOUNT_ID_D`) to `STG_ACCOUNTS`. Fails if `O_` stripping is removed.
+
+**`test_no_intermediate_as_source`** (in every integration class)
+Fails if any `SQ_`, `JNR_`, `FIL_`, `AGG_`, or `LKP_` transformation name leaks as a `source_table` value.

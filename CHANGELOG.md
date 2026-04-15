@@ -10,6 +10,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.26.0] — 2026-04-14 — S2T lineage fixes + parallel 3a/3b generation
+
+### Fixed
+
+- **S2T: Joiner `O_` prefix not stripped** — `JNR_WITH_PRODUCTS` and similar Joiners that use a single-character `O_` prefix on output ports (e.g. `O_ACCOUNT_ID`) were not resolved through to source tables. The existing code only handled `OUT_` (4-char) prefix. Fixed: Joiner disambiguation now strips `O_` (2-char) in addition to `OUT_`.
+- **S2T: SQ name matching fails for non-obvious names** — Source Qualifiers with names like `SQ_FNMA_DELIVERY` could not be matched to source table `FNMA_LOAN_DELIVERY` via exact or suffix match. Added Strategy 3: field-name overlap fallback — if SQ port names overlap ≥3 fields with a source at score ≥0.5, the SQ is resolved to that source. Robust because Informatica SQ ports are always a subset of the source's field names.
+- **S2T: LKP_ transformation leaking as `source_table`** — Lookup instance names (e.g. `LKP_DIM_REGION`) were appearing as the source table instead of the actual lookup reference table. Fixed: new `_build_lkp_resolution()` maps each LKP instance to its `Lookup Table` attribute so the trace resolves to the real table name.
+- **S2T: `TGT_`-prefixed targets producing 0 records** — Some mappings use `TGT_FACT_LOAN_APPLICATIONS` as the connector instance name while the target definition is `FACT_LOAN_APPLICATIONS`. The trace started at the wrong instance, returning 0 records. Fixed: new `_build_target_instance_map()` resolves the correct instance name at trace start.
+- **S2T: `_try_follow_expression` missing `trans=trans` parameter** — `_find_followable_token` never received the transformation object, silently skipping the internal expression chain fallback. Multi-level derivation chains (e.g. RISK_BAND → FRAUD_SCORE → INDICATOR_SCORE) were broken as a result.
+- **Analyst view stuck — no timeout on `generate_analyst_view`** — The analyst view Claude call (20K tokens) had no `asyncio.wait_for` wrapper. If the Anthropic API stalled, the job hung in `documenting` state forever with no recovery path. Fixed: each parallel call now has `asyncio.wait_for(timeout=agent_timeout_secs)`.
+- **Analyst view failing — `settings` not imported in `orchestrator.py`** — `asyncio.wait_for(..., timeout=settings.agent_timeout_secs)` raised `NameError: name 'settings' is not defined`. Fixed: added `from .config import settings` import.
+
+### Added
+
+- **`_build_lkp_resolution(graph)`** in `s2t_agent.py` — builds a `{lkp_instance: lookup_table}` map from `table_attribs["Lookup Table"]` for all Lookup transformations in the graph.
+- **`_build_target_instance_map(backward, target_names)`** in `s2t_agent.py` — resolves the correct connector instance name for each target, handling `TGT_` prefix variants.
+- **Parallel 3a/3b generation** — `generate_analyst_view()` now runs Step 3a (Systems Requirements, 16K max tokens) and Step 3b (Gaps & Review, 8K max tokens) as parallel `asyncio.gather` tasks. Wall-clock time ≈ `max(3a, 3b)` instead of `3a + 3b`. Each call has its own `asyncio.wait_for` timeout; `return_exceptions=True` ensures one failure does not cancel the other.
+- **92 S2T unit + integration tests** in `app/tests/test_s2t.py` (was 68). New test classes:
+  - `TestJoinerStyleB` — 4 tests for `OUT_`/`O_` prefix and `_M`/`_D` suffix resolution
+  - `TestIntegrationFNMALoanDelivery` — 13 tests against `m_FNMA_LOAN_DELIVERY_SCD2.xml`; covers the original real-world bug (`BORROWER_FICO` must trace to `BORROWER_CREDIT_SCORES` through a Style A Joiner with `D_` prefix)
+  - `TestIntegrationSalesFactLoad` — 11 tests against `m_SALES_FACT_SCD2_LOAD.xml`; covers nested Style B Joiners (`O_` prefix), Router → two targets (`FACT_TRANSACTIONS` + `FACT_TXN_REJECTS`), three source tables
+
+### Changed
+
+- `generate_analyst_view()` split from one bundled 20K-token call into two parallel calls with separate prompts (`_PROMPT_3A`, `_PROMPT_3B`) and separate token budgets. The shared context block (`_CONTEXT_BLOCK`) is injected into both prompts.
+- `_ANALYST_MAX_TOKENS` constant removed; replaced by `_MAX_TOKENS_3A = 16_000` and `_MAX_TOKENS_3B = 8_000`.
+- `SECTION_DELIMITER` constant kept for backwards compatibility but no longer used for splitting (each call produces one document).
+
+---
+
 ## [2.25.0] — 2026-03-18 — Report UX overhaul + pipeline stability fixes
 
 ### Added

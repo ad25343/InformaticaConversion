@@ -1,8 +1,8 @@
 # Architecture & Technical Design
 ## Informatica Conversion Tool
 
-> **Version:** 2.25.0
-> **Last Updated:** 2026-03-18
+> **Version:** 2.26.0
+> **Last Updated:** 2026-04-14
 > **Audience:** Engineers building on, extending, or deploying the tool
 > **Related docs:** [PRD.md](PRD.md) (product scope) · [USER_GUIDE.md](USER_GUIDE.md) (end-user) · [app/README.md](../app/README.md) (developer quickstart)
 
@@ -38,8 +38,16 @@ Step 0   Session & Parameter Parse
     ▼
 Step 1   XML Parse & Graph Extraction  [deterministic, lxml + XXE-hardened parser]
 Step 2   Complexity Classification     [rule-based, objective criteria from parsed XML]
-Step S2T Source-to-Target Field Map    [Claude + openpyxl Excel output]
+Step S2T Source-to-Target Field Map    [deterministic backward-graph trace + openpyxl Excel]
+         Lineage engine: backward connector index → BFS through transformations
+         Joiner resolution: Style A (M_/D_ prefix on inputs), Style B (OUT_/O_ prefix on outputs)
+         SQ resolution: exact name → suffix match → field-name overlap (≥3 ports, score ≥0.5)
+         LKP resolution: maps LKP instance names to actual lookup tables via table_attribs
+         TGT_ prefix handling: resolves TGT_TABLE_NAME → TABLE_NAME at trace start
 Step 3   Documentation Generation      [Claude, Markdown]
+         3a Systems Requirements        [parallel Claude call, 16K max tokens]
+         3b Gaps & Review Findings      [parallel Claude call, 8K max tokens]
+         3a + 3b run via asyncio.gather; wall-clock ≈ max(3a, 3b); each has own timeout
 Step 4   Verification                  [deterministic + Claude flags]
     │
     ▼

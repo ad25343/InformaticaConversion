@@ -1,8 +1,25 @@
-# 3a Systems Requirements — Prompt Reference
+# 3a/3b Analyst View — Prompt Reference
 
-> **Version:** 2.0
-> **Last updated:** 2026-03-28
-> **Used by:** `app/backend/agents/analyst_view.py` → `_ANALYST_SYSTEM` + `_ANALYST_PROMPT`
+> **Version:** 2.1
+> **Last updated:** 2026-04-14
+> **Used by:** `app/backend/agents/analyst_view.py` → `_ANALYST_SYSTEM`, `_PROMPT_3A`, `_PROMPT_3B`
+
+## Architecture Note (v2.26.0)
+
+3a and 3b are now **separate parallel Claude calls** rather than one bundled call split by a delimiter.
+
+| | 3a — Systems Requirements | 3b — Gaps & Review Findings |
+|-|--------------------------|------------------------------|
+| Prompt | `_PROMPT_3A` | `_PROMPT_3B` |
+| Max tokens | 16,000 | 8,000 |
+| System prompt | `_ANALYST_SYSTEM` (shared) | `_ANALYST_SYSTEM` (shared) |
+| Context block | `_CONTEXT_BLOCK` (shared) | `_CONTEXT_BLOCK` (shared) |
+| Timeout | `agent_timeout_secs` | `agent_timeout_secs` |
+| Failure mode | Non-blocking (empty string) | Non-blocking (empty string) |
+
+Both calls are launched with `asyncio.gather(return_exceptions=True)` — a timeout or API error on one does not cancel the other.
+
+---
 
 ---
 
