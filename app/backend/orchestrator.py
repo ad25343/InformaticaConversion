@@ -689,11 +689,21 @@ async def _step_3_run_doc_agent(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]
         s2t_records = []
         if hasattr(ctx, 's2t_state') and isinstance(ctx.s2t_state, dict):
             s2t_records = ctx.s2t_state.get("records", [])
-        ctx.analyst_view_md, ctx.analyst_gaps_md = await generate_analyst_view(
-            ctx.graph, ctx.parse_report, ctx.documentation_md,
-            session_parse_report=ctx.session_parse_report,
-            s2t_records=s2t_records,
+        ctx.analyst_view_md, ctx.analyst_gaps_md = await asyncio.wait_for(
+            generate_analyst_view(
+                ctx.graph, ctx.parse_report, ctx.documentation_md,
+                session_parse_report=ctx.session_parse_report,
+                s2t_records=s2t_records,
+            ),
+            timeout=settings.agent_timeout_secs,
         )
+    except asyncio.TimeoutError:
+        ctx.log.warning(
+            f"Analyst view generation timed out after {settings.agent_timeout_secs}s (non-blocking)",
+            step=3,
+        )
+        ctx.analyst_view_md = ""
+        ctx.analyst_gaps_md = ""
     except Exception as e:
         ctx.log.warning(f"Analyst view generation failed (non-blocking): {e}", step=3)
         ctx.analyst_view_md = ""
