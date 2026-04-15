@@ -944,9 +944,66 @@ let _s2tAllRecords = [], _s2tUnmappedSrc = [], _s2tUnmappedTgt = [];
 function openS2TModal() {
   const state = window._currentJobState;
   if (!state || !state.s2t) return;
-  _s2tAllRecords  = state.s2t.records || [];
-  _s2tUnmappedSrc = state.s2t.unmapped_sources || [];
-  _s2tUnmappedTgt = state.s2t.unmapped_targets || [];
+  const s2t = state.s2t;
+  _s2tAllRecords  = s2t.records || [];
+  _s2tUnmappedSrc = s2t.unmapped_sources || [];
+  _s2tUnmappedTgt = s2t.unmapped_targets || [];
+
+  // ── Judge banner ──────────────────────────────────────────────────────────
+  const banner     = document.getElementById('s2tJudgeBanner');
+  const gapsPanel  = document.getElementById('s2tJudgeGapsPanel');
+  const gapsTbody  = document.getElementById('s2tJudgeGapsTbody');
+  const judgeGaps  = s2t.judge_gaps || [];
+  const hasJudge   = s2t.judge_overall_completeness || s2t.judge_summary || judgeGaps.length;
+
+  if (hasJudge && banner) {
+    // Completeness badge
+    const comp        = (s2t.judge_overall_completeness || '').toUpperCase();
+    const COMP_BG     = { HIGH: '#dcfce7', MEDIUM: '#fef9c3', LOW: '#fee2e2' };
+    const COMP_TEXT   = { HIGH: '#14532d', MEDIUM: '#713f12', LOW: '#7f1d1d' };
+    const compEl      = document.getElementById('s2tJudgeCompleteness');
+    if (compEl) {
+      compEl.textContent       = comp || '—';
+      compEl.style.background  = COMP_BG[comp]  || '#f1f5f9';
+      compEl.style.color       = COMP_TEXT[comp] || '#1e293b';
+    }
+    // Gap count
+    const gapEl = document.getElementById('s2tJudgeGapCount');
+    if (gapEl) gapEl.textContent = judgeGaps.length
+      ? `${judgeGaps.length} gap${judgeGaps.length !== 1 ? 's' : ''} found`
+      : 'No gaps found';
+    // Summary
+    const sumEl = document.getElementById('s2tJudgeSummary');
+    if (sumEl) sumEl.textContent = s2t.judge_summary || '';
+    banner.style.display = '';
+
+    // Gap findings table
+    if (gapsPanel && gapsTbody) {
+      if (judgeGaps.length) {
+        const SEV_BG   = { HIGH: '#fee2e2', MEDIUM: '#fef9c3', LOW: '#f0fdf4' };
+        const SEV_TEXT = { HIGH: '#991b1b', MEDIUM: '#713f12', LOW: '#14532d' };
+        gapsTbody.innerHTML = judgeGaps.map(g => {
+          const sev = (g.severity || '').toUpperCase();
+          const src = [g.suggested_source_table, g.suggested_source_field].filter(Boolean).join('.');
+          return `<tr>
+            <td style="padding:5px 10px;border-bottom:1px solid #fde68a;color:#b45309;font-weight:700;white-space:nowrap">${esc(g.target_table || '—')}</td>
+            <td style="padding:5px 10px;border-bottom:1px solid #fde68a;color:#1e293b;font-weight:600;white-space:nowrap">${esc(g.target_field || '—')}</td>
+            <td style="padding:5px 10px;border-bottom:1px solid #fde68a;color:#475569;font-size:11px">${esc(g.finding || '—')}</td>
+            <td style="padding:5px 10px;border-bottom:1px solid #fde68a"><span style="padding:2px 8px;border-radius:4px;background:${SEV_BG[sev] || '#f1f5f9'};color:${SEV_TEXT[sev] || '#1e293b'};font-size:10px;font-weight:700">${esc(sev || '—')}</span></td>
+            <td style="padding:5px 10px;border-bottom:1px solid #fde68a;color:#94a3b8;font-size:11px">${esc(src || '—')}</td>
+          </tr>`;
+        }).join('');
+        gapsPanel.style.display = '';
+      } else {
+        gapsPanel.style.display = 'none';
+      }
+    }
+  } else {
+    if (banner)    banner.style.display    = 'none';
+    if (gapsPanel) gapsPanel.style.display = 'none';
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   document.getElementById('s2tModal').style.display = 'flex';
   renderS2TTable();
 }
@@ -957,6 +1014,8 @@ function renderS2TTable() {
               'Aggregated':'#ede9fe','Unmapped Target':'#fee2e2','Unmapped Source':'#fee2e2'};
   const SC_TEXT = {'Direct':'#14532d','Derived':'#713f12','Lookup':'#4c1d95','Filtered':'#7c2d12',
                    'Aggregated':'#4c1d95','Unmapped Target':'#7f1d1d','Unmapped Source':'#7f1d1d'};
+  const CONF_BG   = { HIGH: '#dcfce7', MEDIUM: '#fef9c3', LOW: '#fee2e2' };
+  const CONF_TEXT = { HIGH: '#14532d', MEDIUM: '#713f12', LOW: '#7f1d1d' };
   const statusFilter = document.getElementById('s2tStatusFilter')?.value || '';
   const q = (document.getElementById('s2tSearch')?.value || '').toLowerCase();
 
@@ -968,8 +1027,12 @@ function renderS2TTable() {
   document.getElementById('s2tCount').textContent = `${filtered.length} of ${_s2tAllRecords.length} rows`;
 
   document.getElementById('s2tTbody').innerHTML = filtered.map((r,i) => {
-    const bg = i%2===0 ? (SC[r.status]||'#fff') : '#f8fafc';
+    const bg    = i%2===0 ? (SC[r.status]||'#fff') : '#f8fafc';
     const chain = r.transformation_chain_str || (r.transformation_chain||[]).join(' → ') || '—';
+    const conf  = (r.judge_confidence || '').toUpperCase();
+    const confCell = conf
+      ? `<span style="padding:2px 8px;border-radius:4px;background:${CONF_BG[conf]||'#f1f5f9'};color:${CONF_TEXT[conf]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${CONF_BG[conf]||'#e2e8f0'};white-space:nowrap" title="${esc(r.judge_note||'')}">${esc(conf)}</span>`
+      : `<span style="color:#cbd5e1;font-size:10px">—</span>`;
     return `<tr style="background:${bg}">
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e3a8a;font-weight:700;white-space:nowrap">${esc(r.source_table||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.source_field||'—')}</td>
@@ -979,6 +1042,7 @@ function renderS2TTable() {
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.target_field||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:10px">${esc(r.target_type||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0"><span style="padding:2px 8px;border-radius:4px;background:${SC[r.status]||'#f1f5f9'};color:${SC_TEXT[r.status]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${SC[r.status]||'#e2e8f0'};white-space:nowrap">${esc(r.status||'—')}</span></td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0">${confCell}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#94a3b8;font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(chain)}">${esc(chain)}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#475569;max-width:240px" title="${esc(r.logic||'')}">${esc(r.logic||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#94a3b8;max-width:180px" title="${esc(r.notes||'')}">${esc(r.notes||'—')}</td>
