@@ -574,7 +574,7 @@ async def _step_2_classify(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
 
 
 async def _step_2b_s2t(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
-    """Step 2b — Source-to-target mapping (non-blocking)"""
+    """Step 2b — Source-to-target mapping + LLM judge (non-blocking)"""
     ctx.log.step_start("S2T", "Source-to-Target Mapping")
     s2t_result: dict = {}
     try:
@@ -593,6 +593,21 @@ async def _step_2b_s2t(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
     except Exception as e:
         ctx.log.warning(f"S2T mapping generation failed (non-blocking): {e}", step="S2T")
         ctx.log.step_complete("S2T", "Source-to-Target Mapping", f"FAILED (non-blocking): {e}")
+
+    # ── LLM judge pass ────────────────────────────────────────────────────────
+    if s2t_result:
+        try:
+            from .agents.s2t_judge_agent import judge_s2t
+            yield await ctx.emit(2, JobStatus.CLASSIFYING, "S2T judge reviewing completeness…")
+            await judge_s2t(s2t_result, ctx.graph, ctx.parse_report)
+            completeness = s2t_result.get("judge_overall_completeness", "?")
+            n_gaps = len(s2t_result.get("judge_gaps", []))
+            ctx.log.info(
+                f"S2T judge complete — completeness={completeness}, gap_findings={n_gaps}",
+                step="S2T",
+            )
+        except Exception as e:
+            ctx.log.warning(f"S2T judge failed (non-blocking): {e}", step="S2T")
 
     # Store summary + records in job state (skip heavy excel_path binary)
     ctx.s2t_result = s2t_result
