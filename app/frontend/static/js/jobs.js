@@ -605,6 +605,34 @@ function renderJobPanel(job) {
       ${hasUnmappedTgt ? `<div style="padding:8px 12px;background:rgba(248,113,113,.08);border-radius:6px;font-size:12px;color:var(--danger);margin-bottom:12px">
         ⚠️ ${s.unmapped_target_fields} target field(s) have no upstream source — see <strong>Unmapped Targets</strong> sheet in Excel.
       </div>` : ''}
+      ${(()=>{
+        const j = state.s2t;
+        const comp  = (j.judge_overall_completeness||'').toUpperCase();
+        const gaps  = j.judge_gaps || [];
+        const COMP_BG   = {HIGH:'#dcfce7',MEDIUM:'#fef9c3',LOW:'#fee2e2'};
+        const COMP_TEXT = {HIGH:'#14532d',MEDIUM:'#713f12',LOW:'#7f1d1d'};
+        if (comp || j.judge_summary || j.judge_error) {
+          const badge = comp
+            ? `<span style="padding:2px 8px;border-radius:4px;background:${COMP_BG[comp]||'#f1f5f9'};color:${COMP_TEXT[comp]||'#1e293b'};font-size:10px;font-weight:700">${comp}</span>`
+            : '';
+          const gapTxt = gaps.length
+            ? `<span style="font-size:11px;color:#f59e0b;font-weight:600">${gaps.length} gap${gaps.length!==1?'s':''}</span>`
+            : `<span style="font-size:11px;color:#4ade80">No gaps</span>`;
+          const summary = j.judge_summary
+            ? `<span style="font-size:11px;color:#94a3b8;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(j.judge_summary)}">${esc(j.judge_summary.length>90?j.judge_summary.slice(0,90)+'…':j.judge_summary)}</span>`
+            : (j.judge_error ? `<span style="font-size:11px;color:var(--danger)" title="${esc(j.judge_error)}">Judge failed — ${esc(j.judge_error.slice(0,60))}</span>` : '');
+          return `<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(15,23,42,.6);border-radius:6px;border:1px solid #2e3145;margin-bottom:12px;overflow:hidden">
+            <span style="font-size:11px;font-weight:700;color:#64748b;white-space:nowrap">🤖 Judge</span>
+            ${badge}${gapTxt}${summary}
+            <button onclick="openS2TModal()" style="padding:3px 10px;font-size:11px;background:transparent;color:#7dd3fc;border:1px solid #2e3145;border-radius:5px;cursor:pointer;white-space:nowrap;flex-shrink:0">View Analysis →</button>
+          </div>`;
+        } else {
+          return `<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(15,23,42,.4);border-radius:6px;border:1px solid #2e3145;margin-bottom:12px">
+            <span style="font-size:11px;font-weight:700;color:#64748b">🤖 Judge</span>
+            <span style="font-size:11px;color:#475569">Not yet run</span>
+          </div>`;
+        }
+      })()}
       ${preview.length ? `
       <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
         <span>PREVIEW — first ${preview.length} of ${records.length} rows</span>
