@@ -126,12 +126,18 @@ Gap finding guide:
 
 # ── Compact builders ──────────────────────────────────────────────────────────
 
+_MAX_MAPPED_ROWS   = 300   # hard cap — beyond this the judge gets a summary note
+_MAX_TRANSFORM_ROWS = 80   # transformations shown in the summary section
+_MAX_PROMPT_CHARS  = 80_000  # ~20K tokens — well within Claude's 200K context window
+
+
 def _build_mapped_section(records: list[dict]) -> str:
     if not records:
         return "(none)"
+    shown = records[:_MAX_MAPPED_ROWS]
     lines = ["| # | Target Table | Target Field | Source Table | Source Field | Status | Chain |",
              "|---|-------------|-------------|-------------|-------------|--------|-------|"]
-    for i, r in enumerate(records, 1):
+    for i, r in enumerate(shown, 1):
         chain = r.get("transformation_chain_str") or "—"
         if len(chain) > 60:
             chain = chain[:57] + "…"
@@ -140,6 +146,8 @@ def _build_mapped_section(records: list[dict]) -> str:
             f"| {r.get('source_table') or '—'} | {r.get('source_field') or '—'} "
             f"| {r.get('status','?')} | {chain} |"
         )
+    if len(records) > _MAX_MAPPED_ROWS:
+        lines.append(f"\n_(first {_MAX_MAPPED_ROWS} of {len(records)} rows shown — remainder omitted for length)_")
     return "\n".join(lines)
 
 
@@ -177,7 +185,12 @@ def _build_transform_summary(graph: dict) -> str:
             if len(t.get("ports", [])) > 6:
                 port_str += f" … (+{len(t['ports']) - 6} more)"
             lines.append(f"- {tname} ({ttype}): {port_str}")
-    return "\n".join(lines) if lines else "(none)"
+    if not lines:
+        return "(none)"
+    shown = lines[:_MAX_TRANSFORM_ROWS]
+    if len(lines) > _MAX_TRANSFORM_ROWS:
+        shown.append(f"  … and {len(lines) - _MAX_TRANSFORM_ROWS} more transformations omitted")
+    return "\n".join(shown)
 
 
 # ── Response parser ───────────────────────────────────────────────────────────
@@ -270,19 +283,38 @@ async def judge_s2t(
     mapping_names   = parse_report.mapping_names or ["(unknown)"]
     mapping_name    = ", ".join(mapping_names)
 
+    transform_summary = _build_transform_summary(graph)
     prompt = _PROMPT.format(
-        mapping_name      = mapping_name,
-        n_mapped          = len(records),
-        n_unmapped        = len(unmapped_tgt),
-        n_src_unmapped    = len(unmapped_src),
-        mapped_section    = _build_mapped_section(records),
-        unmapped_section  = _build_unmapped_section(unmapped_tgt),
+        mapping_name         = mapping_name,
+        n_mapped             = len(records),
+        n_unmapped           = len(unmapped_tgt),
+        n_src_unmapped       = len(unmapped_src),
+        mapped_section       = _build_mapped_section(records),
+        unmapped_section     = _build_unmapped_section(unmapped_tgt),
         src_unmapped_section = _build_src_unmapped_section(unmapped_src),
-        transform_summary = _build_transform_summary(graph),
+        transform_summary    = transform_summary,
     )
 
-    log.info("s2t_judge: reviewing %d mapped + %d unmapped fields for %s",
-             len(records), len(unmapped_tgt), mapping_name)
+    # Safety net: if the assembled prompt still exceeds our char budget,
+    # drop the transform summary (least critical section) and rebuild.
+    if len(prompt) > _MAX_PROMPT_CHARS:
+        log.warning(
+            "s2t_judge: prompt too large (%d chars) — dropping transform summary and retrying",
+            len(prompt),
+        )
+        prompt = _PROMPT.format(
+            mapping_name         = mapping_name,
+            n_mapped             = len(records),
+            n_unmapped           = len(unmapped_tgt),
+            n_src_unmapped       = len(unmapped_src),
+            mapped_section       = _build_mapped_section(records),
+            unmapped_section     = _build_unmapped_section(unmapped_tgt),
+            src_unmapped_section = _build_src_unmapped_section(unmapped_src),
+            transform_summary    = "(omitted — prompt size limit reached)",
+        )
+
+    log.info("s2t_judge: reviewing %d mapped + %d unmapped fields for %s (prompt=%d chars)",
+             len(records), len(unmapped_tgt), mapping_name, len(prompt))
 
     timeout_secs = timeout or _cfg.agent_timeout_secs
     try:
