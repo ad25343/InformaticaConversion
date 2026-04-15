@@ -977,6 +977,31 @@ function openS2TModal() {
     if (sumEl) sumEl.textContent = s2t.judge_summary || '';
     banner.style.display = '';
 
+    // ── Needs Review callout ──────────────────────────────────────────────────
+    const reviewEl    = document.getElementById('s2tNeedsReview');
+    const reviewCount = document.getElementById('s2tNeedsReviewCount');
+    const reviewList  = document.getElementById('s2tNeedsReviewList');
+    const flagged = _s2tAllRecords.filter(r =>
+      r.judge_confidence === 'LOW' || r.judge_confidence === 'MEDIUM'
+    );
+    if (reviewEl && flagged.length) {
+      const CONF_BG_NR   = { HIGH: '#dcfce7', MEDIUM: '#fef9c3', LOW: '#fee2e2' };
+      const CONF_TEXT_NR = { HIGH: '#14532d', MEDIUM: '#713f12', LOW: '#7f1d1d' };
+      reviewCount.textContent = flagged.length;
+      reviewList.innerHTML = flagged.map(r => {
+        const conf = (r.judge_confidence || '').toUpperCase();
+        return `<div style="display:flex;align-items:baseline;gap:8px;font-size:11px;padding:3px 0;border-bottom:1px solid rgba(245,158,11,.15)">
+          <span style="padding:1px 6px;border-radius:3px;background:${CONF_BG_NR[conf]};color:${CONF_TEXT_NR[conf]};font-size:10px;font-weight:700;flex-shrink:0">${esc(conf)}</span>
+          <span style="color:#e2e8f0;white-space:nowrap;flex-shrink:0"><strong>${esc(r.target_table)}</strong>.<strong>${esc(r.target_field)}</strong></span>
+          <span style="color:#94a3b8">${esc(r.judge_note || '—')}</span>
+        </div>`;
+      }).join('');
+      reviewEl.style.display = '';
+    } else if (reviewEl) {
+      reviewEl.style.display = 'none';
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Gap findings table
     if (gapsPanel && gapsTbody) {
       if (judgeGaps.length) {
@@ -1001,6 +1026,8 @@ function openS2TModal() {
   } else {
     if (banner)    banner.style.display    = 'none';
     if (gapsPanel) gapsPanel.style.display = 'none';
+    const reviewEl = document.getElementById('s2tNeedsReview');
+    if (reviewEl)  reviewEl.style.display  = 'none';
   }
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1008,6 +1035,10 @@ function openS2TModal() {
   renderS2TTable();
 }
 function closeS2TModal() { document.getElementById('s2tModal').style.display = 'none'; }
+function filterConfidence(val) {
+  const sel = document.getElementById('s2tConfFilter');
+  if (sel) { sel.value = val; renderS2TTable(); }
+}
 
 function renderS2TTable() {
   const SC = {'Direct':'#dcfce7','Derived':'#fef9c3','Lookup':'#ede9fe','Filtered':'#ffedd5',
@@ -1017,10 +1048,12 @@ function renderS2TTable() {
   const CONF_BG   = { HIGH: '#dcfce7', MEDIUM: '#fef9c3', LOW: '#fee2e2' };
   const CONF_TEXT = { HIGH: '#14532d', MEDIUM: '#713f12', LOW: '#7f1d1d' };
   const statusFilter = document.getElementById('s2tStatusFilter')?.value || '';
+  const confFilter   = document.getElementById('s2tConfFilter')?.value || '';
   const q = (document.getElementById('s2tSearch')?.value || '').toLowerCase();
 
   const filtered = _s2tAllRecords.filter(r => {
     if (statusFilter && r.status !== statusFilter) return false;
+    if (confFilter  && (r.judge_confidence || '') !== confFilter) return false;
     if (!q) return true;
     return (r.source_table+' '+r.source_field+' '+r.target_table+' '+r.target_field+' '+r.logic+' '+r.status).toLowerCase().includes(q);
   });
@@ -1030,10 +1063,17 @@ function renderS2TTable() {
     const bg    = i%2===0 ? (SC[r.status]||'#fff') : '#f8fafc';
     const chain = r.transformation_chain_str || (r.transformation_chain||[]).join(' → ') || '—';
     const conf  = (r.judge_confidence || '').toUpperCase();
+    // LOW rows: red left border so the eye goes there immediately
+    const rowStyle = conf === 'LOW'
+      ? `background:${bg};border-left:3px solid #f87171`
+      : `background:${bg}`;
     const confCell = conf
-      ? `<span style="padding:2px 8px;border-radius:4px;background:${CONF_BG[conf]||'#f1f5f9'};color:${CONF_TEXT[conf]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${CONF_BG[conf]||'#e2e8f0'};white-space:nowrap" title="${esc(r.judge_note||'')}">${esc(conf)}</span>`
+      ? `<div style="display:flex;flex-direction:column;gap:2px">
+           <span style="padding:2px 8px;border-radius:4px;background:${CONF_BG[conf]||'#f1f5f9'};color:${CONF_TEXT[conf]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${CONF_BG[conf]||'#e2e8f0'};white-space:nowrap">${esc(conf)}</span>
+           ${r.judge_note && conf !== 'HIGH' ? `<span style="font-size:10px;color:#94a3b8;font-style:italic;max-width:160px;word-break:break-word">${esc(r.judge_note)}</span>` : ''}
+         </div>`
       : `<span style="color:#cbd5e1;font-size:10px">—</span>`;
-    return `<tr style="background:${bg}">
+    return `<tr style="${rowStyle}">
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e3a8a;font-weight:700;white-space:nowrap">${esc(r.source_table||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.source_field||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:10px">${esc(r.source_type||'—')}</td>
@@ -1042,7 +1082,7 @@ function renderS2TTable() {
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-weight:600;white-space:nowrap">${esc(r.target_field||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:10px">${esc(r.target_type||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0"><span style="padding:2px 8px;border-radius:4px;background:${SC[r.status]||'#f1f5f9'};color:${SC_TEXT[r.status]||'#1e293b'};font-size:10px;font-weight:700;border:1px solid ${SC[r.status]||'#e2e8f0'};white-space:nowrap">${esc(r.status||'—')}</span></td>
-      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0">${confCell}</td>
+      <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;vertical-align:top">${confCell}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;color:#94a3b8;font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(chain)}">${esc(chain)}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#475569;max-width:240px" title="${esc(r.logic||'')}">${esc(r.logic||'—')}</td>
       <td style="padding:5px 10px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#94a3b8;max-width:180px" title="${esc(r.notes||'')}">${esc(r.notes||'—')}</td>

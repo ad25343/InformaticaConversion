@@ -637,6 +637,13 @@ document.addEventListener('DOMContentLoaded', function() {
           <option value="Aggregated">Aggregated</option>
           <option value="Unmapped Target">Unmapped Target</option>
         </select>
+        <select id="s2tConfFilter" onchange="renderS2TTable()"
+          style="padding:6px 10px;font-size:12px;background:#1e2433;border:1px solid #2e3145;border-radius:6px;color:#f8fafc;outline:none">
+          <option value="">All confidence</option>
+          <option value="LOW">⚠ LOW only</option>
+          <option value="MEDIUM">MEDIUM only</option>
+          <option value="HIGH">HIGH only</option>
+        </select>
         <button onclick="closeS2TModal()" style="padding:6px 14px;background:#334155;color:#f8fafc;border:none;border-radius:6px;cursor:pointer;font-size:13px">✕ Close</button>
       </div>
     </div>
@@ -649,6 +656,14 @@ document.addEventListener('DOMContentLoaded', function() {
         <span id="s2tJudgeGapCount" style="font-size:11px;color:#f59e0b"></span>
         <span id="s2tJudgeSummary" style="font-size:11px;color:#94a3b8;flex:1"></span>
       </div>
+    </div>
+
+    <!-- Needs Review callout — LOW/MEDIUM confidence fields listed inline -->
+    <div id="s2tNeedsReview" style="display:none;margin:8px 16px 0;border-radius:8px;border:1px solid #f59e0b;background:#1c1700;padding:10px 14px">
+      <div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:8px">⚠ Needs Review — <span id="s2tNeedsReviewCount"></span> field(s) flagged by judge
+        <button onclick="filterConfidence('LOW')" style="margin-left:10px;padding:2px 8px;font-size:10px;background:transparent;color:#f59e0b;border:1px solid #f59e0b;border-radius:4px;cursor:pointer">Filter table →</button>
+      </div>
+      <div id="s2tNeedsReviewList" style="display:flex;flex-direction:column;gap:4px"></div>
     </div>
 
     <!-- Table -->
