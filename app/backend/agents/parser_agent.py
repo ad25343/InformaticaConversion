@@ -836,13 +836,16 @@ def _score_router_conditions(all_trans: list[dict]) -> dict:
     if not routers:
         return {"score": MAX, "max": MAX, "detail": "no Router transformations (full score)"}
 
-    # Inspect TABLEATTRIBUTE for "Group Filter Condition" or similar.
-    # Informatica Router groups use TABLEATTRIBUTE NAME="Group Filter Condition i"
+    # Inspect TABLEATTRIBUTE for group filter conditions.
+    # Two naming conventions seen in the wild:
+    #   Standard XML:  "Group Filter Condition 1", "Group Filter Condition 2" …
+    #   Parsed compact: "GROUP_1_FILTER", "GROUP_2_FILTER" …
+    # Match both: key contains "filter" AND (contains "group" OR ends with "_FILTER")
     with_condition = 0
     for r in routers:
         attribs = r.get("table_attribs", {})
         has_any = any(
-            "group filter" in k.lower() and v.strip()
+            "filter" in k.lower() and v.strip()
             for k, v in attribs.items()
         )
         if has_any:
@@ -868,7 +871,10 @@ def _score_lookup_conditions(all_trans: list[dict]) -> dict:
 
     with_condition = sum(
         1 for lkp in lookups
-        if lkp.get("table_attribs", {}).get("Lookup Condition", "").strip()
+        if any(
+            "lookup condition" in k.lower() and v.strip()
+            for k, v in lkp.get("table_attribs", {}).items()
+        )
     )
     frac = with_condition / len(lookups)
     score = round(MAX * frac, 1)
