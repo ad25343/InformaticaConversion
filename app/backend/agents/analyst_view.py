@@ -1,7 +1,7 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-Analyst View Generator — produces TWO outputs from a single Claude call:
+Analyst View Generator — produces TWO outputs from parallel Claude calls:
 
   1. Systems Requirements Document (Step 3a) — clean PRD-style description of
      what the mapping does.  No ambiguity flags, no gap callouts.  Written for
@@ -11,8 +11,8 @@ Analyst View Generator — produces TWO outputs from a single Claude call:
      missing metadata, and recommendations.  Separated so reviewers can assess
      completeness independently.
 
-Both are separated by a delimiter in a single Claude response and split by
-the caller.  This keeps cost to one lightweight call (~10k tokens max).
+Both run as parallel asyncio tasks so wall-clock time ≈ max(3a, 3b) instead
+of 3a + 3b.  Each call has its own timeout and failure is non-blocking.
 """
 from __future__ import annotations
 
@@ -26,9 +26,10 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.analyst_view")
 
 MODEL = _cfg.claude_model
-_ANALYST_MAX_TOKENS = 20_000
+_MAX_TOKENS_3A = 16_000   # Systems Requirements (larger — 8 sections + tables)
+_MAX_TOKENS_3B =  8_000   # Gaps & Review Findings (smaller — checklist style)
 
-# Delimiter used to split the two sections in Claude's response
+# Kept for backwards-compat with any callers that imported it
 SECTION_DELIMITER = "\n---SECTION_BREAK---\n"
 
 
@@ -119,12 +120,8 @@ Section structure (MANDATORY — follow this exact outline):
      Cover: field count differences, unused sources, disconnected lookups,
      Router bypass, unreachable groups, passthrough fields missing logic."""
 
-_ANALYST_PROMPT = """Produce TWO documents for this Informatica mapping, separated by
-exactly this line on its own:
-
----SECTION_BREAK---
-
-## Mapping Name
+# Shared context block — injected into both prompts
+_CONTEXT_BLOCK = """## Mapping Name
 {mapping_name}
 
 ## Structured Summary
@@ -134,8 +131,14 @@ exactly this line on its own:
 {documentation_md}
 
 ─────────────────────────────────────────────────
+"""
 
-## DOCUMENT 1: Systems Requirements (BEFORE the ---SECTION_BREAK--- line)
+_PROMPT_3A = _CONTEXT_BLOCK + """
+## Your Task: Systems Requirements Document
+
+Produce ONLY Document 1 below.  Do NOT produce a gaps/review section.
+
+## DOCUMENT 1: Systems Requirements
 
 Follow this EXACT structure and formatting. Use tables everywhere. Be honest
 about gaps — if an expression is missing, say so with ⚠ Gap status.
@@ -374,9 +377,14 @@ Note any Router groups that are unreachable and explain why.
 Cover: differing target field counts, unused sources, disconnected lookups,
 Router bypass patterns, unreachable groups, passthrough fields that may be missing logic.
 
-─────────────────────────────────────────────────
+"""
 
-## DOCUMENT 2: Gaps & Review Findings (AFTER the ---SECTION_BREAK--- line)
+_PROMPT_3B = _CONTEXT_BLOCK + """
+## Your Task: Gaps & Review Findings
+
+Produce ONLY Document 2 below.  Do NOT reproduce the Systems Requirements.
+
+## DOCUMENT 2: Gaps & Review Findings
 
 This is a structured review checklist. Be factual, specific, and actionable.
 Skip any section that has zero findings — do NOT include empty sections.
@@ -725,6 +733,22 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
+async def _call_claude(prompt: str, max_tokens: int, label: str) -> str:
+    """Single Claude call — returns the text response."""
+    from .retry import claude_with_retry
+    client = make_client()
+    message = await claude_with_retry(
+        lambda: client.messages.create(
+            model=MODEL,
+            max_tokens=max_tokens,
+            system=_ANALYST_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        ),
+        label=label,
+    )
+    return message.content[0].text
+
+
 async def generate_analyst_view(
     graph: dict,
     parse_report: ParseReport,
@@ -737,8 +761,10 @@ async def generate_analyst_view(
     and the technical documentation.
 
     Returns (analyst_view_md, analyst_gaps_md) — two separate markdown docs.
-    Uses a single Claude call with a delimiter to split the output.
+    Runs 3a and 3b as parallel Claude calls so wall-clock time ≈ max(3a, 3b).
     """
+    import asyncio
+
     mapping_names = parse_report.mapping_names or ["(unknown)"]
     mapping_name = ", ".join(mapping_names)
 
@@ -749,48 +775,28 @@ async def generate_analyst_view(
     if len(doc_for_prompt) > 40_000:
         doc_for_prompt = doc_for_prompt[:40_000] + "\n\n... [truncated for length]"
 
-    prompt = _ANALYST_PROMPT.format(
-        mapping_name=mapping_name,
-        structured_summary=structured_summary,
-        documentation_md=doc_for_prompt,
+    ctx = dict(mapping_name=mapping_name, structured_summary=structured_summary,
+               documentation_md=doc_for_prompt)
+    prompt_3a = _PROMPT_3A.format(**ctx)
+    prompt_3b = _PROMPT_3B.format(**ctx)
+
+    log.info("analyst_view: launching 3a + 3b in parallel for %s (3a max=%d, 3b max=%d)",
+             mapping_name, _MAX_TOKENS_3A, _MAX_TOKENS_3B)
+
+    _timeout = _cfg.agent_timeout_secs
+    results = await asyncio.gather(
+        asyncio.wait_for(_call_claude(prompt_3a, _MAX_TOKENS_3A, "analyst view 3a"), timeout=_timeout),
+        asyncio.wait_for(_call_claude(prompt_3b, _MAX_TOKENS_3B, "analyst view 3b"), timeout=_timeout),
+        return_exceptions=True,
     )
 
-    from .retry import claude_with_retry
+    analyst_md = results[0] if isinstance(results[0], str) else ""
+    gaps_md    = results[1] if isinstance(results[1], str) else ""
 
-    client = make_client()
-    log.info("analyst_view: generating PRD + gaps for %s — max_tokens=%d",
-             mapping_name, _ANALYST_MAX_TOKENS)
+    if not isinstance(results[0], str):
+        log.warning("analyst_view: 3a failed — %s", results[0])
+    if not isinstance(results[1], str):
+        log.warning("analyst_view: 3b failed — %s", results[1])
 
-    message = await claude_with_retry(
-        lambda: client.messages.create(
-            model=MODEL,
-            max_tokens=_ANALYST_MAX_TOKENS,
-            system=_ANALYST_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        ),
-        label="analyst view",
-    )
-
-    text = message.content[0].text
-    log.info("analyst_view: generated — %d chars", len(text))
-
-    # Split on the delimiter
-    if SECTION_DELIMITER.strip() in text:
-        parts = text.split(SECTION_DELIMITER.strip(), 1)
-        analyst_md = parts[0].strip()
-        gaps_md = parts[1].strip() if len(parts) > 1 else ""
-    else:
-        # Fallback: try common variations
-        for delimiter in ["---SECTION_BREAK---", "--- SECTION_BREAK ---", "—SECTION_BREAK—"]:
-            if delimiter in text:
-                parts = text.split(delimiter, 1)
-                analyst_md = parts[0].strip()
-                gaps_md = parts[1].strip() if len(parts) > 1 else ""
-                break
-        else:
-            # No delimiter found — put everything in 3a, leave 3b empty
-            log.warning("analyst_view: delimiter not found — all content goes to 3a")
-            analyst_md = text.strip()
-            gaps_md = ""
-
+    log.info("analyst_view: 3a=%d chars, 3b=%d chars", len(analyst_md), len(gaps_md))
     return analyst_md, gaps_md
