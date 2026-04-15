@@ -1281,3 +1281,257 @@ class TestIntegrationLoanApplications:
         # SYSDATE has no source; trace dead-ends at EXP with expression in logic
         assert r["status"] == STATUS_DERIVED
         assert "SYSDATE" in r.get("logic", "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Integration: FNMA Loan Delivery SCD2 (complex)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestIntegrationFNMALoanDelivery:
+    """
+    Complex mapping: FNMA_LOAN_DELIVERY joined to BORROWER_CREDIT_SCORES via
+    Style A Joiner (M_/D_ prefix on inputs, bare name on outputs).
+
+    Three output targets:
+      - FACT_LOAN_DELIVERY
+      - DIM_LOAN_STATUS_HIST
+      - AGG_PORTFOLIO_SUMMARY
+
+    Key Joiner resolution:
+      - LOAN_IDENTIFIER, PROPERTY_STATE → FNMA_LOAN_DELIVERY (master side)
+      - BORROWER_FICO, DTI_RATIO       → BORROWER_CREDIT_SCORES (detail side, M_/D_ prefix)
+
+    The original real-world bug: without M_/D_ prefix stripping, BORROWER_FICO
+    would dead-end at the Joiner transformation instead of resolving to the
+    BORROWER_CREDIT_SCORES source table.
+    """
+
+    @pytest.fixture(scope="class")
+    def s2t(self):
+        xml = SAMPLE_XML_DIR / "complex" / "m_FNMA_LOAN_DELIVERY_SCD2.xml"
+        return _run_s2t(xml)
+
+    def test_no_intermediate_as_source(self, s2t):
+        """
+        SQ_, JNR_, FIL_, LKP_ must never appear as source_table.
+        AGG_ is allowed only for genuinely aggregated fields (e.g. LOAN_COUNT).
+        """
+        bad = [r for r in s2t["records"]
+               if r["source_table"] and r["source_table"].startswith(
+                   ("SQ_", "JNR_", "FIL_", "LKP_"))]
+        assert bad == [], (
+            f"Transformations leaked as source: {[(r['target_field'], r['source_table']) for r in bad]}"
+        )
+
+    def test_three_target_tables_populated(self, s2t):
+        """Mapping writes to three distinct targets."""
+        tables = {r["target_table"] for r in s2t["records"]}
+        assert "FACT_LOAN_DELIVERY" in tables
+        assert "DIM_LOAN_STATUS_HIST" in tables
+        assert "AGG_PORTFOLIO_SUMMARY" in tables
+
+    # ── FACT_LOAN_DELIVERY ────────────────────────────────────────────────────
+
+    def test_loan_identifier_traces_to_fnma(self, s2t):
+        """Pass-through field on master side of Joiner → FNMA_LOAN_DELIVERY."""
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "LOAN_IDENTIFIER")
+        assert r is not None
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+        assert r["source_field"] == "LOAN_IDENTIFIER"
+
+    def test_property_state_traces_to_fnma(self, s2t):
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "PROPERTY_STATE")
+        assert r is not None
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+        assert r["source_field"] == "PROPERTY_STATE"
+
+    def test_borrower_fico_traces_to_credit_scores(self, s2t):
+        """
+        THE ORIGINAL BUG: BORROWER_FICO comes from the detail side of a
+        Style A Joiner (D_BORROWER_FICO input port → BORROWER_FICO output).
+        Without M_/D_ prefix resolution this would dead-end at the Joiner.
+        """
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "BORROWER_FICO")
+        assert r is not None
+        assert r["source_table"] == "BORROWER_CREDIT_SCORES", (
+            "BORROWER_FICO must trace through Joiner (Style A D_ prefix) "
+            f"to BORROWER_CREDIT_SCORES, got {r['source_table']}"
+        )
+        assert r["source_field"] == "BORROWER_FICO"
+
+    def test_dti_ratio_traces_to_credit_scores(self, s2t):
+        """DTI_RATIO also from detail side of same Joiner."""
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "DTI_RATIO")
+        assert r is not None
+        assert r["source_table"] == "BORROWER_CREDIT_SCORES"
+        assert r["source_field"] == "DTI_RATIO"
+
+    def test_delinquency_band_is_derived(self, s2t):
+        """DELINQUENCY_BAND is an IIF expression over DELINQUENCY_STATUS."""
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "DELINQUENCY_BAND")
+        assert r is not None
+        assert r["status"] == STATUS_DERIVED
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+        assert r["source_field"] == "DELINQUENCY_STATUS"
+
+    def test_credit_risk_tier_is_derived(self, s2t):
+        """CREDIT_RISK_TIER derived from BORROWER_FICO — still traces to BORROWER_CREDIT_SCORES."""
+        r = _field_result(s2t, "FACT_LOAN_DELIVERY", "CREDIT_RISK_TIER")
+        assert r is not None
+        assert r["status"] == STATUS_DERIVED
+        assert r["source_table"] == "BORROWER_CREDIT_SCORES"
+
+    # ── DIM_LOAN_STATUS_HIST ──────────────────────────────────────────────────
+
+    def test_dim_loan_identifier_traces_to_fnma(self, s2t):
+        r = _field_result(s2t, "DIM_LOAN_STATUS_HIST", "LOAN_IDENTIFIER")
+        assert r is not None
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+
+    def test_dim_eff_start_period_is_derived(self, s2t):
+        """EFF_START_PERIOD is derived from REPORTING_PERIOD."""
+        r = _field_result(s2t, "DIM_LOAN_STATUS_HIST", "EFF_START_PERIOD")
+        assert r is not None
+        assert r["status"] == STATUS_DERIVED
+
+    # ── AGG_PORTFOLIO_SUMMARY ─────────────────────────────────────────────────
+
+    def test_agg_reporting_period_traces_to_fnma(self, s2t):
+        r = _field_result(s2t, "AGG_PORTFOLIO_SUMMARY", "REPORTING_PERIOD")
+        assert r is not None
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+
+    def test_loan_count_source_is_aggregated(self, s2t):
+        """
+        LOAN_COUNT is a COUNT(*) in the Aggregator — no single field source.
+        The source leaks as AGG_PORTFOLIO (the aggregator transformation itself),
+        which is acceptable for aggregated count fields.
+        """
+        r = _field_result(s2t, "AGG_PORTFOLIO_SUMMARY", "LOAN_COUNT")
+        assert r is not None
+        # Aggregated count — source is the AGG transformation (acceptable)
+        assert r["source_table"] is not None  # some source recorded
+
+    def test_total_upb_traces_to_fnma(self, s2t):
+        r = _field_result(s2t, "AGG_PORTFOLIO_SUMMARY", "TOTAL_UPB")
+        assert r is not None
+        assert r["source_table"] == "FNMA_LOAN_DELIVERY"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Integration: SALES Fact SCD2 Load (complex, nested Joiners)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestIntegrationSalesFactLoad:
+    """
+    Complex mapping with two nested Joiners using Style B naming:
+      - JNR_TXN_ACCOUNTS:   OUT_ prefix on outputs, ACCOUNT_ID_M/ACCOUNT_ID_D on ambiguous inputs
+      - JNR_WITH_PRODUCTS:  O_ prefix on outputs,   PRODUCT_ID_M/PRODUCT_ID_D on ambiguous inputs
+
+    Router splits flow into two targets:
+      - FACT_TRANSACTIONS (19 fields)
+      - FACT_TXN_REJECTS  (3 fields)
+
+    Three source tables:
+      - STG_TRANSACTIONS (transaction data)
+      - STG_ACCOUNTS     (account dimension, master side of JNR_TXN_ACCOUNTS)
+      - STG_PRODUCTS     (product dimension, master side of JNR_WITH_PRODUCTS)
+    """
+
+    @pytest.fixture(scope="class")
+    def s2t(self):
+        xml = SAMPLE_XML_DIR / "complex" / "m_SALES_FACT_SCD2_LOAD.xml"
+        return _run_s2t(xml)
+
+    def test_no_intermediate_as_source(self, s2t):
+        """
+        Strict check: no SQ_, JNR_, FIL_, AGG_, LKP_ as source_table.
+        This mapping has two nested Style B Joiners (OUT_/O_ prefix).
+        Without the O_ prefix strip, all Joiner outputs would leak through.
+        """
+        bad = [r for r in s2t["records"]
+               if r["source_table"] and r["source_table"].startswith(
+                   ("SQ_", "JNR_", "FIL_", "AGG_", "LKP_"))]
+        assert bad == [], (
+            f"Transformations leaked as source: {[(r['target_field'], r['source_table']) for r in bad]}"
+        )
+
+    def test_two_target_tables_populated(self, s2t):
+        """Router sends records to two distinct targets."""
+        tables = {r["target_table"] for r in s2t["records"]}
+        assert "FACT_TRANSACTIONS" in tables
+        assert "FACT_TXN_REJECTS" in tables
+
+    # ── FACT_TRANSACTIONS ─────────────────────────────────────────────────────
+
+    def test_account_key_traces_to_stg_accounts(self, s2t):
+        """
+        ACCOUNT_KEY traces through nested Joiners (O_ → base → _D suffix) to STG_ACCOUNTS.
+        This is the critical path: JNR_WITH_PRODUCTS.O_ACCOUNT_ID
+        → JNR_TXN_ACCOUNTS.ACCOUNT_ID_D (or base) → SQ_ACCOUNTS → STG_ACCOUNTS.
+        """
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "ACCOUNT_KEY")
+        assert r is not None
+        assert r["source_table"] == "STG_ACCOUNTS", (
+            f"ACCOUNT_KEY must resolve through nested Joiners to STG_ACCOUNTS, "
+            f"got {r['source_table']}"
+        )
+        assert r["source_field"] == "ACCOUNT_ID"
+
+    def test_product_key_traces_to_stg_products(self, s2t):
+        """
+        PRODUCT_KEY traces through JNR_WITH_PRODUCTS (O_ prefix) to STG_PRODUCTS
+        via the PRODUCT_ID_M master-side port.
+        """
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "PRODUCT_KEY")
+        assert r is not None
+        assert r["source_table"] == "STG_PRODUCTS", (
+            f"PRODUCT_KEY must resolve through Joiner to STG_PRODUCTS, "
+            f"got {r['source_table']}"
+        )
+        assert r["source_field"] == "PRODUCT_ID"
+
+    def test_txn_date_traces_to_stg_transactions(self, s2t):
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "TXN_DATE")
+        assert r is not None
+        assert r["source_table"] == "STG_TRANSACTIONS"
+        assert r["source_field"] == "TXN_DATE"
+
+    def test_txn_amount_local_is_derived(self, s2t):
+        """TXN_AMOUNT_LOCAL is a currency-converted expression, status=Derived."""
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "TXN_AMOUNT_LOCAL")
+        assert r is not None
+        assert r["status"] == STATUS_DERIVED
+        assert r["source_table"] == "STG_TRANSACTIONS"
+        assert r["source_field"] == "TXN_AMOUNT"
+
+    def test_risk_rating_traces_to_stg_accounts(self, s2t):
+        """RISK_RATING comes from STG_ACCOUNTS, not STG_TRANSACTIONS."""
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "RISK_RATING")
+        assert r is not None
+        assert r["source_table"] == "STG_ACCOUNTS"
+
+    def test_asset_class_traces_to_stg_products(self, s2t):
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "ASSET_CLASS")
+        assert r is not None
+        assert r["source_table"] == "STG_PRODUCTS"
+        assert r["source_field"] == "ASSET_CLASS"
+
+    def test_platform_traces_to_stg_transactions(self, s2t):
+        r = _field_result(s2t, "FACT_TRANSACTIONS", "PLATFORM")
+        assert r is not None
+        assert r["source_table"] == "STG_TRANSACTIONS"
+
+    # ── FACT_TXN_REJECTS (Router secondary target) ────────────────────────────
+
+    def test_reject_txn_id_traces_to_stg_transactions(self, s2t):
+        """FACT_TXN_REJECTS.TXN_ID — Router secondary group, still resolves."""
+        r = _field_result(s2t, "FACT_TXN_REJECTS", "TXN_ID")
+        assert r is not None
+        assert r["source_table"] == "STG_TRANSACTIONS"
+        assert r["source_field"] == "TXN_ID"
+
+    def test_reject_table_field_count(self, s2t):
+        """FACT_TXN_REJECTS should have exactly 3 mapped fields."""
+        rejects = [r for r in s2t["records"] if r["target_table"] == "FACT_TXN_REJECTS"]
+        assert len(rejects) == 3, f"Expected 3 reject fields, got {len(rejects)}"

@@ -210,38 +210,67 @@ def _build_sq_resolution(graph: dict, source_names: set) -> dict[str, str]:
     a SQ and find no further connectors.  This map lets us resolve SQ instances to
     their real source table when the trace dead-ends at one.
 
-    Strategy: strip common SQ prefixes (SQ_, SQI_) and check against source_names.
+    Resolution strategies (in order):
+      1. Exact match after stripping SQ_ prefix  (SQ_ORDERS → ORDERS)
+      2. Suffix match — source has extra schema prefix
+         (SQ_LOAN_APPLICATIONS → LOAN_APPLICATIONS → STG_LOAN_APPLICATIONS)
+      3. Field-name overlap — SQ port names match source field names
+         (SQ_FNMA_DELIVERY ports = FNMA_LOAN_DELIVERY fields, even though
+          FNMA_DELIVERY ≠ FNMA_LOAN_DELIVERY after prefix strip)
     """
     sq_map: dict[str, str] = {}
     sq_prefixes = ("SQ_", "SQI_", "SRC_SQ_")
     source_upper = {s.upper(): s for s in source_names}
+
+    # Build field-name index for strategy 3: source_name → set of field names
+    source_fields: dict[str, set[str]] = {}
+    for src in graph.get("sources", []):
+        source_fields[src["name"]] = {f["name"].upper() for f in src.get("fields", [])}
 
     for mapping in graph.get("mappings", []):
         for t in mapping.get("transformations", []):
             if "Source Qualifier" not in t.get("type", ""):
                 continue
             inst = t["name"]
+            if inst in sq_map:
+                continue
+
             for pfx in sq_prefixes:
                 if not inst.upper().startswith(pfx):
                     continue
                 candidate = inst[len(pfx):]
                 cu = candidate.upper()
 
-                # 1) Exact match (e.g. SQ_ORDERS → ORDERS)
+                # 1) Exact match
                 if cu in source_upper:
                     sq_map[inst] = source_upper[cu]
                     break
 
-                # 2) Suffix match: source may have an extra schema prefix
-                #    e.g. SQ_LOAN_APPLICATIONS → LOAN_APPLICATIONS
-                #         matches STG_LOAN_APPLICATIONS (ends with _LOAN_APPLICATIONS)
+                # 2) Suffix match (schema prefix on source name)
                 for sname_upper, sname in source_upper.items():
                     if sname_upper.endswith("_" + cu):
                         sq_map[inst] = sname
                         break
-
                 if inst in sq_map:
                     break
+
+            # 3) Field-name overlap fallback — most robust
+            #    SQ port names should be a subset of its source's field names.
+            if inst not in sq_map:
+                sq_port_names = {p["name"].upper() for p in t.get("ports", [])}
+                if sq_port_names:
+                    best_match, best_score = None, 0
+                    for sname, sfields in source_fields.items():
+                        if not sfields:
+                            continue
+                        overlap = len(sq_port_names & sfields)
+                        score = overlap / max(len(sq_port_names), len(sfields))
+                        if score > best_score and overlap >= 3:
+                            best_score = score
+                            best_match = sname
+                    if best_match and best_score >= 0.5:
+                        sq_map[inst] = best_match
+
     return sq_map
 
 
@@ -782,8 +811,10 @@ def _trace_to_source(
 
             # Joiner port disambiguation — handles two naming conventions:
             elif ttype == "Joiner":
-                # Style B: strip leading OUT_ from output port, then resolve
-                base_field = (current_field[4:] if current_field.upper().startswith("OUT_")
+                # Style B: strip leading OUT_ or O_ from output port, then resolve
+                cf_upper = current_field.upper()
+                base_field = (current_field[4:] if cf_upper.startswith("OUT_")
+                              else current_field[2:] if cf_upper.startswith("O_")
                               else current_field)
 
                 # 1) Base name directly (non-ambiguous fields, no disambiguation suffix)
