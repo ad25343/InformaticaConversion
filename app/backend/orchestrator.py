@@ -100,8 +100,9 @@ class _PipelineCtx:
     complexity: Any = None
     graph: dict = field(default_factory=dict)
     documentation_md: str = ""
-    analyst_view_md: str = ""
-    analyst_gaps_md: str = ""
+    analyst_summary_md: str = ""   # Step 3a — plain-English Analyst Summary
+    analyst_view_md: str = ""      # Step 3b — Technical Specification
+    analyst_gaps_md: str = ""      # Step 3c — Gaps & Review Findings
     verification: Any = None
     manifest_report: Any = None
     manifest_xlsx_bytes: Optional[bytes] = None
@@ -699,53 +700,54 @@ async def _step_3_run_doc_agent(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]
     ctx._doc_truncated = doc_truncated
     ctx._doc_missing_sentinel = doc_missing_sentinel
 
-    # Generate analyst view (3a) + gaps (3b) in parallel — each call has its own timeout
+    # Generate analyst docs (3a summary + 3b tech spec + 3c gaps) in parallel
     try:
         from .agents.analyst_view import generate_analyst_view
         s2t_records = []
         if hasattr(ctx, 's2t_state') and isinstance(ctx.s2t_state, dict):
             s2t_records = ctx.s2t_state.get("records", [])
-        ctx.analyst_view_md, ctx.analyst_gaps_md = await generate_analyst_view(
+        ctx.analyst_summary_md, ctx.analyst_view_md, ctx.analyst_gaps_md = await generate_analyst_view(
             ctx.graph, ctx.parse_report, ctx.documentation_md,
             session_parse_report=ctx.session_parse_report,
             s2t_records=s2t_records,
         )
     except Exception as e:
         ctx.log.warning(f"Analyst view generation failed (non-blocking): {e}", step=3)
+        ctx.analyst_summary_md = ""
         ctx.analyst_view_md = ""
         ctx.analyst_gaps_md = ""
 
-    # Validate and auto-repair the analyst documents
+    # Validate and auto-repair the technical spec (3b) and gaps (3c)
     if ctx.analyst_view_md or ctx.analyst_gaps_md:
         try:
             from .agents.analyst_view_validator import validate_and_repair
-            ctx.analyst_view_md, ctx.analyst_gaps_md, report_3a, report_3b = \
+            ctx.analyst_view_md, ctx.analyst_gaps_md, report_3b, report_3c = \
                 validate_and_repair(ctx.analyst_view_md, ctx.analyst_gaps_md)
-            ctx.log.info(f"Analyst doc validation: {report_3a.summary()}", step=3)
-            ctx.log.info(f"Analyst doc validation: {report_3b.summary()}", step=3)
+            ctx.log.info(f"Analyst doc validation: 3b: {report_3b.summary()}", step=3)
+            ctx.log.info(f"Analyst doc validation: 3c: {report_3c.summary()}", step=3)
             # Store validation results in state for UI display
             ctx._analyst_validation = {
-                "3a": {
-                    "valid": report_3a.is_valid,
-                    "sections": report_3a.section_count,
-                    "tables": report_3a.table_count,
-                    "mermaid_diagrams": report_3a.mermaid_count,
-                    "critical": report_3a.critical_count,
-                    "warnings": report_3a.warning_count,
-                    "issues": [
-                        {"section": i.section, "severity": i.severity, "code": i.code, "message": i.message}
-                        for i in report_3a.issues
-                    ],
-                },
                 "3b": {
                     "valid": report_3b.is_valid,
                     "sections": report_3b.section_count,
                     "tables": report_3b.table_count,
+                    "mermaid_diagrams": report_3b.mermaid_count,
                     "critical": report_3b.critical_count,
                     "warnings": report_3b.warning_count,
                     "issues": [
                         {"section": i.section, "severity": i.severity, "code": i.code, "message": i.message}
                         for i in report_3b.issues
+                    ],
+                },
+                "3c": {
+                    "valid": report_3c.is_valid,
+                    "sections": report_3c.section_count,
+                    "tables": report_3c.table_count,
+                    "critical": report_3c.critical_count,
+                    "warnings": report_3c.warning_count,
+                    "issues": [
+                        {"section": i.section, "severity": i.severity, "code": i.code, "message": i.message}
+                        for i in report_3c.issues
                     ],
                 },
             }
@@ -767,7 +769,7 @@ async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
         ctx._doc_truncated = False
         ctx._doc_missing_sentinel = False
         yield await ctx.emit(3, JobStatus.DOCUMENTING, "Documentation skipped per org config",
-                             {"documentation_md": ctx.documentation_md, "analyst_view_md": "", "analyst_gaps_md": "", "doc_truncated": False})
+                             {"documentation_md": ctx.documentation_md, "analyst_summary_md": "", "analyst_view_md": "", "analyst_gaps_md": "", "doc_truncated": False})
         return
 
     yield await ctx.emit(3, JobStatus.DOCUMENTING, "Generating documentation — Pass 1 (transformations)…")
@@ -784,10 +786,11 @@ async def _step_3_document(ctx: _PipelineCtx) -> AsyncGenerator[dict, None]:
 
     doc_truncated = getattr(ctx, "_doc_truncated", False)
     state_payload = {
-        "documentation_md": ctx.documentation_md,
-        "analyst_view_md": ctx.analyst_view_md,
-        "analyst_gaps_md": ctx.analyst_gaps_md,
-        "doc_truncated": doc_truncated,
+        "documentation_md":  ctx.documentation_md,
+        "analyst_summary_md": ctx.analyst_summary_md,
+        "analyst_view_md":   ctx.analyst_view_md,
+        "analyst_gaps_md":   ctx.analyst_gaps_md,
+        "doc_truncated":     doc_truncated,
     }
     if hasattr(ctx, "_analyst_validation"):
         state_payload["analyst_validation"] = ctx._analyst_validation
@@ -1549,6 +1552,7 @@ def _reconstruct_signoff_state(state: dict) -> dict:
         "parse_report":        parse_report,
         "complexity":          complexity,
         "documentation_md":    state.get("documentation_md", ""),
+        "analyst_summary_md":  state.get("analyst_summary_md", ""),
         "analyst_view_md":     state.get("analyst_view_md", ""),
         "analyst_gaps_md":     state.get("analyst_gaps_md", ""),
         "graph":               state["graph"],
@@ -1602,6 +1606,7 @@ async def resume_after_signoff(job_id: str, state: dict, filename: str = "unknow
         parse_report=s["parse_report"],
         complexity=s["complexity"],
         documentation_md=s["documentation_md"],
+        analyst_summary_md=s.get("analyst_summary_md", ""),
         analyst_view_md=s.get("analyst_view_md", ""),
         analyst_gaps_md=s.get("analyst_gaps_md", ""),
         graph=s["graph"],
@@ -1826,6 +1831,7 @@ def _reconstruct_security_review_state(state: dict) -> dict:
         "parse_report":        ParseReport(**state["parse_report"]),
         "complexity":          ComplexityReport(**state["complexity"]),
         "documentation_md":    state.get("documentation_md", ""),
+        "analyst_summary_md":  state.get("analyst_summary_md", ""),
         "analyst_view_md":     state.get("analyst_view_md", ""),
         "analyst_gaps_md":     state.get("analyst_gaps_md", ""),
         "graph":               state["graph"],
@@ -1890,6 +1896,7 @@ async def resume_after_security_review(job_id: str, state: dict, filename: str =
         parse_report=s["parse_report"],
         complexity=s["complexity"],
         documentation_md=s["documentation_md"],
+        analyst_summary_md=s.get("analyst_summary_md", ""),
         analyst_view_md=s.get("analyst_view_md", ""),
         analyst_gaps_md=s.get("analyst_gaps_md", ""),
         graph=s["graph"],
@@ -1932,9 +1939,10 @@ def _reconstruct_checkpoint_state(state: dict) -> dict:
     schemas = _deserialize_checkpoint_schemas(s)
     return {
         **schemas,
-        "documentation_md": s.get("documentation_md", ""),
-        "analyst_view_md":  s.get("analyst_view_md", ""),
-        "analyst_gaps_md":  s.get("analyst_gaps_md", ""),
+        "documentation_md":   s.get("documentation_md", ""),
+        "analyst_summary_md": s.get("analyst_summary_md", ""),
+        "analyst_view_md":    s.get("analyst_view_md", ""),
+        "analyst_gaps_md":    s.get("analyst_gaps_md", ""),
         "graph":            s.get("graph", {}),
         "s2t_state":        s.get("s2t", {}),
         "pipeline_mode":    s.get("pipeline_mode", "full"),

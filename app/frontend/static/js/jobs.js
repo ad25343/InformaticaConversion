@@ -663,9 +663,26 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 3a — ANALYST VIEW (Systems Requirements) ────────────────
+  // ── STEP 3a — ANALYST SUMMARY (plain English, no Informatica jargon) ────────────────
+  if (state.analyst_summary_md) {
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🧑‍💼</span> Step 3a — Analyst Summary
+        <span class="dl-group">
+          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_summary')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_summary_md','analyst_summary')">&#x2913; MD</button>
+        </span>
+        <span class="card-chevron">▼</span></div>
+      <div class="card-body">
+      <div class="doc-content">${markdownToHtml(state.analyst_summary_md)}</div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 3b — TECHNICAL SPECIFICATION ────────────────
   if (state.analyst_view_md) {
-    const av = state.analyst_validation?.['3a'];
+    const av = state.analyst_validation?.['3b'];
     const avBadge = av
       ? (av.critical > 0
           ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px" title="${av.critical} critical, ${av.warnings} warnings">${av.critical} issues</span>`
@@ -673,13 +690,13 @@ function renderJobPanel(job) {
             ? `<span class="badge badge-waiting" style="font-size:9px;margin-left:6px" title="${av.warnings} warnings">${av.warnings} warnings</span>`
             : `<span class="badge badge-done" style="font-size:9px;margin-left:6px" title="${av.sections} sections, ${av.tables} tables validated">Validated</span>`)
       : '';
-    html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3a — Systems Requirements ${avBadge}
+    html += `<div class="card card-collapsed">
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3b — Technical Specification ${avBadge}
         <span class="dl-group">
-          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','technical_specification','Technical Specification')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','systems_requirements','Systems Requirements')">&#x2913; HTML</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','systems_requirements')">&#x2913; MD</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','technical_specification','Technical Specification')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','technical_specification')">&#x2913; MD</button>
         </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">
@@ -691,16 +708,16 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 3b — GAPS & REVIEW FINDINGS ────────────────
+  // ── STEP 3c — GAPS & REVIEW FINDINGS ────────────────
   if (state.analyst_gaps_md) {
-    const gv = state.analyst_validation?.['3b'];
+    const gv = state.analyst_validation?.['3c'];
     const gvBadge = gv
       ? (gv.critical > 0
           ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px">${gv.critical} issues</span>`
           : `<span class="badge badge-done" style="font-size:9px;margin-left:6px">Validated</span>`)
       : '';
     html += `<div class="card" style="border-color:var(--warn)">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3b — Gaps &amp; Review Findings ${gvBadge}
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3c — Gaps &amp; Review Findings ${gvBadge}
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
@@ -717,7 +734,7 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 3c — TECHNICAL DOCUMENTATION ────────────────
+  // ── STEP 3d — TECHNICAL DOCUMENTATION (Reference) ────────────────
   if (state.documentation_md) {
     const truncBanner = state.doc_truncated
       ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,146,60,.12);border:1px solid var(--sev-high);border-radius:8px;font-size:12px;color:#fb923c">
@@ -727,7 +744,7 @@ function renderJobPanel(job) {
          </div>`
       : '';
     html += `<div class="card card-collapsed" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3c — Technical Documentation (Reference)
+      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3d — Reference Documentation
         ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
         <span class="dl-group">
           <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('documentation_md','technical_documentation','Technical Documentation')">&#x2913; PDF</button>

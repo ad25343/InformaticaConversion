@@ -604,17 +604,18 @@ def _md_to_docx_bytes(md_text: str, title: str, mapping_name: str = "", tier: st
 
 @router.get("/jobs/{job_id}/doc/{doc_key}.docx")
 async def download_doc_docx(job_id: str, doc_key: str):
-    """Download analyst_view_md or analyst_gaps_md as a styled DOCX."""
+    """Download analyst_summary_md, analyst_view_md, or analyst_gaps_md as a styled DOCX."""
     import io as _io
 
     ALLOWED = {
-        "analyst_view": ("analyst_view_md", "Systems Requirements"),
-        "analyst_gaps": ("analyst_gaps_md", "Gaps & Review Findings"),
+        "analyst_summary": ("analyst_summary_md", "Analyst Summary",        "analyst_summary"),
+        "analyst_view":    ("analyst_view_md",     "Technical Specification","technical_specification"),
+        "analyst_gaps":    ("analyst_gaps_md",     "Gaps & Review Findings", "gaps_review"),
     }
     if doc_key not in ALLOWED:
         raise HTTPException(400, f"Invalid doc_key: {doc_key}. Allowed: {list(ALLOWED)}")
 
-    state_key, title = ALLOWED[doc_key]
+    state_key, title, suffix = ALLOWED[doc_key]
     job = await db.get_job(job_id)
     if not job:
         _validate_job_id(job_id)
@@ -630,7 +631,6 @@ async def download_doc_docx(job_id: str, doc_key: str):
     tier = state.get("complexity", {}).get("tier", "")
     docx_bytes = _md_to_docx_bytes(md_text, title, mapping_name=mapping_name, tier=tier)
 
-    suffix = "systems_requirements" if doc_key == "analyst_view" else "gaps_review"
     return StreamingResponse(
         _io.BytesIO(docx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

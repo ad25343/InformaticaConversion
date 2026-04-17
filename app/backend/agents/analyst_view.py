@@ -1,18 +1,21 @@
 # Copyright (c) 2026 ad25343 — https://github.com/ad25343/InformaticaConversion
 # Licensed under CC BY-NC 4.0. Commercial use requires written permission.
 """
-Analyst View Generator — produces TWO outputs from parallel Claude calls:
+Analyst View Generator — produces THREE outputs from parallel Claude calls:
 
-  1. Systems Requirements Document (Step 3a) — clean PRD-style description of
-     what the mapping does.  No ambiguity flags, no gap callouts.  Written for
-     analysts, testers, and developers who need to understand the mapping.
+  1. Analyst Summary (Step 3a) — plain-English, jargon-free summary written
+     for business analysts and stakeholders who cannot read Informatica code.
+     No Informatica object names, no IIF expressions, no transform chains.
 
-  2. Gaps & Review Findings (Step 3b) — documentation gaps, ambiguities,
-     missing metadata, and recommendations.  Separated so reviewers can assess
-     completeness independently.
+  2. Technical Specification (Step 3b) — detailed PRD-style document with
+     verbatim expressions, transform chains, and full field mapping matrix.
+     Written for developers and testers who need to convert the mapping.
 
-Both run as parallel asyncio tasks so wall-clock time ≈ max(3a, 3b) instead
-of 3a + 3b.  Each call has its own timeout and failure is non-blocking.
+  3. Gaps & Review Findings (Step 3c) — documentation gaps, ambiguities,
+     missing metadata, and pre-conversion checklist.
+
+All three run as parallel asyncio tasks so wall-clock time ≈ max(3a, 3b, 3c).
+Each call has its own timeout and failure is non-blocking.
 """
 from __future__ import annotations
 
@@ -26,14 +29,137 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.analyst_view")
 
 MODEL = _cfg.claude_model
-_MAX_TOKENS_3A = 16_000   # Systems Requirements (larger — 8 sections + tables)
-_MAX_TOKENS_3B =  8_000   # Gaps & Review Findings (smaller — checklist style)
+_MAX_TOKENS_3A =  6_000   # Analyst Summary (plain English, no tables of expressions)
+_MAX_TOKENS_3B = 16_000   # Technical Specification (larger — 8 sections + tables)
+_MAX_TOKENS_3C =  8_000   # Gaps & Review Findings (smaller — checklist style)
 
 # Kept for backwards-compat with any callers that imported it
 SECTION_DELIMITER = "\n---SECTION_BREAK---\n"
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
+
+_SUMMARY_SYSTEM = """You are a senior business analyst writing a plain-English summary
+of a data integration process for analysts, business users, and project managers who
+have NO knowledge of Informatica, ETL tools, or SQL.
+
+Your audience cannot read code. They need to understand WHAT the process does, not HOW
+it is technically implemented. Write as if explaining to a smart non-technical colleague.
+
+Strict rules:
+- NEVER use Informatica object names (e.g., EXP_DERIVE, RTR_LOAN_CHANGE, SQ_FNMA_DELIVERY,
+  JNR_LOAN_CREDIT). Refer to the process steps by business purpose instead:
+    "a calculation step", "a routing step", "the join with credit scores", etc.
+- NEVER show SQ→JNR→LKP→EXP→RTR transform chain notation.
+- NEVER reproduce verbatim Informatica IIF/SQL expressions. Translate them to plain English:
+    GOOD: "The credit risk tier is assigned by taking the lower of the two borrowers'
+          FICO scores. A score of 780 or above is Super Prime; 720–779 is Prime; etc."
+    BAD:  "IIF(ISNULL(BORROWER_FICO), 'UNKNOWN', IIF(IIF(ISNULL(COBORROWER_FICO)..."
+- Replace ETL jargon with plain English:
+    "Source Qualifier" → "data extract" or "filtered query"
+    "Expression Transformation" → "calculated fields"
+    "Router" → "conditional split" or "routing step"
+    "Joiner" → "join" or "data merge"
+    "Aggregator" → "summary rollup"
+    "Lookup" → "reference lookup"
+    "SCD2" → "versioned history" or "change history"
+    "ETL audit fields" → "system-generated tracking fields"
+- Use tables for structured information (sources, outputs, business rules).
+- Keep the document to 6 sections maximum. No section should be a wall of text.
+- Output ONLY the Markdown document — no preamble, no commentary outside the doc.
+"""
+
+_PROMPT_SUMMARY = """## Mapping Name
+{mapping_name}
+
+## Structured Summary
+{structured_summary}
+
+─────────────────────────────────────────────────
+
+## Your Task: Analyst-Friendly Summary
+
+Write a plain-English summary that a business analyst with no Informatica knowledge
+can read and immediately understand. Use the structured summary above as your source
+of truth. Do NOT reproduce Informatica object names, expressions, or transform chains.
+
+Translate every technical detail into business language. For calculations, explain
+what the field means and how it is derived in one or two plain sentences.
+
+Follow this EXACT structure:
+
+# {mapping_name} — Analyst Summary
+
+---
+
+## 1. What This Process Does
+
+2–3 sentences. What business problem does this process solve? What data does it move
+and why? Who consumes the output?
+
+---
+
+## 2. Data Sources
+
+| Source | Description | Key Fields Used |
+|--------|-------------|-----------------|
+| Source table name | What this table contains in business terms | List the fields that matter, in plain English |
+
+If a source has a filter applied (e.g., "only active records"), note it in the Description column.
+
+---
+
+## 3. Output Tables
+
+| Output Table | Purpose | Key Fields |
+|--------------|---------|------------|
+| Target table name | What this table stores | Notable fields |
+
+If two output tables serve different purposes (e.g., detailed fact vs. rolled-up summary),
+explain the difference clearly.
+
+---
+
+## 4. Calculations & Derived Fields
+
+For each field that is calculated (not a direct copy), write:
+
+**Field Name** — One or two plain-English sentences explaining how it is calculated
+and what the possible values mean.
+
+Example:
+**Credit Risk Tier** — Assigned based on the lower of the two borrowers' FICO credit
+scores. Scores 780 and above are Super Prime; 720–779 are Prime; 660–719 are Alt-A;
+620–659 are Subprime; below 620 are Deep Subprime. If no credit score is available,
+the tier is Unknown.
+
+Do NOT show Informatica expressions. Do NOT use code blocks.
+
+---
+
+## 5. Business Rules
+
+Numbered list. One sentence each. Write in plain English using "if / then" language.
+Include any filters, routing decisions, and calculation logic.
+
+Example:
+1. Only loan records with a valid loan identifier and a non-negative balance are processed.
+2. Each loan is compared to its prior status to detect changes.
+3. New loans (appearing for the first time) go to both the fact table and the history table.
+
+---
+
+## 6. What to Validate (UAT)
+
+| # | What to Check | How to Validate |
+|---|---------------|-----------------|
+| 1 | Plain English description of the check | How an analyst would verify it |
+
+Include 5–8 practical checks an analyst can perform without any ETL knowledge.
+Examples: row counts, sample value checks, null checks, range checks on numeric fields.
+
+---
+"""
 
 _ANALYST_SYSTEM = """You are a senior data analyst writing a structured requirements
 document for an Informatica PowerCenter mapping being converted to modern code.
@@ -733,17 +859,16 @@ def _build_structured_summary(graph: dict, parse_report: ParseReport,
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-async def _call_claude(prompt: str, max_tokens: int, label: str) -> str:
+async def _call_claude(prompt: str, system: str, max_tokens: int, label: str) -> str:
     """Single Claude call — returns the text response."""
-    from .retry import claude_with_retry
+    from ._client import call_claude_with_retry
     client = make_client()
-    message = await claude_with_retry(
-        lambda: client.messages.create(
-            model=MODEL,
-            max_tokens=max_tokens,
-            system=_ANALYST_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        ),
+    message = await call_claude_with_retry(
+        client,
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
         label=label,
     )
     return message.content[0].text
@@ -755,13 +880,16 @@ async def generate_analyst_view(
     documentation_md: str,
     session_parse_report: Optional[SessionParseReport] = None,
     s2t_records: list[dict] | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """
-    Produce the Analyst View (Systems Requirements + Gaps) from the graph
-    and the technical documentation.
+    Produce three analyst documents from the graph and technical documentation.
 
-    Returns (analyst_view_md, analyst_gaps_md) — two separate markdown docs.
-    Runs 3a and 3b as parallel Claude calls so wall-clock time ≈ max(3a, 3b).
+    Returns (summary_md, tech_spec_md, gaps_md):
+      - summary_md   : Step 3a — plain-English Analyst Summary (no Informatica jargon)
+      - tech_spec_md : Step 3b — Technical Specification (full detail for developers)
+      - gaps_md      : Step 3c — Gaps & Review Findings
+
+    All three run as parallel asyncio tasks so wall-clock ≈ max(3a, 3b, 3c).
     """
     import asyncio
 
@@ -775,34 +903,44 @@ async def generate_analyst_view(
     if len(doc_for_prompt) > 40_000:
         doc_for_prompt = doc_for_prompt[:40_000] + "\n\n... [truncated for length]"
 
-    ctx = dict(mapping_name=mapping_name, structured_summary=structured_summary,
-               documentation_md=doc_for_prompt)
-    prompt_3a = _PROMPT_3A.format(**ctx)
-    prompt_3b = _PROMPT_3B.format(**ctx)
+    ctx_with_doc = dict(mapping_name=mapping_name, structured_summary=structured_summary,
+                        documentation_md=doc_for_prompt)
+    ctx_no_doc   = dict(mapping_name=mapping_name, structured_summary=structured_summary)
 
-    log.info("analyst_view: launching 3a + 3b in parallel for %s (3a max=%d, 3b max=%d)",
-             mapping_name, _MAX_TOKENS_3A, _MAX_TOKENS_3B)
+    prompt_3a = _PROMPT_SUMMARY.format(**ctx_no_doc)   # Summary — no doc needed
+    prompt_3b = _PROMPT_3A.format(**ctx_with_doc)      # Technical Spec (was 3a)
+    prompt_3c = _PROMPT_3B.format(**ctx_with_doc)      # Gaps (was 3b)
 
-    # 3a generates up to 16K tokens (2× 3b) so give it proportionally more time.
-    # Both run in parallel so wall-clock ≈ max(timeout_3a, timeout_3b) — not additive.
-    _timeout_3b = _cfg.agent_timeout_secs          # e.g. 300s
-    _timeout_3a = _cfg.agent_timeout_secs * 2      # e.g. 600s — 3a is the larger doc
+    log.info("analyst_view: launching 3a+3b+3c in parallel for %s (tokens: %d/%d/%d)",
+             mapping_name, _MAX_TOKENS_3A, _MAX_TOKENS_3B, _MAX_TOKENS_3C)
 
-    log.info("analyst_view: timeouts — 3a=%ds, 3b=%ds", _timeout_3a, _timeout_3b)
+    # 3b (Technical Spec) generates the most tokens — give it the most time.
+    # All three run in parallel so wall-clock ≈ max of the three timeouts.
+    _timeout_3a = _cfg.agent_timeout_secs            # Summary is small — normal timeout
+    _timeout_3b = _cfg.agent_timeout_secs * 2        # Tech Spec is large — 2× timeout
+    _timeout_3c = _cfg.agent_timeout_secs            # Gaps is medium — normal timeout
+
+    log.info("analyst_view: timeouts — 3a=%ds, 3b=%ds, 3c=%ds",
+             _timeout_3a, _timeout_3b, _timeout_3c)
 
     results = await asyncio.gather(
-        asyncio.wait_for(_call_claude(prompt_3a, _MAX_TOKENS_3A, "analyst view 3a"), timeout=_timeout_3a),
-        asyncio.wait_for(_call_claude(prompt_3b, _MAX_TOKENS_3B, "analyst view 3b"), timeout=_timeout_3b),
+        asyncio.wait_for(_call_claude(prompt_3a, _SUMMARY_SYSTEM,  _MAX_TOKENS_3A, "analyst summary 3a"), timeout=_timeout_3a),
+        asyncio.wait_for(_call_claude(prompt_3b, _ANALYST_SYSTEM,  _MAX_TOKENS_3B, "tech spec 3b"),       timeout=_timeout_3b),
+        asyncio.wait_for(_call_claude(prompt_3c, _ANALYST_SYSTEM,  _MAX_TOKENS_3C, "gaps review 3c"),     timeout=_timeout_3c),
         return_exceptions=True,
     )
 
-    analyst_md = results[0] if isinstance(results[0], str) else ""
-    gaps_md    = results[1] if isinstance(results[1], str) else ""
+    summary_md  = results[0] if isinstance(results[0], str) else ""
+    tech_md     = results[1] if isinstance(results[1], str) else ""
+    gaps_md     = results[2] if isinstance(results[2], str) else ""
 
     if not isinstance(results[0], str):
-        log.warning("analyst_view: 3a failed — %s: %s", type(results[0]).__name__, results[0])
+        log.warning("analyst_view: 3a (summary) failed — %s: %s", type(results[0]).__name__, results[0])
     if not isinstance(results[1], str):
-        log.warning("analyst_view: 3b failed — %s: %s", type(results[1]).__name__, results[1])
+        log.warning("analyst_view: 3b (tech spec) failed — %s: %s", type(results[1]).__name__, results[1])
+    if not isinstance(results[2], str):
+        log.warning("analyst_view: 3c (gaps) failed — %s: %s", type(results[2]).__name__, results[2])
 
-    log.info("analyst_view: 3a=%d chars, 3b=%d chars", len(analyst_md), len(gaps_md))
-    return analyst_md, gaps_md
+    log.info("analyst_view: 3a=%d chars, 3b=%d chars, 3c=%d chars",
+             len(summary_md), len(tech_md), len(gaps_md))
+    return summary_md, tech_md, gaps_md
