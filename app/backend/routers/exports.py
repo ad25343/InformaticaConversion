@@ -602,6 +602,49 @@ def _md_to_docx_bytes(md_text: str, title: str, mapping_name: str = "", tier: st
     return buf.getvalue()
 
 
+@router.get("/jobs/{job_id}/informatica.xml")
+async def download_informatica_xml(job_id: str):
+    """
+    Generate and download a PowerCenter-importable XML file from the job's
+    3b Technical Specification.  The XML is generated on demand via Claude
+    (not cached in state) so it always reflects the latest spec content.
+
+    Returns a .xml file the developer can import directly into Designer.
+    """
+    import io as _io
+    from ..agents.informatica_generator import generate_from_spec
+
+    job = await db.get_job(job_id)
+    if not job:
+        _validate_job_id(job_id)
+        raise HTTPException(404, "Job not found")
+
+    state    = job.get("state", {})
+    spec_md  = state.get("analyst_view_md", "")
+    if not spec_md:
+        raise HTTPException(
+            404,
+            "Technical Specification (3b) not available for this job. "
+            "The pipeline must reach Step 3 before Informatica XML can be generated."
+        )
+
+    mapping_raw  = job.get("filename", job_id).replace(".xml", "")
+    mapping_name = "m_" + "".join(c if c.isalnum() or c == "_" else "_" for c in mapping_raw)
+
+    try:
+        xml_content = await generate_from_spec(spec_md, mapping_name)
+    except Exception as exc:
+        logger.error("informatica_xml: generation failed job=%s err=%s", job_id, exc)
+        raise HTTPException(500, f"XML generation failed: {exc}") from exc
+
+    safe = _safe_filename(mapping_raw)
+    return StreamingResponse(
+        _io.BytesIO(xml_content.encode("utf-8")),
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{safe}_informatica.xml"'},
+    )
+
+
 @router.get("/jobs/{job_id}/doc/{doc_key}.docx")
 async def download_doc_docx(job_id: str, doc_key: str):
     """Download analyst_summary_md, analyst_view_md, or analyst_gaps_md as a styled DOCX."""

@@ -697,6 +697,7 @@ function renderJobPanel(job) {
           <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
           <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','technical_specification','Technical Specification')">&#x2913; HTML</button>
           <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','technical_specification')">&#x2913; MD</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Generate Informatica PowerCenter XML from this spec" onclick="event.stopPropagation();downloadInformaticaXml('${jobId}')">&#x2913; XML</button>
         </span>
         <span class="card-chevron">▼</span></div>
       <div class="card-body">

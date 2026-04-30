@@ -642,6 +642,35 @@ async function downloadStateDocx(docKey) {
   } catch (e) { alert('DOCX download failed: ' + e.message); }
 }
 
+async function downloadInformaticaXml(jobId) {
+  // Generates PowerCenter-importable XML from the 3b Technical Specification.
+  // Claude generates on demand — show a loading state while it runs (~20-40s).
+  const btn = event?.target;
+  const origText = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳'; }
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/informatica.xml`);
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.statusText);
+      alert('Informatica XML generation failed:\n' + err);
+      return;
+    }
+    const blob  = await res.blob();
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    const cd    = res.headers.get('content-disposition') || '';
+    const fname = cd.match(/filename="([^"]+)"/)?.[1] || 'mapping_informatica.xml';
+    a.href      = url;
+    a.download  = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Informatica XML generation failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origText; }
+  }
+}
+
 function openPrintReport() {
   const job = window._currentJob;
   if (!job) return;
