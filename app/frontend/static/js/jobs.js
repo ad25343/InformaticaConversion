@@ -663,100 +663,116 @@ function renderJobPanel(job) {
     </div>`;
   }
 
-  // ── STEP 3a — ANALYST SUMMARY (plain English, no Informatica jargon) ────────────────
-  if (state.analyst_summary_md) {
-    html += `<div class="card">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">🧑‍💼</span> Step 3a — Analyst Summary
-        <span class="dl-group">
-          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; PDF</button>
-          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_summary')">&#x2913; DOCX</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; HTML</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_summary_md','analyst_summary')">&#x2913; MD</button>
-        </span>
-        <span class="card-chevron">▼</span></div>
-      <div class="card-body">
-      <div class="doc-content">${markdownToHtml(state.analyst_summary_md)}</div>
-      </div>
-    </div>`;
-  }
-
-  // ── STEP 3b — TECHNICAL SPECIFICATION ────────────────
-  if (state.analyst_view_md) {
-    const av = state.analyst_validation?.['3b'];
-    const avBadge = av
-      ? (av.critical > 0
-          ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px" title="${av.critical} critical, ${av.warnings} warnings">${av.critical} issues</span>`
-          : av.warnings > 0
-            ? `<span class="badge badge-waiting" style="font-size:9px;margin-left:6px" title="${av.warnings} warnings">${av.warnings} warnings</span>`
-            : `<span class="badge badge-done" style="font-size:9px;margin-left:6px" title="${av.sections} sections, ${av.tables} tables validated">Validated</span>`)
+  // ── STEP 3 — SPEC GENERATION (tabbed: Summary | Spec | Gaps | Reference) ────
+  if (state.analyst_summary_md || state.analyst_view_md || state.analyst_gaps_md || state.documentation_md) {
+    const av  = state.analyst_validation?.['3b'];
+    const gv  = state.analyst_validation?.['3c'];
+    const specIssues = (av?.critical || 0) + (gv?.critical || 0);
+    const specWarn   = (av?.warnings || 0);
+    const stepBadge  = specIssues > 0
+      ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px">${specIssues} issues</span>`
+      : specWarn > 0
+        ? `<span class="badge badge-waiting" style="font-size:9px;margin-left:6px">${specWarn} warnings</span>`
+        : state.analyst_view_md
+          ? `<span class="badge badge-done" style="font-size:9px;margin-left:6px">Ready</span>`
+          : '';
+    const truncBadge = state.doc_truncated
+      ? `<span class="badge badge-waiting" style="font-size:9px;margin-left:4px;background:rgba(251,146,60,.2);color:#fb923c">REF TRUNCATED</span>`
       : '';
-    html += `<div class="card card-collapsed">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📋</span> Step 3b — Technical Specification ${avBadge}
-        <span class="dl-group">
-          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','technical_specification','Technical Specification')">&#x2913; PDF</button>
-          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','technical_specification','Technical Specification')">&#x2913; HTML</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','technical_specification')">&#x2913; MD</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Generate Informatica PowerCenter XML from this spec" onclick="event.stopPropagation();downloadInformaticaXml('${jobId}')">&#x2913; XML</button>
-        </span>
-        <span class="card-chevron">▼</span></div>
-      <div class="card-body">
-      ${av && av.issues?.length ? '<div class="validation-bar">' + av.issues.map(i =>
-        '<span class="v-issue v-' + i.severity + '" title="' + esc(i.message) + '">' + esc(i.code) + '</span>'
-      ).join('') + '</div>' : ''}
-      <div class="doc-content">${markdownToHtml(state.analyst_view_md)}</div>
-      </div>
-    </div>`;
-  }
 
-  // ── STEP 3c — GAPS & REVIEW FINDINGS ────────────────
-  if (state.analyst_gaps_md) {
-    const gv = state.analyst_validation?.['3c'];
-    const gvBadge = gv
-      ? (gv.critical > 0
-          ? `<span class="badge badge-failed" style="font-size:9px;margin-left:6px">${gv.critical} issues</span>`
-          : `<span class="badge badge-done" style="font-size:9px;margin-left:6px">Validated</span>`)
+    // Tab definitions — only include tabs with content
+    const tabs = [
+      state.analyst_summary_md && { key:'summary',   icon:'🧑‍💼', label:'Summary'   },
+      state.analyst_view_md    && { key:'spec',      icon:'📋',  label:'Spec'      },
+      state.analyst_gaps_md    && { key:'gaps',      icon:'⚠️',  label:'Gaps'      },
+      state.documentation_md   && { key:'reference', icon:'📄',  label:'Reference' },
+    ].filter(Boolean);
+
+    const cid = `spec3-${jobId}`;   // unique container ID per job
+
+    const tabBar = tabs.map((t, idx) => `
+      <button class="spec-tab-btn${idx===0?' active':''}"
+              onclick="event.stopPropagation();switchSpecTab('${cid}','${t.key}')"
+              data-tabkey="${t.key}">
+        ${t.icon} ${t.label}
+      </button>`).join('');
+
+    // ── Panel builders ──
+    const panelSummary = state.analyst_summary_md ? `
+      <div class="spec-panel" data-tab="summary">
+        <div class="tab-dl-row">
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStatePdf('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStateDocx('analyst_summary')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateHtml('analyst_summary_md','analyst_summary','Analyst Summary')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateMd('analyst_summary_md','analyst_summary')">&#x2913; MD</button>
+        </div>
+        <div class="doc-content">${markdownToHtml(state.analyst_summary_md)}</div>
+      </div>` : '';
+
+    const avValidationBar = av?.issues?.length
+      ? '<div class="validation-bar">' + av.issues.map(i =>
+          `<span class="v-issue v-${i.severity}" title="${esc(i.message)}">${esc(i.code)}</span>`
+        ).join('') + '</div>'
       : '';
-    html += `<div class="card" style="border-color:var(--warn)">
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">⚠️</span> Step 3c — Gaps &amp; Review Findings ${gvBadge}
-        <span class="dl-group">
-          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
-          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('analyst_gaps_md','gaps_review','Gaps and Review Findings')">&#x2913; HTML</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('analyst_gaps_md','gaps_review')">&#x2913; MD</button>
-        </span>
-        <span class="card-chevron">▼</span></div>
-      <div class="card-body">
-      ${gv && gv.issues?.length ? '<div class="validation-bar">' + gv.issues.map(i =>
-        '<span class="v-issue v-' + i.severity + '" title="' + esc(i.message) + '">' + esc(i.code) + '</span>'
-      ).join('') + '</div>' : ''}
-      <div class="doc-content">${markdownToHtml(state.analyst_gaps_md)}</div>
-      </div>
-    </div>`;
-  }
+    const panelSpec = state.analyst_view_md ? `
+      <div class="spec-panel" data-tab="spec" style="display:none">
+        <div class="tab-dl-row">
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStatePdf('analyst_view_md','technical_specification','Technical Specification')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStateDocx('analyst_view')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateHtml('analyst_view_md','technical_specification','Technical Specification')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateMd('analyst_view_md','technical_specification')">&#x2913; MD</button>
+          <button class="btn-dl-sm btn-dl-ghost" title="Generate Informatica PowerCenter XML" onclick="event.stopPropagation();downloadInformaticaXml('${jobId}')">&#x2913; XML</button>
+        </div>
+        ${avValidationBar}
+        <div class="doc-content">${markdownToHtml(state.analyst_view_md)}</div>
+      </div>` : '';
 
-  // ── STEP 3d — TECHNICAL DOCUMENTATION (Reference) ────────────────
-  if (state.documentation_md) {
+    const gvValidationBar = gv?.issues?.length
+      ? '<div class="validation-bar">' + gv.issues.map(i =>
+          `<span class="v-issue v-${i.severity}" title="${esc(i.message)}">${esc(i.code)}</span>`
+        ).join('') + '</div>'
+      : '';
+    const panelGaps = state.analyst_gaps_md ? `
+      <div class="spec-panel" data-tab="gaps" style="display:none">
+        <div class="tab-dl-row">
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStatePdf('analyst_gaps_md','gaps_review','Gaps &amp; Review Findings')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStateDocx('analyst_gaps')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateHtml('analyst_gaps_md','gaps_review','Gaps and Review Findings')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateMd('analyst_gaps_md','gaps_review')">&#x2913; MD</button>
+        </div>
+        ${gvValidationBar}
+        <div class="doc-content">${markdownToHtml(state.analyst_gaps_md)}</div>
+      </div>` : '';
+
     const truncBanner = state.doc_truncated
       ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(251,146,60,.12);border:1px solid var(--sev-high);border-radius:8px;font-size:12px;color:#fb923c">
-           ⚠️ <strong>Documentation was truncated</strong> — the token limit was reached during generation.
-           One or more sections (field lineage, session context, or ambiguities) may be incomplete.
-           Review carefully before approving at Analysis Sign-off. If critical sections are missing, Reject and re-upload.
+           ⚠️ <strong>Reference documentation was truncated</strong> — token limit reached. Some sections may be incomplete.
          </div>`
       : '';
-    html += `<div class="card card-collapsed" ${state.doc_truncated ? 'style="border-color:var(--sev-high)"' : ''}>
-      <div class="card-title" onclick="toggleCard(this)"><span class="icon">📄</span> Step 3d — Reference Documentation
-        ${state.doc_truncated ? '<span class="badge badge-waiting" style="font-size:10px;background:rgba(251,146,60,.2);color:#fb923c">TRUNCATED</span>' : ''}
-        <span class="dl-group">
-          <button class="btn-dl-sm" title="Download as PDF" onclick="event.stopPropagation();downloadStatePdf('documentation_md','technical_documentation','Technical Documentation')">&#x2913; PDF</button>
-          <button class="btn-dl-sm" title="Download as Word" onclick="event.stopPropagation();downloadStateDocx('documentation')">&#x2913; DOCX</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as HTML" onclick="event.stopPropagation();downloadStateHtml('documentation_md','technical_documentation','Technical Documentation')">&#x2913; HTML</button>
-          <button class="btn-dl-sm btn-dl-ghost" title="Download as Markdown" onclick="event.stopPropagation();downloadStateMd('documentation_md','technical_documentation')">&#x2913; MD</button>
-        </span>
-        <span class="card-chevron">▼</span></div>
+    const panelRef = state.documentation_md ? `
+      <div class="spec-panel" data-tab="reference" style="display:none">
+        <div class="tab-dl-row">
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStatePdf('documentation_md','technical_documentation','Technical Documentation')">&#x2913; PDF</button>
+          <button class="btn-dl-sm" onclick="event.stopPropagation();downloadStateDocx('documentation')">&#x2913; DOCX</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateHtml('documentation_md','technical_documentation','Technical Documentation')">&#x2913; HTML</button>
+          <button class="btn-dl-sm btn-dl-ghost" onclick="event.stopPropagation();downloadStateMd('documentation_md','technical_documentation')">&#x2913; MD</button>
+        </div>
+        ${truncBanner}
+        <div class="doc-content">${markdownToHtml(state.documentation_md)}</div>
+      </div>` : '';
+
+    html += `<div class="card">
+      <div class="card-title" onclick="toggleCard(this)">
+        <span class="icon">📐</span> Step 3 — Spec Generation ${stepBadge}${truncBadge}
+        <span class="card-chevron">▼</span>
+      </div>
       <div class="card-body">
-      ${truncBanner}
-      <div class="doc-content" id="docContent">${markdownToHtml(state.documentation_md)}</div>
+        <div id="${cid}">
+          <div class="spec-tab-bar">${tabBar}</div>
+          <div class="spec-panels">
+            ${panelSummary}${panelSpec}${panelGaps}${panelRef}
+          </div>
+        </div>
       </div>
     </div>`;
   }

@@ -414,3 +414,29 @@ hr { border: none; border-top: 1px solid var(--border); }
 [data-theme="light"] .persona-avatar-sm { background: rgba(91,82,224,.12); color: #5b52e0; }
 [data-theme="light"] .flag-rec { background: rgba(91,82,224,.06); color: #5b52e0; border-left-color: #5b52e0; }
 [data-theme="light"] .info-box { background: rgba(91,82,224,.06); border-color: rgba(91,82,224,.2); color: #5b52e0; }
+
+/* ── Step 3 Spec Generation — tab UI ─────────────────────────── */
+.spec-tab-bar {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px; padding-bottom: 0;
+}
+.spec-tab-btn {
+  padding: 6px 14px; border-radius: 6px 6px 0 0;
+  border: 1px solid transparent; border-bottom: none;
+  background: none; color: var(--muted);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+  position: relative; bottom: -1px;
+}
+.spec-tab-btn:hover { color: var(--text); background: var(--surface2); }
+.spec-tab-btn.active {
+  color: var(--text); background: var(--surface);
+  border-color: var(--border); border-bottom-color: var(--surface);
+}
+.tab-dl-row {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 12px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+[data-theme="light"] .spec-tab-btn.active { background: #fff; border-bottom-color: #fff; }

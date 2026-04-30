@@ -642,6 +642,21 @@ async function downloadStateDocx(docKey) {
   } catch (e) { alert('DOCX download failed: ' + e.message); }
 }
 
+function switchSpecTab(containerId, tabKey) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  // Hide all panels
+  container.querySelectorAll('.spec-panel').forEach(p => { p.style.display = 'none'; });
+  // Deactivate all tab buttons
+  container.querySelectorAll('.spec-tab-btn').forEach(b => b.classList.remove('active'));
+  // Show target panel
+  const panel = container.querySelector(`.spec-panel[data-tab="${tabKey}"]`);
+  if (panel) panel.style.display = '';
+  // Activate target tab button
+  const btn = container.querySelector(`.spec-tab-btn[data-tabkey="${tabKey}"]`);
+  if (btn) btn.classList.add('active');
+}
+
 async function downloadInformaticaXml(jobId) {
   // Generates PowerCenter-importable XML from the 3b Technical Specification.
   // Claude generates on demand — show a loading state while it runs (~20-40s).
