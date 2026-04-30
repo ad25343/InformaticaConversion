@@ -258,86 +258,275 @@ OUTPUT RULES
 - For parameters (section 6), use $$PARAM_NAME notation in expressions as shown in the spec.
 """
 
-# ── User prompt ───────────────────────────────────────────────────────────────
+# ── Section extractor ────────────────────────────────────────────────────────
 
-_PROMPT = """## Technical Specification
+def _extract_sections(spec_md: str, section_numbers: list[str]) -> str:
+    """
+    Extract specific numbered sections from the spec markdown.
+    Returns just the matched sections concatenated — reduces prompt size.
+    """
+    import re
+    lines = spec_md.split("\n")
+    result: list[str] = []
+    capturing = False
+    current_level = 0
 
-{spec_md}
+    for line in lines:
+        # Detect a section heading
+        m = re.match(r'^(#{1,4})\s+(\d[\d.]*)\s+', line)
+        if m:
+            level = len(m.group(1))
+            num   = m.group(2).rstrip(".")
+            # Start capturing if this section is one we want
+            if any(num == s or num.startswith(s + ".") for s in section_numbers):
+                capturing = True
+                current_level = level
+                result.append(line)
+                continue
+            # Stop capturing if we've moved to a sibling/parent section
+            elif capturing and level <= current_level:
+                capturing = False
 
-─────────────────────────────────────────────
-## Task
+        if capturing:
+            result.append(line)
 
-Generate the complete PowerCenter XML for mapping: **{mapping_name}**
+    return "\n".join(result)
 
-Read every section of the specification above and produce a single valid
-PowerCenter XML document. Start with the XML declaration and end with </POWERMART>.
-Do NOT include any text before or after the XML.
+
+# ── Pass 1 prompt — structure only (SOURCE, TARGET, TRANSFORMATION) ───────────
+
+_PROMPT_STRUCTURE = """## Technical Specification (key sections)
+
+{spec_sections}
+
+---
+## Task — Pass 1: Structure Only
+
+Generate the SOURCE, TARGET, and TRANSFORMATION XML blocks for mapping **{mapping_name}**.
+
+IMPORTANT: Do NOT generate the MAPPING element, CONNECTOR elements, or INSTANCE elements yet.
+Output ONLY this fragment (no XML declaration, no POWERMART wrapper):
+
+  <SOURCE ...> ... </SOURCE>          (one per source table)
+  <TARGET ...> ... </TARGET>          (one per target table)
+  <TRANSFORMATION ...> ... </TRANSFORMATION>  (one per transform in the pipeline)
+
+Use the source schemas from Section 2, target schemas from Section 3,
+derivation expressions from Section 4.5, join conditions from Section 4.2,
+filter conditions from Section 4.4, router groups from Section 4.7,
+lookup conditions from Section 4.3, and aggregations from Section 4.6.
+
+Output ONLY the XML fragment — no prose, no markdown, no POWERMART wrapper.
+Start with the first <SOURCE and end with the last </TRANSFORMATION>.
+"""
+
+# ── Pass 2 prompt — MAPPING block (CONNECTOR + INSTANCE) ─────────────────────
+
+_PROMPT_MAPPING = """## Field Mapping Table (Section 4.8)
+
+{section_48}
+
+## Pipeline Overview (Section 4.1)
+
+{section_41}
+
+## Transformations generated in Pass 1
+
+{transform_list}
+
+---
+## Task — Pass 2: MAPPING Block
+
+Generate ONLY the <MAPPING> element for mapping **{mapping_name}**.
+
+Rules:
+1. Include one <INSTANCE> for every SOURCE, TRANSFORMATION, and TARGET used.
+2. Include one <CONNECTOR> for every field link in the field mapping table above.
+   - Trace each row: Source Table → SQ → (transforms) → Target Table
+   - Use the Transform Chain column to determine intermediate hops.
+   - Direct fields (status=Direct) go: SQ → Expression → Target
+   - Derived fields go through whichever transform derives them
+   - Gap fields: still include connector but add comment in EXPRESSION attribute
+3. INSTANCE TYPE values: SOURCE instances → TYPE="SOURCE", TARGET → TYPE="TARGET", transformations → TYPE="TRANSFORMATION"
+4. FROMINSTANCETYPE / TOINSTANCETYPE must match the transformation TYPE string exactly
+   (e.g., "Source Qualifier", "Expression", "Joiner", "Router", "Target Definition", "Source Definition")
+
+Output ONLY the <MAPPING ...>...</MAPPING> element — nothing else.
+"""
+
+# ── Pass 1 system — tightly scoped ───────────────────────────────────────────
+
+_SYSTEM_STRUCTURE = """You are an Informatica PowerCenter XML generator.
+Generate ONLY the SOURCE, TARGET, and TRANSFORMATION XML blocks — no MAPPING, no CONNECTOR, no INSTANCE.
+Follow the PowerCenter XML format exactly as shown in your training.
+Output raw XML only — no markdown, no explanation.
+
+PORTTYPE rules:
+  Source Qualifier output ports     → PORTTYPE="OUTPUT"
+  Expression pass-through ports     → PORTTYPE="INPUT/OUTPUT"
+  Expression new derived ports      → PORTTYPE="OUTPUT"
+  Joiner master ports               → PORTTYPE="MASTERINPUT"
+  Joiner detail ports               → PORTTYPE="DETAILINPUT"
+  Joiner output ports               → PORTTYPE="OUTPUT"
+  Filter ports                      → PORTTYPE="INPUT/OUTPUT"
+  Router input ports                → PORTTYPE="INPUT"
+  Lookup input ports                → PORTTYPE="INPUT"
+  Lookup return ports               → PORTTYPE="RETURN"
+  Aggregator group-by ports         → PORTTYPE="INPUT/OUTPUT"
+  Aggregator aggregate ports        → PORTTYPE="OUTPUT"
+
+Datatype mapping:
+  number(p) / number(p,s) → DATATYPE="number" PRECISION="p" SCALE="s"
+  varchar(n)              → DATATYPE="varchar" PRECISION="n" SCALE="0"
+  date / timestamp        → DATATYPE="date/time" PRECISION="19" SCALE="0"
+  integer                 → DATATYPE="integer" PRECISION="10" SCALE="0"
+"""
+
+# ── Pass 2 system — mapping only ──────────────────────────────────────────────
+
+_SYSTEM_MAPPING = """You are an Informatica PowerCenter XML generator.
+Generate ONLY the <MAPPING> element containing INSTANCE and CONNECTOR child elements.
+Output raw XML only — no markdown, no explanation, no wrapper.
+
+CONNECTOR format:
+  <CONNECTOR FROMFIELD="FIELD" FROMINSTANCE="SRC_NAME" FROMINSTANCETYPE="Source Qualifier"
+             TOFIELD="FIELD" TOINSTANCE="EXP_NAME" TOINSTANCETYPE="Expression"/>
+
+INSTANCE format:
+  <INSTANCE NAME="SQ_ORDERS" TRANSFORMATION_NAME="SQ_ORDERS"
+            TRANSFORMATION_TYPE="Source Qualifier" TYPE="TRANSFORMATION"/>
+  <INSTANCE NAME="ORDERS" TRANSFORMATION_NAME="ORDERS"
+            TRANSFORMATION_TYPE="Source Definition" TYPE="SOURCE"/>
+  <INSTANCE NAME="TGT_ORDERS" TRANSFORMATION_NAME="TGT_ORDERS"
+            TRANSFORMATION_TYPE="Target Definition" TYPE="TARGET"/>
+
+Generate one CONNECTOR per field hop in the pipeline (not just source-to-target).
+For a field going SQ -> EXP -> RTR -> TARGET, generate 3 connectors.
 """
 
 
-# ── Core generation function ──────────────────────────────────────────────────
+# ── XML helpers ───────────────────────────────────────────────────────────────
+
+def _strip_fences(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    return raw.strip()
+
+
+def _extract_transform_names(structure_xml: str) -> str:
+    """Pull transformation names+types from the structure XML for pass 2."""
+    import re
+    names = re.findall(
+        r'<TRANSFORMATION[^>]+NAME="([^"]+)"[^>]+TYPE="([^"]+)"', structure_xml
+    )
+    return "\n".join(f"  {name} (TYPE: {ttype})" for name, ttype in names)
+
+
+def _assemble_xml(structure_fragment: str, mapping_fragment: str, mapping_name: str) -> str:
+    """Wrap the two fragments in a complete PowerCenter XML document."""
+    return (
+        '<?xml version="1.0" encoding="Windows-1252"?>\n'
+        '<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">\n'
+        '<POWERMART CREATION_DATE="01/01/2026 00:00:00" REPOSITORY_VERSION="187.94">\n'
+        '<REPOSITORY CODEPAGE="MS1252" DATABASETYPE="Oracle" NAME="DEV_REP" VERSION="187">\n'
+        f'<FOLDER DESCRIPTION="" GROUP="" NAME="CONVERSION" OWNER="Administrator" '
+        f'PERMISSIONS="rwx---r--" SHARED="NOTSHARED" UUID="">\n\n'
+        f'{structure_fragment.strip()}\n\n'
+        f'{mapping_fragment.strip()}\n\n'
+        '</FOLDER>\n</REPOSITORY>\n</POWERMART>'
+    )
+
+
+# ── Core generation function — two-pass ───────────────────────────────────────
 
 async def generate_from_spec(spec_md: str, mapping_name: str) -> str:
     """
     Generate PowerCenter XML from an existing 3b Technical Specification.
 
-    Args:
-        spec_md:      The analyst_view_md content (3b Technical Specification markdown)
-        mapping_name: The mapping name to use in the XML (e.g. "m_LOAN_HISTORY")
+    Uses a two-pass approach:
+      Pass 1 — SOURCE + TARGET + TRANSFORMATION blocks (from sections 2, 3, 4.x)
+      Pass 2 — MAPPING block with all CONNECTOR + INSTANCE elements (from section 4.8)
+
+    Both passes run sequentially; pass 2 uses the transformation names from pass 1.
 
     Returns:
         Valid PowerCenter XML string ready for Designer import.
-
-    Raises:
-        ValueError: If the generated XML is not parseable (Claude produced invalid XML)
-        RuntimeError: If the Claude call fails
     """
+    import asyncio
     from ._client import make_client, call_claude_with_retry
 
-    # Cap spec length to keep prompt inside context budget
-    spec_for_prompt = spec_md
-    if len(spec_for_prompt) > 35_000:
-        spec_for_prompt = spec_for_prompt[:35_000] + "\n\n... [spec truncated for length]"
-
-    prompt = _PROMPT.format(spec_md=spec_for_prompt, mapping_name=mapping_name)
-
-    log.info("informatica_generator: generating XML for '%s' (%d spec chars)",
+    log.info("informatica_generator: two-pass XML generation for '%s' (%d spec chars)",
              mapping_name, len(spec_md))
 
     client = make_client()
-    message = await call_claude_with_retry(
+
+    # ── Pass 1: Structure (SOURCE / TARGET / TRANSFORMATION) ──────────────────
+    # Feed only the schema + transformation sections to keep the prompt focused
+    structure_sections = _extract_sections(
+        spec_md,
+        ["2", "3", "4.1", "4.2", "4.3", "4.4", "4.5", "4.6", "4.7"]
+    )
+    if len(structure_sections) > 30_000:
+        structure_sections = structure_sections[:30_000] + "\n... [truncated]"
+
+    prompt_p1 = _PROMPT_STRUCTURE.format(
+        spec_sections=structure_sections,
+        mapping_name=mapping_name,
+    )
+
+    log.info("informatica_generator: pass 1 — structure (%d chars input)", len(prompt_p1))
+    msg1 = await call_claude_with_retry(
         client,
         model=MODEL,
         max_tokens=_MAX_TOKENS,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-        label=f"informatica_xml_gen:{mapping_name}",
+        system=_SYSTEM_STRUCTURE,
+        messages=[{"role": "user", "content": prompt_p1}],
+        label=f"informatica_xml_structure:{mapping_name}",
     )
-    raw = message.content[0].text.strip()
+    structure_xml = _strip_fences(msg1.content[0].text)
+    transform_list = _extract_transform_names(structure_xml)
+    log.info("informatica_generator: pass 1 complete — %d chars, %d transforms",
+             len(structure_xml), transform_list.count("\n") + 1)
 
-    # Strip accidental markdown fences
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    # ── Pass 2: MAPPING block (CONNECTOR + INSTANCE) ──────────────────────────
+    section_48 = _extract_sections(spec_md, ["4.8"])
+    section_41 = _extract_sections(spec_md, ["4.1"])
+    if len(section_48) > 20_000:
+        section_48 = section_48[:20_000] + "\n... [truncated]"
 
-    # Find XML start
-    if not raw.startswith("<?xml") and not raw.startswith("<POWERMART"):
-        for marker in ("<?xml", "<POWERMART"):
-            idx = raw.find(marker)
-            if idx != -1:
-                raw = raw[idx:]
-                break
+    prompt_p2 = _PROMPT_MAPPING.format(
+        section_48=section_48,
+        section_41=section_41,
+        transform_list=transform_list or "  (see structure above)",
+        mapping_name=mapping_name,
+    )
 
-    # Validate XML is parseable — raises ET.ParseError on bad XML
+    log.info("informatica_generator: pass 2 — mapping block (%d chars input)", len(prompt_p2))
+    msg2 = await call_claude_with_retry(
+        client,
+        model=MODEL,
+        max_tokens=_MAX_TOKENS,
+        system=_SYSTEM_MAPPING,
+        messages=[{"role": "user", "content": prompt_p2}],
+        label=f"informatica_xml_mapping:{mapping_name}",
+    )
+    mapping_xml = _strip_fences(msg2.content[0].text)
+    log.info("informatica_generator: pass 2 complete — %d chars, %d connectors",
+             len(mapping_xml), mapping_xml.count("<CONNECTOR "))
+
+    # ── Assemble + validate ───────────────────────────────────────────────────
+    full_xml = _assemble_xml(structure_xml, mapping_xml, mapping_name)
+
     try:
-        ET.fromstring(raw.encode("utf-8", errors="replace"))
+        ET.fromstring(full_xml.encode("utf-8", errors="replace"))
+        log.info("informatica_generator: XML valid — %d chars total", len(full_xml))
     except ET.ParseError as e:
-        log.warning("informatica_generator: XML parse error for '%s': %s", mapping_name, e)
-        # Return with a warning comment prepended rather than crashing
-        raw = f"<!-- ⚠ XML PARSE WARNING: {e} — import and validate in Designer -->\n" + raw
+        log.warning("informatica_generator: XML parse warning for '%s': %s", mapping_name, e)
+        full_xml = f"<!-- ⚠ XML PARSE WARNING: {e} — import and validate in Designer -->\n" + full_xml
 
-    log.info("informatica_generator: generated %d chars of XML for '%s'", len(raw), mapping_name)
-    return raw
+    return full_xml
 
 
 # Flow 2 entry point (same logic — separate name for future divergence)
