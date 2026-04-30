@@ -407,6 +407,35 @@ For a field going SQ -> EXP -> RTR -> TARGET, generate 3 connectors.
 
 # ── XML helpers ───────────────────────────────────────────────────────────────
 
+def _clean_structure(xml: str) -> str:
+    """
+    Remove any trailing incomplete XML element from the structure fragment.
+
+    Pass 1 can hit the token limit mid-tag, leaving an unclosed opening element
+    at the end (e.g. '<TRANSFORMATION ... REUS'). Find the last complete closing
+    tag and truncate there so the assembled document stays well-formed.
+    """
+    # Tags that can appear at the top level of the structure fragment
+    close_tags = ["</TRANSFORMATION>", "</TARGET>", "</SOURCE>"]
+    last_pos = -1
+    for tag in close_tags:
+        pos = xml.rfind(tag)
+        if pos != -1:
+            candidate = pos + len(tag)
+            if candidate > last_pos:
+                last_pos = candidate
+    if last_pos > 0:
+        cleaned = xml[:last_pos]
+        removed = xml[last_pos:].strip()
+        if removed:
+            log.warning(
+                "informatica_generator: trimmed %d chars of truncated structure output",
+                len(removed),
+            )
+        return cleaned
+    return xml
+
+
 def _strip_fences(raw: str) -> str:
     raw = raw.strip()
     if raw.startswith("```"):
@@ -485,7 +514,7 @@ async def generate_from_spec(spec_md: str, mapping_name: str) -> str:
         messages=[{"role": "user", "content": prompt_p1}],
         label=f"informatica_xml_structure:{mapping_name}",
     )
-    structure_xml = _strip_fences(msg1.content[0].text)
+    structure_xml = _clean_structure(_strip_fences(msg1.content[0].text))
     transform_list = _extract_transform_names(structure_xml)
     log.info("informatica_generator: pass 1 complete — %d chars, %d transforms",
              len(structure_xml), transform_list.count("\n") + 1)
