@@ -160,10 +160,12 @@ async def _call_anthropic_with_retry(
     **kwargs,
 ) -> anthropic.types.Message:
     """Direct Anthropic SDK path — unchanged from original implementation."""
+    # Strip internal-only kwargs that are not Anthropic SDK parameters
+    api_kwargs = {k: v for k, v in kwargs.items() if k not in ("label",)}
     last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
-            return await client.messages.create(**kwargs)
+            return await client.messages.create(**api_kwargs)
         except _RETRYABLE_ERRORS as exc:
             last_exc = exc
             if attempt == max_retries - 1:

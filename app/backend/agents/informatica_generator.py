@@ -25,7 +25,7 @@ from ..config import settings as _cfg
 log = logging.getLogger("conversion.informatica_generator")
 
 MODEL       = _cfg.claude_model
-_MAX_TOKENS = 12_000   # XML output can be large for complex mappings
+_MAX_TOKENS = 16_000   # XML output can be large for complex mappings; 16K handles most
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -45,9 +45,9 @@ The specification is structured with these sections — read each one to build t
   Section 4.8 (Complete Field Map)  → <CONNECTOR> elements tracing field lineage
   Section 6   (Parameters)          → <PARAMETER> elements if any
 
-══════════════════════════════════════════════════════
+======================================================
 REQUIRED XML STRUCTURE (follow this exactly)
-══════════════════════════════════════════════════════
+======================================================
 
 <?xml version="1.0" encoding="Windows-1252"?>
 <!DOCTYPE POWERMART SYSTEM "powrmart.dtd">
@@ -206,9 +206,9 @@ REQUIRED XML STRUCTURE (follow this exactly)
 </REPOSITORY>
 </POWERMART>
 
-══════════════════════════════════════════════════════
+======================================================
 PORTTYPE RULES (strict)
-══════════════════════════════════════════════════════
+======================================================
 Source Qualifier ports          → PORTTYPE="OUTPUT"
 Expression pass-through ports   → PORTTYPE="INPUT/OUTPUT"   (same field in and out)
 Expression new derived ports    → PORTTYPE="OUTPUT"          (output only, no INPUT twin)
@@ -222,9 +222,9 @@ Lookup return value ports       → PORTTYPE="RETURN"
 Aggregator group-by ports       → PORTTYPE="INPUT/OUTPUT"
 Aggregator aggregate ports      → PORTTYPE="OUTPUT"
 
-══════════════════════════════════════════════════════
+======================================================
 CONNECTOR INSTANCE TYPES (use these exact strings)
-══════════════════════════════════════════════════════
+======================================================
 Source table       → "Source Definition"
 Source Qualifier   → "Source Qualifier"
 Expression         → "Expression"
@@ -235,9 +235,9 @@ Router             → "Router"
 Aggregator         → "Aggregator"
 Target table       → "Target Definition"
 
-══════════════════════════════════════════════════════
+======================================================
 DATATYPE MAPPING
-══════════════════════════════════════════════════════
+======================================================
 number(p)          → DATATYPE="number" PRECISION="p" SCALE="0"
 number(p,s)        → DATATYPE="number" PRECISION="p" SCALE="s"
 varchar(n)         → DATATYPE="varchar" PRECISION="n" SCALE="0"
@@ -245,9 +245,9 @@ date / timestamp   → DATATYPE="date/time" PRECISION="19" SCALE="0"
 char(n)            → DATATYPE="char" PRECISION="n" SCALE="0"
 integer            → DATATYPE="integer" PRECISION="10" SCALE="0"
 
-══════════════════════════════════════════════════════
+======================================================
 OUTPUT RULES
-══════════════════════════════════════════════════════
+======================================================
 - Output ONLY the XML — no markdown fences, no explanation text.
 - Start with: <?xml version="1.0" encoding="Windows-1252"?>
 - Every transformation referenced in a CONNECTOR must have an INSTANCE element.
